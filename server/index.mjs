@@ -1,12 +1,11 @@
 import express from 'express'
 import path from 'node:path'
-import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import * as anilist from './anilist.mjs'
 import * as store from './store.mjs'
-import * as downloads from './downloads.mjs'
 import * as settings from './settings.mjs'
 import * as anicli from './anicli.mjs'
+import * as viewer from './viewer.mjs'
 import * as playback from './playback.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -15,7 +14,7 @@ const PORT = Number.isInteger(requestedPort) && requestedPort > 0 ? requestedPor
 const HOST = process.env.HOST || '127.0.0.1'
 const isProd = process.env.NODE_ENV === 'production'
 
-await Promise.all([store.init(), downloads.init(), settings.init(), anicli.init()])
+await Promise.all([store.init(), settings.init(), anicli.init()])
 
 const app = express()
 app.disable('x-powered-by')
@@ -25,7 +24,7 @@ const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).cat
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n))
 
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, season: anilist.currentSeason(), library: downloads.libraryDir() })
+  res.json({ ok: true, season: anilist.currentSeason() })
 })
 
 app.get(
@@ -58,7 +57,7 @@ app.get(
   }),
 )
 
-/** Compact lookup used by the Downloaded tab to put posters on local files. */
+/** Compact lookup used to put posters on bookmark rows. */
 app.get(
   '/api/media',
   wrap(async (req, res) => {
@@ -80,14 +79,14 @@ app.get(
 )
 
 app.get('/api/settings', (req, res) => {
-  res.json({ ...settings.get(), libraryDir: downloads.libraryDir() })
+  res.json(settings.get())
 })
 
 app.put(
   '/api/settings',
   wrap(async (req, res) => {
     const next = await settings.save(req.body ?? {})
-    res.json({ ...next, libraryDir: downloads.libraryDir() })
+    res.json(next)
   }),
 )
 
@@ -147,252 +146,39 @@ app.delete('/api/bookmarks/:id', (req, res) => {
   res.json({ removed, items: store.list() })
 })
 
-app.get('/api/downloads', (req, res) => {
-  res.json(downloads.list())
-})
-
+/**
+ * Hands one episode to the ani-cli binary on this machine, exactly the way
+ * `ani-cli -q 1080 -S 1 -e 12 <title>` works in a terminal: ani-cli resolves
+ * the episode and opens mpv with the stream (English subs as a toggleable track).
+ */
 app.post(
-  '/api/downloads',
+  '/api/watch',
   wrap(async (req, res) => {
-    const { mediaId, title, episode, url, filename } = req.body ?? {}
-    const job = downloads.start({ mediaId, title, episode, url, filename })
-    res.status(201).json(job)
-  }),
-)
-
-/** Bulk queue: every episode through ani-cli or the configured URL template. */
-app.post(
-  '/api/downloads/bulk',
-  wrap(async (req, res) => {
-    const { media, episodes, template, source, anicli: options } = req.body ?? {}
-    if (!media?.id) {
-      res.status(400).json({ error: 'A media object is required' })
-      return
-    }
-
     const config = settings.get()
-    const engine = source === 'anicli' || (!source && config.downloadProvider === 'anicli') ? 'anicli' : 'template'
-
-    if (engine === 'anicli') {
-      const query = String(options?.query ?? media.title ?? media.romaji ?? '').trim()
-      if (!query) {
-        res.status(400).json({ error: 'A title to search for on ani-cli is required' })
-        return
-      }
-      const resultIndex = Math.min(
-        100,
-        Math.max(1, Math.floor(Number(options?.resultIndex ?? config.anicliResultIndex) || 1)),
-      )
-      const result = downloads.startMany({
-        media,
-        episodes,
-        source: 'anicli',
-        anicli: {
-          query,
-          resultIndex,
-          quality: options?.quality ?? config.anicliQuality,
-          dub: options?.dub ?? config.anicliDub,
-          bin: config.anicliBin,
-        },
-      })
-      // Remember which hianime entry this show maps to, so re-opening the sheet
-      // preselects the same match.
-      await anicli.saveMatch(media.id, { query, index: resultIndex, title: options?.title })
-      res.status(201).json(result)
-      return
-    }
-
-    const chosen = String(template ?? config.sourceTemplate ?? '').trim()
-    if (!chosen) {
-      res.status(400).json({ error: 'No default source is set. Add one in Settings, then try again.' })
-      return
-    }
-    const verdict = settings.validateTemplate(chosen)
-    if (!verdict.ok) {
-      res.status(400).json({ error: verdict.error })
-      return
-    }
-    res.status(201).json(downloads.startMany({ media, episodes, template: chosen, source: 'template' }))
-  }),
-)
-
-app.post('/api/downloads/:id/cancel', (req, res) => {
-  const job = downloads.cancel(req.params.id)
-  if (!job) {
-    res.status(404).json({ error: 'Download not found' })
-    return
-  }
-  res.json(job)
-})
-
-app.delete(
-  '/api/downloads/:id',
-  wrap(async (req, res) => {
-    const removed = await downloads.remove(req.params.id)
-    res.json({ removed })
-  }),
-)
-
-app.get('/api/downloads/:id/file', (req, res, next) => {
-  const job = downloads.list().find((j) => j.id === req.params.id)
-  if (!job?.path) {
-    res.status(404).json({ error: 'File not found' })
-    return
-  }
-  if (req.query.stream === '1' || req.headers.range) {
-    playback.sendFileWithRange(req, res, job.path, job.filename)
-    return
-  }
-  res.download(job.path, job.filename, (err) => {
-    if (err && !res.headersSent) next(err)
-  })
-})
-
-app.get('/api/downloads/events', (req, res) => {
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache, no-transform',
-    Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no',
-  })
-
-  const send = (event, data) => {
-    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
-  }
-
-  send('snapshot', downloads.list())
-
-  const onJob = (job) => send('job', job)
-  const onRemoved = (payload) => send('removed', payload)
-  downloads.bus.on('job', onJob)
-  downloads.bus.on('removed', onRemoved)
-
-  const ping = setInterval(() => res.write(': ping\n\n'), 20_000)
-
-  req.on('close', () => {
-    clearInterval(ping)
-    downloads.bus.off('job', onJob)
-    downloads.bus.off('removed', onRemoved)
-    res.end()
-  })
-})
-
-app.get(
-  '/api/library',
-  wrap(async (req, res) => {
-    res.json({ items: await downloads.library(), dir: downloads.libraryDir() })
-  }),
-)
-
-/** Stream a downloaded job's file with range support for playback. */
-app.get('/api/stream/:id', (req, res) => {
-  const job = downloads.list().find((j) => j.id === req.params.id)
-  if (!job?.path || !fs.existsSync(job.path)) {
-    res.status(404).json({ error: 'File not found' })
-    return
-  }
-  playback.sendFileWithRange(req, res, job.path, job.filename)
-})
-
-/** Stream a library file by relative path with range support. */
-app.get('/api/stream', (req, res) => {
-  const target = downloads.resolveLibraryPath(String(req.query.path ?? ''))
-  if (!target) {
-    res.status(400).json({ error: 'Invalid library path' })
-    return
-  }
-  if (!fs.existsSync(target)) {
-    res.status(404).json({ error: 'File not found' })
-    return
-  }
-  playback.sendFileWithRange(req, res, target, path.basename(target))
-})
-
-/** Remux a local file the browser cannot play (mkv, ts, …) to fragmented MP4. */
-app.get('/api/transcode/:id', (req, res) => {
-  const job = downloads.list().find((j) => j.id === req.params.id)
-  if (!job?.path || !fs.existsSync(job.path)) {
-    res.status(404).json({ error: 'File not found' })
-    return
-  }
-  if (playback.directPlayable(job.path)) {
-    playback.sendFileWithRange(req, res, job.path, job.filename)
-    return
-  }
-  playback.remux(req, res, { filePath: job.path })
-})
-
-app.get('/api/transcode', (req, res) => {
-  const target = downloads.resolveLibraryPath(String(req.query.path ?? ''))
-  if (!target) {
-    res.status(400).json({ error: 'Invalid library path' })
-    return
-  }
-  if (!fs.existsSync(target)) {
-    res.status(404).json({ error: 'File not found' })
-    return
-  }
-  if (playback.directPlayable(target)) {
-    playback.sendFileWithRange(req, res, target, path.basename(target))
-    return
-  }
-  playback.remux(req, res, { filePath: target })
-})
-
-/** Live stream for an active job (or a completed one if the client asks). */
-function liveParams(job) {
-  const config = settings.get()
-  return {
-    query: job.query || job.title,
-    resultIndex: job.resultIndex ?? config.anicliResultIndex ?? 1,
-    episode: job.episode ?? 1,
-    quality: job.quality || config.anicliQuality,
-    dub: job.dub ?? config.anicliDub,
-    bin: job.bin || config.anicliBin,
-  }
-}
-
-app.get(
-  '/api/live/job/:id/subtitle',
-  wrap(async (req, res) => {
-    const job = downloads.list().find((j) => j.id === req.params.id)
-    if (!job) {
-      res.status(404).json({ error: 'Download not found' })
-      return
-    }
-    if (job.provider !== 'anicli') {
-      res.status(404).json({ error: 'No live subtitle for this source' })
-      return
-    }
-    const stream = await anicli.resolveStream(liveParams(job))
-    if (!stream.subtitleUrl) {
-      res.status(404).json({ error: 'Subtitle not found' })
-      return
-    }
-    await playback.proxySubtitle(res, stream.subtitleUrl, stream.referer)
-  }),
-)
-
-app.get(
-  '/api/live/job/:id',
-  wrap(async (req, res) => {
-    const job = downloads.list().find((j) => j.id === req.params.id)
-    if (!job) {
-      res.status(404).json({ error: 'Download not found' })
-      return
-    }
-    if (job.provider === 'anicli') {
-      const stream = await anicli.resolveStream(liveParams(job))
-      playback.remux(req, res, {
-        url: stream.url,
-        audioUrl: stream.audioUrl,
-        referer: stream.referer,
-        hls: true,
-        realtime: true,
+    if (!anicli.resolveBin('mpv')) {
+      res.status(503).json({
+        error: 'mpv is required to play with ani-cli. Install mpv, or pick the in-app player in Settings.',
       })
       return
     }
-    playback.remux(req, res, { url: job.url, realtime: true })
+    const result = await viewer.launch({
+      query: req.body?.query,
+      resultIndex: req.body?.resultIndex ?? config.anicliResultIndex,
+      episode: req.body?.episode ?? 1,
+      quality: req.body?.quality ?? config.anicliQuality,
+      dub: req.body?.dub ?? config.anicliDub,
+      bin: config.anicliBin,
+    })
+    // Remember which hianime entry this show maps to, so re-opening the sheet
+    // preselects the same match.
+    if (req.body?.mediaId && req.body?.query) {
+      await anicli.saveMatch(req.body.mediaId, {
+        query: req.body.query,
+        index: req.body.resultIndex ?? config.anicliResultIndex,
+        title: req.body.title,
+      })
+    }
+    res.json(result)
   }),
 )
 
@@ -448,61 +234,6 @@ app.get(
   }),
 )
 
-/** Serve subtitle sidecar for a tracked job. */
-app.get('/api/subtitle/:id', (req, res) => {
-  const job = downloads.list().find((j) => j.id === req.params.id)
-  if (!job?.path) {
-    res.status(404).json({ error: 'Not found' })
-    return
-  }
-  const subPath = playback.findSubtitle(job.path)
-  if (!subPath) {
-    res.status(404).json({ error: 'Subtitle not found' })
-    return
-  }
-  void playback.sendSubtitleFile(res, subPath)
-})
-
-/** Serve subtitle sidecar for a library file by path. */
-app.get('/api/subtitle', (req, res) => {
-  const target = downloads.resolveLibraryPath(String(req.query.path ?? ''))
-  if (!target) {
-    res.status(400).json({ error: 'Invalid library path' })
-    return
-  }
-  const subPath = playback.findSubtitle(target)
-  if (!subPath) {
-    res.status(404).json({ error: 'Subtitle not found' })
-    return
-  }
-  void playback.sendSubtitleFile(res, subPath)
-})
-
-/** Saves a hand-dropped file from ./library back to the browser. */
-app.get('/api/library/file', (req, res, next) => {
-  const target = downloads.resolveLibraryPath(String(req.query.path ?? ''))
-  if (!target) {
-    res.status(400).json({ error: 'Invalid library path' })
-    return
-  }
-  res.download(target, path.basename(target), (err) => {
-    if (err && !res.headersSent) next(err)
-  })
-})
-
-app.delete(
-  '/api/library',
-  wrap(async (req, res) => {
-    const relPath = String(req.query.path ?? '')
-    if (!relPath) {
-      res.status(400).json({ error: 'A path is required' })
-      return
-    }
-    await downloads.removeExtraFile(relPath)
-    res.json({ removed: true })
-  }),
-)
-
 app.use('/api', (req, res) => {
   res.status(404).json({ error: 'Not found' })
 })
@@ -531,16 +262,12 @@ if (isProd) {
 app.listen(PORT, HOST, () => {
   console.log(`\n  AnimeVault ready → http://${HOST}:${PORT}`)
   console.log(`  pid ${process.pid}`)
-  console.log(`  Library folder   → ${downloads.libraryDir()}\n`)
+  console.log(`  Player: ${settings.get().playerTarget} · ani-cli "${settings.get().anicliBin}"\n`)
 })
 
-let stopping = false
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
-    if (stopping) return
-    stopping = true
-    downloads.shutdown()
-    // Give ani-cli/yt-dlp a moment to receive the signal and clean up.
-    setTimeout(() => process.exit(0), 500).unref()
+    // mpv windows launched via ani-cli are detached; they keep playing.
+    process.exit(0)
   })
 }

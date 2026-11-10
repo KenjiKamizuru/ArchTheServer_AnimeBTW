@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { Bookmark, BookmarkCheck, CalendarClock, Download, Star } from 'lucide-react'
+import { Bookmark, BookmarkCheck, CalendarClock, Play, Star } from 'lucide-react'
 import type { Media } from '../types'
 import { api } from '../lib/api'
 import { useAsync } from '../lib/hooks'
@@ -158,11 +158,11 @@ function Hero({ media }: { media: Media }) {
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => open(media, { download: true })}
+              onClick={() => open(media, { watch: true })}
               className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-black shadow-lg shadow-accent/20 transition hover:bg-accent-600"
             >
-              <Download size={16} />
-              Download episode
+              <Play size={16} />
+              Watch episode
             </button>
             <button
               type="button"

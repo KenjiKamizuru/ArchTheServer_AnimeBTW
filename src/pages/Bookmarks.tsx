@@ -25,7 +25,7 @@ export default function Bookmarks() {
             <Bookmark size={30} className="mx-auto text-white/20" />
             <h2 className="mt-3 text-sm font-medium text-white/70">Nothing bookmarked yet</h2>
             <p className="mx-auto mt-1 max-w-sm text-xs leading-relaxed text-white/40">
-              Hover any poster and hit the bookmark icon to keep track of what you want to download later.
+              Hover any poster and hit the bookmark icon to keep track of the shows you want to watch later.
             </p>
             <Link
               to="/"

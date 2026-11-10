@@ -5,7 +5,6 @@ import {
   useEffect,
   useRef,
   useState,
-  type FormEvent,
   type ReactNode,
 } from 'react'
 import { Link } from 'react-router-dom'
@@ -14,10 +13,7 @@ import {
   BookmarkCheck,
   Check,
   Clock,
-  Download,
   ExternalLink,
-  Layers,
-  Link2,
   Loader2,
   Play,
   Search,
@@ -28,12 +24,12 @@ import {
 import type { AniCliSearchResult, Media, MediaDetail } from '../types'
 import { api } from '../lib/api'
 import { toggleBookmark, useBookmarks } from '../lib/bookmarks'
-import { useSettings, resolveSource } from '../lib/settings'
+import { useSettings } from '../lib/settings'
 import { clampEpisode, formatMediaType, formatSeason, relativeTime } from '../lib/format'
 import { usePlayer } from './Player'
 import { useToast } from './Toasts'
 
-type OpenFn = (media: Media | number, opts?: { download?: boolean }) => void
+type OpenFn = (media: Media | number, opts?: { watch?: boolean }) => void
 const DetailContext = createContext<OpenFn>(() => {})
 
 export function useDetail() {
@@ -41,10 +37,10 @@ export function useDetail() {
 }
 
 export function DetailProvider({ children }: { children: ReactNode }) {
-  const [selection, setSelection] = useState<{ target: Media | number; download: boolean } | null>(null)
+  const [selection, setSelection] = useState<{ target: Media | number; watch: boolean } | null>(null)
 
   const open = useCallback<OpenFn>((target, opts) => {
-    setSelection({ target, download: Boolean(opts?.download) })
+    setSelection({ target, watch: Boolean(opts?.watch) })
   }, [])
 
   return (
@@ -53,7 +49,7 @@ export function DetailProvider({ children }: { children: ReactNode }) {
       {selection ? (
         <DetailSheet
           target={selection.target}
-          initialDownload={selection.download}
+          initialWatch={selection.watch}
           onClose={() => setSelection(null)}
         />
       ) : null}
@@ -63,11 +59,11 @@ export function DetailProvider({ children }: { children: ReactNode }) {
 
 function DetailSheet({
   target,
-  initialDownload,
+  initialWatch,
   onClose,
 }: {
   target: Media | number
-  initialDownload: boolean
+  initialWatch: boolean
   onClose: () => void
 }) {
   const id = typeof target === 'number' ? target : target.id
@@ -75,25 +71,23 @@ function DetailSheet({
   const [detail, setDetail] = useState<MediaDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [episode, setEpisode] = useState(1)
-  const [selected, setSelected] = useState<number[]>([])
-  const [url, setUrl] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [bulkBusy, setBulkBusy] = useState(false)
+  const [watchBusy, setWatchBusy] = useState(false)
   const [anicliQuery, setAnicliQuery] = useState('')
   const [anicliIndex, setAnicliIndex] = useState(1)
   const [anicliResults, setAnicliResults] = useState<AniCliSearchResult[]>([])
   const [anicliTitle, setAnicliTitle] = useState<string | null>(null)
   const [searchBusy, setSearchBusy] = useState(false)
-  const urlRef = useRef<HTMLInputElement>(null)
+  const autoWatched = useRef(false)
   const toast = useToast()
   const bookmarks = useBookmarks()
   const player = usePlayer()
   const settings = useSettings()
-  const template = settings.sourceTemplate
-  const provider = settings.downloadProvider
-  const useAniCli = provider === 'anicli'
-  const ready = useAniCli ? anicliQuery.trim().length > 0 : Boolean(template)
+  const inMpv = settings.playerTarget === 'mpv'
   const saved = media ? bookmarks.some((b) => b.mediaId === media.id) : false
+
+  const aired = media ? media.airedEpisodes || 0 : 0
+  const maxEpisode = Math.max(aired, media?.episodes ?? 0, 1)
+  const episodeList = Array.from({ length: Math.min(maxEpisode, 200) }, (_, i) => i + 1)
 
   useEffect(() => {
     let alive = true
@@ -113,14 +107,8 @@ function DetailSheet({
     }
   }, [id])
 
-  // Pre-fill the single-episode form from the configured default source.
-  useEffect(() => {
-    if (!template || !media) return
-    setUrl(resolveSource(template, media, episode))
-  }, [template, episode, media?.id])
-
   // ani-cli searches by title. Start from the AniList title, then prefer the
-  // match this show was last downloaded with.
+  // match this show was last watched with.
   useEffect(() => {
     if (!media) return
     setAnicliQuery(media.title)
@@ -157,13 +145,14 @@ function DetailSheet({
     }
   }, [onClose])
 
+  // "Watch episode" from a card opens the sheet on the latest episode and
+  // launches it straight away.
   useEffect(() => {
-    if (initialDownload && media) {
-      const timer = setTimeout(() => urlRef.current?.focus(), 250)
-      return () => clearTimeout(timer)
+    if (initialWatch && media && !autoWatched.current) {
+      autoWatched.current = true
+      void onWatch(Math.max(1, media.airedEpisodes || 1))
     }
-    return undefined
-  }, [initialDownload, media?.id])
+  }, [initialWatch, media?.id])
 
   async function onBookmark() {
     if (!media) return
@@ -175,28 +164,46 @@ function DetailSheet({
     }
   }
 
-  async function onDownload(event: FormEvent) {
-    event.preventDefault()
+  /**
+   * The ani-cli path: `ani-cli -q 1080 -S 1 -e 12 <title>` on this machine,
+   * exactly like the terminal. The in-app path resolves the same stream
+   * server-side and plays it in the browser.
+   */
+  async function onWatch(n: number) {
     if (!media) return
-    if (useAniCli) {
-      await runBulk([episode])
-      return
-    }
-    const source = url.trim()
-    if (!/^https?:\/\/\S+$/i.test(source)) {
-      toast('Paste a direct http(s) link to the episode file', 'err')
-      urlRef.current?.focus()
-      return
-    }
-    setBusy(true)
+    const ep = clampEpisode(n, maxEpisode)
+    const query = anicliQuery.trim() || media.title
+    setEpisode(ep)
+    setWatchBusy(true)
     try {
-      await api.startDownload({ mediaId: media.id, title: media.title, episode, url: source })
-      toast(`Queued ${media.title} · EP ${episode}. Track it in Downloads.`)
-      if (!template) setUrl('')
+      if (inMpv) {
+        await api.watch({
+          query,
+          resultIndex: anicliIndex,
+          episode: ep,
+          quality: settings.anicliQuality,
+          dub: settings.anicliDub,
+          mediaId: media.id,
+          title: anicliTitle ?? undefined,
+        })
+        toast(`Opening ${media.title} · EP ${ep} in mpv · press v for subtitles`)
+        onClose()
+      } else {
+        player.open({
+          kind: 'live',
+          title: media.title,
+          episode: ep,
+          query,
+          resultIndex: anicliIndex,
+          quality: settings.anicliQuality,
+          dub: settings.anicliDub,
+        })
+        onClose()
+      }
     } catch (err) {
-      toast(err instanceof Error ? err.message : 'Could not start the download', 'err')
+      toast(err instanceof Error ? err.message : 'Could not start the stream', 'err')
     } finally {
-      setBusy(false)
+      setWatchBusy(false)
     }
   }
 
@@ -221,57 +228,6 @@ function DetailSheet({
     }
   }
 
-  async function runBulk(episodes: number[]) {
-    if (!media || !episodes.length) return
-    if (!ready) {
-      toast(
-        useAniCli
-          ? 'Enter a title to search for on ani-cli first'
-          : 'Add a default source in Settings to queue episodes',
-        'err',
-      )
-      return
-    }
-    setBulkBusy(true)
-    try {
-      const result = await api.bulkDownload({
-        media: { id: media.id, title: media.title, romaji: media.romaji },
-        episodes,
-        ...(useAniCli
-          ? {
-              source: 'anicli' as const,
-              anicli: {
-                query: anicliQuery.trim(),
-                resultIndex: anicliIndex,
-                quality: settings.anicliQuality,
-                dub: settings.anicliDub,
-                title: anicliTitle,
-              },
-            }
-          : {}),
-      })
-      if (result.created.length) {
-        toast(`Queued ${result.created.length} episode${result.created.length === 1 ? '' : 's'} of ${media.title}`)
-      }
-      if (result.errors.length) {
-        toast(`${result.errors.length} episode(s) could not be queued`, 'err')
-      }
-      setSelected([])
-    } catch (err) {
-      toast(err instanceof Error ? err.message : 'Could not queue the downloads', 'err')
-    } finally {
-      setBulkBusy(false)
-    }
-  }
-
-  function toggleEpisode(number: number) {
-    setEpisode(number)
-    setSelected((list) => (list.includes(number) ? list.filter((n) => n !== number) : [...list, number]))
-  }
-
-  const aired = media ? media.airedEpisodes || 0 : 0
-  const maxEpisode = Math.max(aired, media?.episodes ?? 0, 1)
-  const episodeList = Array.from({ length: Math.min(maxEpisode, 200) }, (_, i) => i + 1)
   const meta = media
     ? [
         formatMediaType(media.format),
@@ -351,45 +307,17 @@ function DetailSheet({
                 <div className="mt-4 flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => {
-                      if (!media) return
-                      player.open({
-                        kind: 'live',
-                        title: media.title,
-                        episode,
-                        query: anicliQuery.trim() || media.title,
-                        resultIndex: anicliIndex,
-                        quality: settings.anicliQuality,
-                        dub: settings.anicliDub,
-                      })
-                    }}
-                    disabled={!media || !anicliQuery.trim()}
+                    onClick={() => void onWatch(episode)}
+                    disabled={!media || !anicliQuery.trim() || watchBusy}
                     title={
-                      anicliQuery.trim()
-                        ? 'Stream this episode through ani-cli without downloading it'
-                        : 'Enter a title to search for on ani-cli first'
-                    }
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-2 text-xs font-semibold text-white ring-1 ring-white/10 transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    <Play size={14} className="fill-current" />
-                    Watch now
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => void runBulk(episodeList)}
-                    disabled={bulkBusy || !aired || !ready}
-                    title={
-                      !ready
-                        ? useAniCli
-                          ? 'Enter a title to search for on ani-cli first'
-                          : 'Add a default source in Settings first'
-                        : undefined
+                      inMpv
+                        ? 'Open this episode in mpv through the ani-cli binary'
+                        : 'Stream this episode in the browser through ani-cli'
                     }
                     className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-black transition hover:bg-accent-600 disabled:cursor-not-allowed disabled:opacity-40"
                   >
-                    <Download size={14} />
-                    Download all aired
+                    {watchBusy ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} className="fill-current" />}
+                    Watch EP {episode}
                   </button>
 
                   <button
@@ -480,14 +408,14 @@ function DetailSheet({
                 ) : null}
               </div>
 
-              <form onSubmit={onDownload} className="h-fit rounded-xl bg-ink-850 p-4 ring-1 ring-white/10">
+              <div className="h-fit rounded-xl bg-ink-850 p-4 ring-1 ring-white/10">
                 <div className="flex items-center justify-between gap-2">
                   <h3 className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-white/80 uppercase">
-                    <Download size={13} className="text-accent" />
-                    Download to this machine
+                    <Play size={13} className="text-accent" />
+                    Watch on this machine
                   </h3>
                   <span className="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-medium text-accent">
-                    {useAniCli ? 'ani-cli' : template ? 'URL source' : 'no source'}
+                    {inMpv ? 'mpv' : 'in-app'}
                   </span>
                 </div>
 
@@ -504,129 +432,107 @@ function DetailSheet({
                     />
                   </label>
 
-                  {useAniCli ? (
-                    <div className="block min-w-0">
-                      <span className="mb-1 block text-[11px] text-white/45">ani-cli search title</span>
-                      <div className="flex gap-1.5">
-                        <div className="relative min-w-0 flex-1">
-                          <Search
-                            size={13}
-                            className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-white/30"
-                          />
-                          <input
-                            ref={urlRef}
-                            value={anicliQuery}
-                            onChange={(event) => setAnicliQuery(event.target.value)}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter') {
-                                event.preventDefault()
-                                void onSearchAniCli()
-                              }
-                            }}
-                            placeholder="Title to search on the streaming site"
-                            className="w-full rounded-lg bg-ink-800 py-2 pr-2.5 pl-8 text-sm text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
-                          />
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => void onSearchAniCli()}
-                          disabled={searchBusy || !anicliQuery.trim()}
-                          title="Search ani-cli matches"
-                          className="shrink-0 rounded-lg bg-white/5 px-2.5 text-white/60 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-accent disabled:opacity-40"
-                        >
-                          {searchBusy ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <label className="block min-w-0">
-                      <span className="mb-1 block text-[11px] text-white/45">Source file URL</span>
-                      <div className="relative">
-                        <Link2
+                  <div className="block min-w-0">
+                    <span className="mb-1 block text-[11px] text-white/45">ani-cli search title</span>
+                    <div className="flex gap-1.5">
+                      <div className="relative min-w-0 flex-1">
+                        <Search
                           size={13}
                           className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-white/30"
                         />
                         <input
-                          ref={urlRef}
-                          type="url"
-                          value={url}
-                          onChange={(event) => setUrl(event.target.value)}
-                          placeholder="Set a default in Settings, or paste a link"
+                          value={anicliQuery}
+                          onChange={(event) => setAnicliQuery(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault()
+                              void onSearchAniCli()
+                            }
+                          }}
+                          placeholder="Title to search on the streaming site"
                           className="w-full rounded-lg bg-ink-800 py-2 pr-2.5 pl-8 text-sm text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
                         />
                       </div>
-                    </label>
-                  )}
+                      <button
+                        type="button"
+                        onClick={() => void onSearchAniCli()}
+                        disabled={searchBusy || !anicliQuery.trim()}
+                        title="Search ani-cli matches"
+                        className="shrink-0 rounded-lg bg-white/5 px-2.5 text-white/60 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-accent disabled:opacity-40"
+                      >
+                        {searchBusy ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
-                {useAniCli ? (
-                  anicliResults.length ? (
-                    <div className="mt-2 max-h-32 space-y-1 overflow-y-auto pr-1">
-                      {anicliResults.map((result) => {
-                        const on = result.index === anicliIndex
-                        return (
-                          <button
-                            key={result.slug}
-                            type="button"
-                            onClick={() => {
-                              setAnicliIndex(result.index)
-                              setAnicliTitle(result.title)
-                            }}
-                            className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] ring-1 transition ${
-                              on
-                                ? 'bg-accent/15 text-accent ring-accent/40'
-                                : 'bg-white/[0.03] text-white/55 ring-white/10 hover:bg-white/[0.06] hover:text-white'
-                            }`}
-                          >
-                            <span className="shrink-0 tabular-nums opacity-60">#{result.index}</span>
-                            <span className="min-w-0 flex-1 truncate">{result.title}</span>
-                            {on ? <Check size={12} className="shrink-0" /> : null}
-                          </button>
-                        )
-                      })}
-                    </div>
-                  ) : (
-                    <p className="mt-2 rounded-lg bg-white/[0.03] px-2.5 py-2 text-[11px] leading-relaxed text-white/35">
-                      {anicliTitle ? (
-                        <>
-                          Match: <span className="text-white/60">#{anicliIndex} {anicliTitle}</span>
-                        </>
-                      ) : (
-                        <>Search to pick the right match. Result #{anicliIndex} is used by default.</>
-                      )}
-                    </p>
-                  )
-                ) : null}
+                {anicliResults.length ? (
+                  <div className="mt-2 max-h-32 space-y-1 overflow-y-auto pr-1">
+                    {anicliResults.map((result) => {
+                      const on = result.index === anicliIndex
+                      return (
+                        <button
+                          key={result.slug}
+                          type="button"
+                          onClick={() => {
+                            setAnicliIndex(result.index)
+                            setAnicliTitle(result.title)
+                          }}
+                          className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] ring-1 transition ${
+                            on
+                              ? 'bg-accent/15 text-accent ring-accent/40'
+                              : 'bg-white/[0.03] text-white/55 ring-white/10 hover:bg-white/[0.06] hover:text-white'
+                          }`}
+                        >
+                          <span className="shrink-0 tabular-nums opacity-60">#{result.index}</span>
+                          <span className="min-w-0 flex-1 truncate">{result.title}</span>
+                          {on ? <Check size={12} className="shrink-0" /> : null}
+                        </button>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <p className="mt-2 rounded-lg bg-white/[0.03] px-2.5 py-2 text-[11px] leading-relaxed text-white/35">
+                    {anicliTitle ? (
+                      <>
+                        Match: <span className="text-white/60">#{anicliIndex} {anicliTitle}</span>
+                      </>
+                    ) : (
+                      <>Search to pick the right match. Result #{anicliIndex} is used by default.</>
+                    )}
+                  </p>
+                )}
 
                 <button
-                  type="submit"
-                  disabled={busy || bulkBusy || !ready}
-                  className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg bg-white/10 py-2 text-xs font-semibold text-white ring-1 ring-white/10 transition hover:bg-white/15 disabled:opacity-60"
+                  type="button"
+                  onClick={() => void onWatch(episode)}
+                  disabled={!media || !anicliQuery.trim() || watchBusy}
+                  className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg bg-accent py-2 text-xs font-semibold text-black transition hover:bg-accent-600 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  {busy || bulkBusy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-                  {busy || bulkBusy ? 'Starting…' : 'Queue this episode'}
+                  {watchBusy ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} className="fill-current" />}
+                  {inMpv ? `Open EP ${episode} in mpv` : `Play EP ${episode} in-browser`}
                 </button>
 
                 <p className="mt-2 text-[11px] leading-relaxed text-white/35">
-                  {useAniCli ? (
+                  {inMpv ? (
                     <>
-                      ani-cli downloads the episode and files it under{' '}
-                      <span className="text-white/55">{settings.libraryDir || 'library/'}</span>.{' '}
+                      Runs <span className="text-white/55">ani-cli -q {settings.anicliQuality} -S {anicliIndex}</span>{' '}
+                      on this machine and opens mpv. English subtitles are a track — press{' '}
+                      <span className="text-white/55">v</span> in mpv.{' '}
                       <Link to="/settings" onClick={onClose} className="text-accent hover:underline">
                         ani-cli settings
                       </Link>
                     </>
                   ) : (
                     <>
-                      Streams straight into{' '}
-                      <span className="text-white/55">{settings.libraryDir || 'library/'}</span> on this machine.{' '}
+                      Streams the episode in the browser through an ani-cli-resolved link.{' '}
                       <Link to="/settings" onClick={onClose} className="text-accent hover:underline">
-                        {template ? 'Change source' : 'Add a default source'}
+                        player settings
                       </Link>
                     </>
                   )}
                 </p>
-              </form>
+              </div>
             </div>
 
             {aired > 0 ? (
@@ -636,74 +542,28 @@ function DetailSheet({
                     <Tv size={12} />
                     Episodes available ({aired})
                   </h3>
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setSelected(episodeList)}
-                      className="rounded-md bg-white/5 px-2 py-1 text-[11px] text-white/60 ring-1 ring-white/10 transition hover:text-white"
-                    >
-                      Select all
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSelected([])}
-                      className="rounded-md px-2 py-1 text-[11px] text-white/40 transition hover:text-white"
-                    >
-                      Clear
-                    </button>
-                  </div>
+                  <span className="text-[11px] text-white/35">Pick an episode to watch it right now</span>
                 </div>
 
                 <div className="mt-2 flex max-h-40 flex-wrap gap-1.5 overflow-y-auto pr-1">
                   {episodeList.map((number) => {
-                    const isOn = selected.includes(number)
+                    const isOn = number === episode
                     return (
                       <button
                         key={number}
                         type="button"
-                        onClick={() => toggleEpisode(number)}
-                        aria-pressed={isOn}
+                        onClick={() => void onWatch(number)}
+                        title={`Watch EP ${number}`}
                         className={`flex h-8 min-w-9 items-center justify-center gap-1 rounded-md px-2 text-xs font-medium ring-1 transition ${
                           isOn
                             ? 'bg-accent text-black ring-accent'
                             : 'bg-white/5 text-white/60 ring-white/10 hover:bg-white/10 hover:text-white'
                         }`}
                       >
-                        {isOn ? <Check size={11} /> : null}
                         {number}
                       </button>
                     )
                   })}
-                </div>
-
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void runBulk(selected)}
-                    disabled={!selected.length || bulkBusy || !ready}
-                    title={
-                      !ready
-                        ? useAniCli
-                          ? 'Enter a title to search for on ani-cli first'
-                          : 'Add a default source in Settings first'
-                        : undefined
-                    }
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-black transition hover:bg-accent-600 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    {bulkBusy ? <Loader2 size={14} className="animate-spin" /> : <Layers size={14} />}
-                    Download selected{selected.length ? ` (${selected.length})` : ''}
-                  </button>
-                  {!ready ? (
-                    useAniCli ? (
-                      <span className="text-[11px] text-white/35">
-                        Add a search title above to enable bulk downloads.
-                      </span>
-                    ) : (
-                      <Link to="/settings" onClick={onClose} className="text-[11px] text-accent hover:underline">
-                        Set a default source to enable bulk downloads →
-                      </Link>
-                    )
-                  ) : null}
                 </div>
               </div>
             ) : media ? (

@@ -51,17 +51,15 @@ export interface Bookmark {
   media: Media
 }
 
-export type DownloadProvider = 'anicli' | 'template'
+export type PlayerTarget = 'mpv' | 'app'
 
 export interface AppSettings {
-  downloadProvider: DownloadProvider
-  sourceTemplate: string
   anicliBin: string
   anicliQuality: string
   anicliDub: boolean
   anicliResultIndex: number
+  playerTarget: PlayerTarget
   updatedAt: number
-  libraryDir: string
 }
 
 export interface AniCliSearchResult {
@@ -85,54 +83,14 @@ export interface AniCliStatus {
   path: string | null
   version: string | null
   curl: boolean
-  menu: boolean
-  downloader: 'yt-dlp' | 'ffmpeg' | null
+  mpv: boolean
+  ffmpeg: boolean
   error: string | null
 }
 
-export interface BulkDownloadResult {
-  created: Job[]
-  errors: { episode: number; error: string }[]
-}
-
-export type JobStatus = 'queued' | 'downloading' | 'completed' | 'error' | 'canceled'
-
-export interface Job {
-  id: string
-  provider?: 'anicli' | 'http'
-  mediaId: number | null
-  title: string
-  episode: number | null
-  url: string
-  query?: string | null
-  resultIndex?: number | null
-  quality?: string | null
-  dub?: boolean
-  filename: string
-  path: string
-  received: number
-  total: number
-  speed: number
-  progress?: number | null
-  status: JobStatus
-  error: string | null
-  contentType: string
-  createdAt: number
-  updatedAt: number
-  finishedAt: number | null
-}
-
-export interface LibraryEntry {
-  id: string
-  mediaId: number | null
-  title: string
-  episode: number | null
-  filename: string
-  path: string
-  relPath?: string
-  size: number
-  finishedAt: number | null
-  contentType: string
-  tracked: boolean
-  provider?: 'anicli' | 'http' | 'file'
+export interface WatchResult {
+  launched: boolean
+  bin: string
+  args: string[]
+  pid: number | null
 }

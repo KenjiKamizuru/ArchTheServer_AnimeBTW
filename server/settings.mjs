@@ -7,16 +7,15 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const DATA_DIR = path.join(ROOT, 'data')
 const FILE = path.join(DATA_DIR, 'settings.json')
 
-export const PROVIDERS = ['anicli', 'template']
 export const QUALITIES = ['best', '1080', '720', '480', '360', 'worst']
+export const PLAYER_TARGETS = ['mpv', 'app']
 
 const DEFAULTS = {
-  downloadProvider: 'anicli',
-  sourceTemplate: '',
   anicliBin: 'ani-cli',
   anicliQuality: 'best',
   anicliDub: false,
   anicliResultIndex: 1,
+  playerTarget: 'mpv',
   updatedAt: 0,
 }
 
@@ -26,8 +25,8 @@ export async function init() {
   try {
     const raw = await fsp.readFile(FILE, 'utf8')
     state = { ...DEFAULTS, ...JSON.parse(raw) }
-    if (!PROVIDERS.includes(state.downloadProvider)) state.downloadProvider = DEFAULTS.downloadProvider
     if (!QUALITIES.includes(state.anicliQuality)) state.anicliQuality = DEFAULTS.anicliQuality
+    if (!PLAYER_TARGETS.includes(state.playerTarget)) state.playerTarget = DEFAULTS.playerTarget
   } catch {
     // First run: defaults.
   }
@@ -35,32 +34,6 @@ export async function init() {
 
 export function get() {
   return { ...state }
-}
-
-export function validateTemplate(input) {
-  const value = String(input ?? '').trim()
-  if (!value) return { ok: true, value: '' }
-  if (!/^https?:\/\//i.test(value)) {
-    return { ok: false, error: 'The source template must start with http:// or https://' }
-  }
-  if (!/\{(episode|ep2|ep3)\}/.test(value)) {
-    return { ok: false, error: 'Add an episode placeholder such as {ep2} so every episode maps to its own file' }
-  }
-  return { ok: true, value }
-}
-
-const PLACEHOLDERS = ['title', 'romaji', 'id', 'episode', 'ep2', 'ep3']
-
-/** Fills {title} {romaji} {id} {episode} {ep2} {ep3} in a source template. */
-export function resolveSource(template, { id, title, romaji, episode }) {
-  const ep = Number(episode) || 1
-  return String(template)
-    .replace(/\{id\}/g, String(id ?? ''))
-    .replace(/\{title\}/g, encodeURIComponent(title ?? ''))
-    .replace(/\{romaji\}/g, encodeURIComponent(romaji ?? ''))
-    .replace(/\{episode\}/g, String(ep))
-    .replace(/\{ep2\}/g, String(ep).padStart(2, '0'))
-    .replace(/\{ep3\}/g, String(ep).padStart(3, '0'))
 }
 
 function parseIndex(value, fallback) {
@@ -72,18 +45,12 @@ function parseIndex(value, fallback) {
 export async function save(patch = {}) {
   const next = { ...state }
 
-  if (patch.downloadProvider !== undefined) {
-    const provider = String(patch.downloadProvider)
-    if (!PROVIDERS.includes(provider)) {
-      throw Object.assign(new Error('Unknown download provider'), { status: 400 })
+  if (patch.playerTarget !== undefined) {
+    const target = String(patch.playerTarget)
+    if (!PLAYER_TARGETS.includes(target)) {
+      throw Object.assign(new Error('Unknown player target'), { status: 400 })
     }
-    next.downloadProvider = provider
-  }
-
-  if (patch.sourceTemplate !== undefined) {
-    const verdict = validateTemplate(patch.sourceTemplate)
-    if (!verdict.ok) throw Object.assign(new Error(verdict.error), { status: 400 })
-    next.sourceTemplate = verdict.value
+    next.playerTarget = target
   }
 
   if (patch.anicliBin !== undefined) {
@@ -112,10 +79,6 @@ export async function save(patch = {}) {
   await fsp.mkdir(DATA_DIR, { recursive: true })
   await fsp.writeFile(FILE, JSON.stringify(state, null, 2))
   return get()
-}
-
-export function placeholders() {
-  return PLACEHOLDERS
 }
 
 export function stateExists() {

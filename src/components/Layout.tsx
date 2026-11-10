@@ -3,26 +3,19 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-do
 import {
   Bookmark,
   CalendarClock,
-  Download,
-  HardDrive,
   LayoutGrid,
   Play,
   Search,
   Settings2,
   Sparkles,
 } from 'lucide-react'
-import { activeCount, useJobs } from '../lib/downloads'
 
 const NAV = [
   { to: '/', label: 'This Season', short: 'Season', icon: Sparkles, end: true },
   { to: '/browse', label: 'Browse', short: 'Browse', icon: LayoutGrid },
   { to: '/schedule', label: 'Airing', short: 'Airing', icon: CalendarClock },
   { to: '/bookmarks', label: 'Bookmarks', short: 'Saved', icon: Bookmark },
-  { to: '/downloads', label: 'Downloads', short: 'Queue', icon: Download },
-  { to: '/downloaded', label: 'Downloaded', short: 'Files', icon: HardDrive },
 ]
-
-const MOBILE_NAV = NAV.filter((item) => item.to !== '/downloaded')
 
 function Brand() {
   return (
@@ -32,15 +25,13 @@ function Brand() {
       </span>
       <span className="leading-tight">
         <span className="block text-[15px] font-semibold tracking-tight text-white">AnimeVault</span>
-        <span className="block text-[10px] tracking-wider text-white/35 uppercase">local library</span>
+        <span className="block text-[10px] tracking-wider text-white/35 uppercase">watch anime</span>
       </span>
     </Link>
   )
 }
 
 export default function Layout() {
-  const jobs = useJobs()
-  const pending = activeCount(jobs)
   const navigate = useNavigate()
   const location = useLocation()
   const [term, setTerm] = useState('')
@@ -78,11 +69,6 @@ export default function Layout() {
             >
               <Icon size={17} className="shrink-0" />
               <span className="flex-1">{label}</span>
-              {to === '/downloads' && pending > 0 ? (
-                <span className="rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold text-black">
-                  {pending}
-                </span>
-              ) : null}
             </NavLink>
           ))}
         </nav>
@@ -101,8 +87,8 @@ export default function Layout() {
           </NavLink>
           <div className="rounded-xl bg-ink-850 p-3 ring-1 ring-white/5">
             <p className="text-[11px] leading-relaxed text-white/40">
-              Metadata from AniList &amp; AniDB. Downloads are saved to{' '}
-              <span className="text-white/60">library/</span> on this machine.
+              Metadata from AniList &amp; AniDB. Episodes stream through{' '}
+              <span className="text-white/60">ani-cli</span> on this machine.
             </p>
           </div>
         </div>
@@ -138,17 +124,6 @@ export default function Layout() {
             >
               <Settings2 size={17} />
             </NavLink>
-
-            <NavLink
-              to="/downloads"
-              className="relative hidden shrink-0 rounded-lg bg-ink-850 p-2 text-white/60 ring-1 ring-white/10 transition hover:text-white md:block"
-              aria-label="Downloads"
-            >
-              <Download size={17} />
-              {pending > 0 ? (
-                <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-accent ring-2 ring-ink-950" />
-              ) : null}
-            </NavLink>
           </div>
         </header>
 
@@ -159,7 +134,7 @@ export default function Layout() {
 
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-ink-900/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">
         <div className="flex items-stretch justify-around">
-          {MOBILE_NAV.map(({ to, short, icon: Icon, end }) => (
+          {NAV.map(({ to, short, icon: Icon, end }) => (
             <NavLink
               key={to}
               to={to}
@@ -172,9 +147,6 @@ export default function Layout() {
             >
               <Icon size={18} />
               {short}
-              {to === '/downloads' && pending > 0 ? (
-                <span className="absolute top-1.5 right-[26%] h-2 w-2 rounded-full bg-accent" />
-              ) : null}
             </NavLink>
           ))}
         </div>

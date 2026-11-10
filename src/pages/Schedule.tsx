@@ -1,4 +1,4 @@
-import { Bookmark, BookmarkCheck, CalendarClock, Download } from 'lucide-react'
+import { Bookmark, BookmarkCheck, CalendarClock, Play } from 'lucide-react'
 import type { Media } from '../types'
 import { api } from '../lib/api'
 import { useAsync, useNow } from '../lib/hooks'
@@ -124,11 +124,11 @@ function ScheduleRow({ media, now }: { media: Media; now: number }) {
         </button>
         <button
           type="button"
-          onClick={() => open(media, { download: true })}
-          aria-label={`Download ${media.title}`}
+          onClick={() => open(media, { watch: true })}
+          aria-label={`Watch ${media.title}`}
           className="rounded-md p-2 text-white/40 transition hover:bg-white/5 hover:text-accent"
         >
-          <Download size={15} />
+          <Play size={15} />
         </button>
       </div>
     </div>

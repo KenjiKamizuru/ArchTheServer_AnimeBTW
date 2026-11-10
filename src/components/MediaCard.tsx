@@ -1,4 +1,4 @@
-import { Bookmark, BookmarkCheck, Download, Star } from 'lucide-react'
+import { Bookmark, BookmarkCheck, Play, Star } from 'lucide-react'
 import type { Media } from '../types'
 import { toggleBookmark, useBookmarks } from '../lib/bookmarks'
 import { formatMediaType, formatSeason } from '../lib/format'
@@ -62,11 +62,11 @@ export function MediaCard({ media }: { media: Media }) {
         <div className="absolute inset-x-0 bottom-0 flex translate-y-1 items-center gap-1.5 p-2 opacity-0 transition duration-200 group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100">
           <button
             type="button"
-            onClick={() => open(media, { download: true })}
+            onClick={() => open(media, { watch: true })}
             className="flex flex-1 items-center justify-center gap-1 rounded-md bg-accent px-2 py-1.5 text-[11px] font-semibold text-black transition hover:bg-accent-600"
           >
-            <Download size={13} />
-            Download
+            <Play size={13} />
+            {latest > 0 ? `Watch EP ${latest}` : 'Watch'}
           </button>
           <button
             type="button"

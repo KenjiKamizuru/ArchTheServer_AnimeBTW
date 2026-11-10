@@ -1,22 +1,3 @@
-export function bytes(value: number | null | undefined): string {
-  const n = Number(value ?? 0)
-  if (!Number.isFinite(n) || n <= 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.min(units.length - 1, Math.floor(Math.log(n) / Math.log(1024)))
-  const size = n / 1024 ** i
-  return `${size >= 100 || i === 0 ? Math.round(size) : size.toFixed(1)} ${units[i]}`
-}
-
-export function speed(value: number | null | undefined): string {
-  const n = Number(value ?? 0)
-  return n > 0 ? `${bytes(n)}/s` : '—'
-}
-
-export function percent(received: number, total: number): number {
-  if (!total) return 0
-  return Math.min(100, Math.max(0, (received / total) * 100))
-}
-
 export function formatSeason(season: string | null, year: number | null): string {
   if (!season) return year ? String(year) : ''
   const label = season.charAt(0) + season.slice(1).toLowerCase()

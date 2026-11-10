@@ -4,11 +4,9 @@ import type {
   AniCliStatus,
   AppSettings,
   Bookmark,
-  BulkDownloadResult,
-  Job,
-  LibraryEntry,
   Media,
   MediaDetail,
+  WatchResult,
 } from '../types'
 
 export interface SeasonResponse {
@@ -102,20 +100,21 @@ export const api = {
     return get<{ match: AniCliMatch | null }>(`/api/anicli/matches/${mediaId}`, false)
   },
 
-  bulkDownload(payload: {
-    media: { id: number; title: string; romaji: string | null }
-    episodes: number[]
-    template?: string
-    source?: 'anicli' | 'template'
-    anicli?: {
-      query: string
-      resultIndex: number
-      quality?: string
-      dub?: boolean
-      title?: string | null
-    }
+  saveMatch(mediaId: number, match: { query: string; index: number; title?: string }) {
+    return send<{ match: AniCliMatch }>(`/api/anicli/matches/${mediaId}`, 'PUT', match)
+  },
+
+  /** Hands the episode to the ani-cli binary on this machine (opens mpv). */
+  watch(payload: {
+    query: string
+    resultIndex?: number
+    episode?: number
+    quality?: string
+    dub?: boolean
+    mediaId?: number
+    title?: string
   }) {
-    return send<BulkDownloadResult>('/api/downloads/bulk', 'POST', payload)
+    return send<WatchResult>('/api/watch', 'POST', payload)
   },
 
   bookmarks() {
@@ -126,76 +125,6 @@ export const api = {
     return add
       ? send<{ item: Bookmark }>('/api/bookmarks', 'POST', { media })
       : send<{ removed: boolean }>(`/api/bookmarks/${media.id}`, 'DELETE')
-  },
-
-  downloads() {
-    return get<Job[]>('/api/downloads', false)
-  },
-
-  startDownload(payload: {
-    mediaId: number | null
-    title: string
-    episode: number | null
-    url: string
-    filename?: string
-  }) {
-    return send<Job>('/api/downloads', 'POST', payload)
-  },
-
-  cancelDownload(id: string) {
-    return send<Job>(`/api/downloads/${id}/cancel`, 'POST')
-  },
-
-  removeDownload(id: string) {
-    return send<{ removed: boolean }>(`/api/downloads/${id}`, 'DELETE')
-  },
-
-  library() {
-    return get<{ items: LibraryEntry[]; dir: string }>('/api/library', false)
-  },
-
-  removeExtra(relPath: string) {
-    return send<{ removed: boolean }>(`/api/library?path=${encodeURIComponent(relPath)}`, 'DELETE')
-  },
-
-  fileUrl(id: string) {
-    return `/api/downloads/${id}/file`
-  },
-
-  extraFileUrl(relPath: string) {
-    return `/api/library/file?path=${encodeURIComponent(relPath)}`
-  },
-
-  streamUrl(id: string) {
-    return `/api/stream/${id}`
-  },
-
-  extraStreamUrl(relPath: string) {
-    return `/api/stream?path=${encodeURIComponent(relPath)}`
-  },
-
-  transcodeUrl(id: string) {
-    return `/api/transcode/${id}`
-  },
-
-  extraTranscodeUrl(relPath: string) {
-    return `/api/transcode?path=${encodeURIComponent(relPath)}`
-  },
-
-  subtitleUrl(id: string) {
-    return `/api/subtitle/${id}`
-  },
-
-  extraSubtitleUrl(relPath: string) {
-    return `/api/subtitle?path=${encodeURIComponent(relPath)}`
-  },
-
-  liveJobUrl(id: string) {
-    return `/api/live/job/${id}`
-  },
-
-  liveJobSubtitleUrl(id: string) {
-    return `/api/live/job/${id}/subtitle`
   },
 
   liveStreamUrl(params: {

@@ -1,6 +1,5 @@
 node_modules/
 dist/
-library/
 data/
 *.log
 .DS_Store

@@ -1,9 +1,10 @@
 // ani-cli integration.
 //
 // ani-cli (https://github.com/pystardust/ani-cli) resolves an episode from
-// hianime and hands the stream URL to yt-dlp or ffmpeg. The app shells out to it
-// in download mode (`ani-cli -d`) into a scratch folder and then adopts the
-// finished file into ./library.
+// hianime and hands the stream to mpv. The app launches the binary directly for
+// mpv playback (server/viewer.mjs), and with ANI_CLI_PLAYER=debug when the
+// browser plays the stream itself, so both paths share the same search,
+// quality, and dub settings.
 //
 // Search results are scraped with the same curl + sed pipeline ani-cli uses so
 // the result indices shown in the UI line up with `ani-cli -S`.
@@ -120,8 +121,8 @@ export async function status(preferred) {
   const bin = binName(preferred)
   const resolved = resolveBin(bin)
   const curl = Boolean(resolveBin('curl'))
-  const menu = Boolean(resolveBin('fzf')) || Boolean(resolveBin('rofi')) || Boolean(resolveBin('dmenu'))
-  const downloader = resolveBin('yt-dlp') ? 'yt-dlp' : resolveBin('ffmpeg') ? 'ffmpeg' : null
+  const mpv = Boolean(resolveBin('mpv'))
+  const ffmpeg = Boolean(resolveBin('ffmpeg'))
 
   if (!resolved) {
     return {
@@ -131,8 +132,8 @@ export async function status(preferred) {
       path: null,
       version: null,
       curl,
-      menu,
-      downloader,
+      mpv,
+      ffmpeg,
       error: `Could not find "${bin}". Install ani-cli and put it on PATH, or set the full path in Settings.`,
     }
   }
@@ -141,9 +142,9 @@ export async function status(preferred) {
   const version = (result.stdout || result.stderr || '').trim().split('\n').pop()?.trim() || null
 
   let error = null
-  if (!downloader) error = 'ani-cli needs yt-dlp or ffmpeg installed to download episodes.'
-  else if (!curl) error = 'ani-cli needs curl to resolve streams.'
-  else if (!menu) error = 'ani-cli needs fzf (or rofi/dmenu) installed to run its menus.'
+  if (!curl) error = 'ani-cli needs curl to resolve streams.'
+  else if (!mpv && !ffmpeg)
+    error = 'ani-cli needs mpv (to open a player window) or ffmpeg (to play in the browser).'
 
   return {
     available: !error,
@@ -152,8 +153,8 @@ export async function status(preferred) {
     path: resolved,
     version,
     curl,
-    menu,
-    downloader,
+    mpv,
+    ffmpeg,
     error,
   }
 }
@@ -210,17 +211,6 @@ export async function search(query, { limit = MAX_RESULTS } = {}) {
 
   cache.set(key, { at: Date.now(), results })
   return results
-}
-
-/** Command-line arguments for a single download. */
-export function buildArgs(job) {
-  const args = ['-d']
-  if (job.quality) args.push('-q', String(job.quality))
-  args.push('-S', String(job.resultIndex ?? 1))
-  args.push('-e', String(job.episode ?? 1))
-  if (job.dub) args.push('--dub')
-  args.push(String(job.query ?? ''))
-  return args
 }
 
 function parseDebugLinks(output) {

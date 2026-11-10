@@ -1,154 +1,19 @@
-// Playback helpers.
+// Playback helpers for the in-app player.
 //
-// Local files are served with HTTP range support so the browser can seek.
-// Containers the browser cannot play (mkv, ts, …) and live ani-cli streams are
-// remuxed to fragmented MP4 with ffmpeg and piped straight to the response.
+// Live ani-cli streams are remuxed to fragmented MP4 with ffmpeg and piped
+// straight to the response; remote subtitles are relayed same-origin as VTT.
 
-import fs from 'node:fs'
-import fsp from 'node:fs/promises'
-import path from 'node:path'
 import { spawn } from 'node:child_process'
 import * as anicli from './anicli.mjs'
 
 const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 
-const VIDEO_MIME = {
-  '.mp4': 'video/mp4',
-  '.m4v': 'video/mp4',
-  '.webm': 'video/webm',
-  '.mkv': 'video/x-matroska',
-  '.mov': 'video/quicktime',
-  '.ts': 'video/mp2t',
-}
-
-const DIRECT_PLAY = new Set(['.mp4', '.m4v', '.webm', '.mov'])
-const SUBTITLE_EXT = ['.vtt', '.srt', '.ass', '.ssa']
-
-export function getMime(filePath) {
-  return VIDEO_MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream'
-}
-
-/** True when the browser can usually play this container without remuxing. */
-export function directPlayable(filePath) {
-  return DIRECT_PLAY.has(path.extname(filePath).toLowerCase())
-}
-
-/** Serves a file with byte-range support (needed for seeking and mobile Safari). */
-export function sendFileWithRange(req, res, filePath, downloadName) {
-  let stat
-  try {
-    stat = fs.statSync(filePath)
-  } catch {
-    res.status(404).json({ error: 'File not found' })
-    return
-  }
-  if (!stat.isFile()) {
-    res.status(404).json({ error: 'File not found' })
-    return
-  }
-
-  const fileSize = stat.size
-  const range = req.headers.range
-  res.setHeader('Accept-Ranges', 'bytes')
-  res.setHeader('Content-Type', getMime(filePath))
-  if (downloadName) {
-    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(downloadName)}"`)
-  }
-
-  if (range) {
-    const [startRaw, endRaw] = range.replace(/bytes=/, '').split('-')
-    let start
-    let end
-    if (!startRaw) {
-      // Suffix range: the last N bytes.
-      const suffix = Number.parseInt(endRaw, 10)
-      start = Number.isNaN(suffix) ? NaN : Math.max(0, fileSize - suffix)
-      end = fileSize - 1
-    } else {
-      start = Number.parseInt(startRaw, 10)
-      end = endRaw ? Number.parseInt(endRaw, 10) : fileSize - 1
-    }
-    if (Number.isNaN(start) || Number.isNaN(end) || start > end || start < 0 || end >= fileSize) {
-      res.status(416).setHeader('Content-Range', `bytes */${fileSize}`).end()
-      return
-    }
-    res.status(206)
-    res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`)
-    res.setHeader('Content-Length', end - start + 1)
-    const stream = fs.createReadStream(filePath, { start, end })
-    stream.on('error', () => {
-      if (!res.headersSent) res.status(500).end()
-    })
-    stream.pipe(res)
-    return
-  }
-
-  res.status(200)
-  res.setHeader('Content-Length', fileSize)
-  const stream = fs.createReadStream(filePath)
-  stream.on('error', () => {
-    if (!res.headersSent) res.status(500).end()
-  })
-  stream.pipe(res)
-}
-
-/** Finds a sidecar subtitle next to a media file. */
-export function findSubtitle(filePath) {
-  const parsed = path.parse(filePath)
-  for (const ext of SUBTITLE_EXT) {
-    const candidate = path.join(parsed.dir, `${parsed.name}${ext}`)
-    if (fs.existsSync(candidate)) return candidate
-  }
-  return null
-}
-
 function srtToVtt(value) {
   return `WEBVTT\n\n${value
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
     .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2')}`
-}
-
-function assToVtt(filePath) {
-  return new Promise((resolve) => {
-    const ffmpeg = anicli.resolveBin('ffmpeg')
-    if (!ffmpeg) {
-      resolve(null)
-      return
-    }
-    const child = spawn(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-i', filePath, '-f', 'webvtt', 'pipe:1'], {
-      stdio: ['ignore', 'pipe', 'ignore'],
-    })
-    let out = ''
-    child.stdout?.on('data', (chunk) => {
-      if (out.length < 8_000_000) out += chunk
-    })
-    child.once('error', () => resolve(null))
-    child.once('close', (code) => resolve(code === 0 && out.trim() ? out : null))
-  })
-}
-
-/** Serves a local subtitle as WebVTT, converting SRT/ASS when needed. */
-export async function sendSubtitleFile(res, filePath) {
-  const ext = path.extname(filePath).toLowerCase()
-  let text
-  try {
-    if (ext === '.ass' || ext === '.ssa') {
-      text = await assToVtt(filePath)
-      if (!text) text = await fsp.readFile(filePath, 'utf8')
-    } else {
-      text = await fsp.readFile(filePath, 'utf8')
-      if (ext === '.srt') text = srtToVtt(text)
-    }
-  } catch {
-    res.status(404).json({ error: 'Subtitle not found' })
-    return
-  }
-
-  res.setHeader('Content-Type', 'text/vtt; charset=utf-8')
-  res.setHeader('Cache-Control', 'no-store')
-  res.send(text)
 }
 
 /** Fetches a remote subtitle (hianime serves VTT) and relays it same-origin. */
@@ -202,14 +67,14 @@ function kill(child) {
 /**
  * Pipes ffmpeg output to the browser as fragmented MP4.
  *
- * Pass either a local `filePath` or a remote `url` (with an optional referer).
- * When the source keeps audio in a separate HLS rendition, pass `audioUrl` so
- * ffmpeg reads the video variant and the audio playlist as two inputs.
- * HLS sources need `hls: true` so ffmpeg accepts hianime's `.ts.jpg` segments.
- * Set `realtime: true` for live viewing so ffmpeg reads at playback speed instead
- * of pulling the whole episode down as fast as the network allows.
+ * The source is a remote `url` with an optional referer. When the source keeps
+ * audio in a separate HLS rendition, pass `audioUrl` so ffmpeg reads the video
+ * variant and the audio playlist as two inputs. HLS sources need `hls: true`
+ * so ffmpeg accepts hianime's `.ts.jpg` segments. `realtime: true` makes ffmpeg
+ * read at playback speed instead of pulling the whole episode down as fast as
+ * the network allows.
  */
-export function remux(req, res, { filePath, url, audioUrl, referer, hls = false, realtime = false } = {}) {
+export function remux(req, res, { url, audioUrl, referer, hls = false, realtime = false } = {}) {
   const ffmpeg = anicli.resolveBin('ffmpeg')
   if (!ffmpeg) {
     res.status(503).json({ error: 'ffmpeg is required for this playback mode' })
@@ -224,8 +89,7 @@ export function remux(req, res, { filePath, url, audioUrl, referer, hls = false,
     if (hls) args.push('-extension_picky', '0', '-f', 'hls', '-allowed_segment_extensions', 'ALL')
     args.push('-i', target)
   }
-  if (url) addRemoteInput(url)
-  else args.push('-i', filePath)
+  addRemoteInput(url)
   if (audioUrl) addRemoteInput(audioUrl)
 
   if (audioUrl) {
@@ -233,6 +97,8 @@ export function remux(req, res, { filePath, url, audioUrl, referer, hls = false,
   } else {
     args.push('-map', '0:v:0?', '-map', '0:a:0?')
   }
+  // hianime audio arrives as ADTS AAC inside MPEG-TS; MP4 needs the ASC headers.
+  if (audioUrl || hls) args.push('-bsf:a', 'aac_adtstoasc')
   args.push(
     '-c',
     'copy',
@@ -242,8 +108,6 @@ export function remux(req, res, { filePath, url, audioUrl, referer, hls = false,
     'mp4',
     'pipe:1',
   )
-  // hianime audio arrives as ADTS AAC inside MPEG-TS; MP4 needs the ASC headers.
-  if (audioUrl || hls) args.splice(args.length - 6, 0, '-bsf:a', 'aac_adtstoasc')
 
   let child
   try {

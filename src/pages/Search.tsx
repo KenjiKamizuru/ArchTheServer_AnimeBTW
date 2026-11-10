@@ -30,7 +30,7 @@ export default function Search() {
           <div className="rounded-xl bg-ink-900 p-8 text-center ring-1 ring-white/5">
             <SearchX size={28} className="mx-auto text-white/25" />
             <p className="mt-2 text-sm text-white/45">
-              Search across the whole catalogue, then download or bookmark from any result.
+              Search across the whole catalogue, then watch or bookmark from any result.
             </p>
             <Link
               to="/browse"
