@@ -8,14 +8,11 @@ const DATA_DIR = path.join(ROOT, 'data')
 const FILE = path.join(DATA_DIR, 'settings.json')
 
 export const QUALITIES = ['best', '1080', '720', '480', '360', 'worst']
-export const PLAYER_TARGETS = ['mpv', 'app']
 
 const DEFAULTS = {
-  anicliBin: 'ani-cli',
-  anicliQuality: 'best',
-  anicliDub: false,
-  anicliResultIndex: 1,
-  playerTarget: 'mpv',
+  quality: 'best',
+  dub: false,
+  resultIndex: 1,
   updatedAt: 0,
 }
 
@@ -25,8 +22,7 @@ export async function init() {
   try {
     const raw = await fsp.readFile(FILE, 'utf8')
     state = { ...DEFAULTS, ...JSON.parse(raw) }
-    if (!QUALITIES.includes(state.anicliQuality)) state.anicliQuality = DEFAULTS.anicliQuality
-    if (!PLAYER_TARGETS.includes(state.playerTarget)) state.playerTarget = DEFAULTS.playerTarget
+    if (!QUALITIES.includes(state.quality)) state.quality = DEFAULTS.quality
   } catch {
     // First run: defaults.
   }
@@ -45,35 +41,19 @@ function parseIndex(value, fallback) {
 export async function save(patch = {}) {
   const next = { ...state }
 
-  if (patch.playerTarget !== undefined) {
-    const target = String(patch.playerTarget)
-    if (!PLAYER_TARGETS.includes(target)) {
-      throw Object.assign(new Error('Unknown player target'), { status: 400 })
-    }
-    next.playerTarget = target
-  }
-
-  if (patch.anicliBin !== undefined) {
-    const value = String(patch.anicliBin).trim()
-    if (/[\n\r]/.test(value)) {
-      throw Object.assign(new Error('The ani-cli path cannot contain line breaks'), { status: 400 })
-    }
-    next.anicliBin = (value || DEFAULTS.anicliBin).slice(0, 300)
-  }
-
-  if (patch.anicliQuality !== undefined) {
-    const quality = String(patch.anicliQuality).trim().toLowerCase()
+  if (patch.quality !== undefined) {
+    const quality = String(patch.quality).trim().toLowerCase()
     if (!QUALITIES.includes(quality)) {
       throw Object.assign(new Error('Unsupported quality'), { status: 400 })
     }
-    next.anicliQuality = quality
+    next.quality = quality
   }
 
-  if (patch.anicliResultIndex !== undefined) {
-    next.anicliResultIndex = parseIndex(patch.anicliResultIndex, next.anicliResultIndex)
+  if (patch.resultIndex !== undefined) {
+    next.resultIndex = parseIndex(patch.resultIndex, next.resultIndex)
   }
 
-  if (patch.anicliDub !== undefined) next.anicliDub = Boolean(patch.anicliDub)
+  if (patch.dub !== undefined) next.dub = Boolean(patch.dub)
 
   state = { ...next, updatedAt: Date.now() }
   await fsp.mkdir(DATA_DIR, { recursive: true })

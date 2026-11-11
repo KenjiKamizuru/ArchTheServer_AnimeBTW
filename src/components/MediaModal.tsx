@@ -21,7 +21,7 @@ import {
   Tv,
   X,
 } from 'lucide-react'
-import type { AniCliSearchResult, Media, MediaDetail } from '../types'
+import type { Media, MediaDetail, ProviderSearchResult } from '../types'
 import { api } from '../lib/api'
 import { toggleBookmark, useBookmarks } from '../lib/bookmarks'
 import { useSettings } from '../lib/settings'
@@ -72,17 +72,16 @@ function DetailSheet({
   const [error, setError] = useState<string | null>(null)
   const [episode, setEpisode] = useState(1)
   const [watchBusy, setWatchBusy] = useState(false)
-  const [anicliQuery, setAnicliQuery] = useState('')
-  const [anicliIndex, setAnicliIndex] = useState(1)
-  const [anicliResults, setAnicliResults] = useState<AniCliSearchResult[]>([])
-  const [anicliTitle, setAnicliTitle] = useState<string | null>(null)
+  const [providerQuery, setProviderQuery] = useState('')
+  const [providerIndex, setProviderIndex] = useState(1)
+  const [providerResults, setProviderResults] = useState<ProviderSearchResult[]>([])
+  const [providerTitle, setProviderTitle] = useState<string | null>(null)
   const [searchBusy, setSearchBusy] = useState(false)
   const autoWatched = useRef(false)
   const toast = useToast()
   const bookmarks = useBookmarks()
   const player = usePlayer()
   const settings = useSettings()
-  const inMpv = settings.playerTarget === 'mpv'
   const saved = media ? bookmarks.some((b) => b.mediaId === media.id) : false
 
   const aired = media ? media.airedEpisodes || 0 : 0
@@ -107,22 +106,22 @@ function DetailSheet({
     }
   }, [id])
 
-  // ani-cli searches by title. Start from the AniList title, then prefer the
-  // match this show was last watched with.
+  // The resolver searches by title. Start from the AniList title, then prefer
+  // the match this show was last watched with.
   useEffect(() => {
     if (!media) return
-    setAnicliQuery(media.title)
-    setAnicliIndex(settings.anicliResultIndex || 1)
-    setAnicliTitle(null)
-    setAnicliResults([])
+    setProviderQuery(media.title)
+    setProviderIndex(settings.resultIndex || 1)
+    setProviderTitle(null)
+    setProviderResults([])
     let alive = true
     api
-      .anicliMatch(media.id)
+      .resolverMatch(media.id)
       .then(({ match }) => {
         if (!alive || !match) return
-        setAnicliQuery(match.query)
-        setAnicliIndex(match.index)
-        setAnicliTitle(match.title || null)
+        setProviderQuery(match.query)
+        setProviderIndex(match.index)
+        setProviderTitle(match.title || null)
       })
       .catch(() => {
         /* a missing saved match is fine */
@@ -130,7 +129,7 @@ function DetailSheet({
     return () => {
       alive = false
     }
-  }, [media?.id, settings.anicliResultIndex])
+  }, [media?.id, settings.resultIndex])
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -165,41 +164,35 @@ function DetailSheet({
   }
 
   /**
-   * The ani-cli path: `ani-cli -q 1080 -S 1 -e 12 <title>` on this machine,
-   * exactly like the terminal. The in-app path resolves the same stream
-   * server-side and plays it in the browser.
+   * Resolves the episode server-side (search, embed, quality pick), remembers
+   * the match, then plays the remuxed stream in the browser.
    */
   async function onWatch(n: number) {
     if (!media) return
     const ep = clampEpisode(n, maxEpisode)
-    const query = anicliQuery.trim() || media.title
+    const query = providerQuery.trim() || media.title
     setEpisode(ep)
     setWatchBusy(true)
     try {
-      if (inMpv) {
-        await api.watch({
-          query,
-          resultIndex: anicliIndex,
-          episode: ep,
-          quality: settings.anicliQuality,
-          dub: settings.anicliDub,
-          mediaId: media.id,
-          title: anicliTitle ?? undefined,
-        })
-        toast(`Opening ${media.title} · EP ${ep} in mpv · press v for subtitles`)
-        onClose()
-      } else {
-        player.open({
-          kind: 'live',
-          title: media.title,
-          episode: ep,
-          query,
-          resultIndex: anicliIndex,
-          quality: settings.anicliQuality,
-          dub: settings.anicliDub,
-        })
-        onClose()
-      }
+      await api.watch({
+        query,
+        resultIndex: providerIndex,
+        episode: ep,
+        quality: settings.quality,
+        dub: settings.dub,
+        mediaId: media.id,
+        title: providerTitle ?? undefined,
+      })
+      player.open({
+        kind: 'live',
+        title: media.title,
+        episode: ep,
+        query,
+        resultIndex: providerIndex,
+        quality: settings.quality,
+        dub: settings.dub,
+      })
+      onClose()
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Could not start the stream', 'err')
     } finally {
@@ -207,22 +200,22 @@ function DetailSheet({
     }
   }
 
-  async function onSearchAniCli() {
-    const query = anicliQuery.trim()
+  async function onSearchProvider() {
+    const query = providerQuery.trim()
     if (!query) return
     setSearchBusy(true)
     try {
-      const { results } = await api.anicliSearch(query)
-      setAnicliResults(results)
+      const { results } = await api.resolverSearch(query)
+      setProviderResults(results)
       if (!results.length) {
-        toast(`ani-cli found no matches for "${query}"`, 'err')
+        toast(`The provider found no matches for "${query}"`, 'err')
         return
       }
-      const picked = results.find((result) => result.index === anicliIndex) ?? results[0]
-      setAnicliIndex(picked.index)
-      setAnicliTitle(picked.title)
+      const picked = results.find((result) => result.index === providerIndex) ?? results[0]
+      setProviderIndex(picked.index)
+      setProviderTitle(picked.title)
     } catch (err) {
-      toast(err instanceof Error ? err.message : 'Could not search ani-cli', 'err')
+      toast(err instanceof Error ? err.message : 'Could not search the provider', 'err')
     } finally {
       setSearchBusy(false)
     }
@@ -308,12 +301,8 @@ function DetailSheet({
                   <button
                     type="button"
                     onClick={() => void onWatch(episode)}
-                    disabled={!media || !anicliQuery.trim() || watchBusy}
-                    title={
-                      inMpv
-                        ? 'Open this episode in mpv through the ani-cli binary'
-                        : 'Stream this episode in the browser through ani-cli'
-                    }
+                    disabled={!media || !providerQuery.trim() || watchBusy}
+                    title="Stream this episode in the browser"
                     className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-black transition hover:bg-accent-600 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {watchBusy ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} className="fill-current" />}
@@ -412,10 +401,10 @@ function DetailSheet({
                 <div className="flex items-center justify-between gap-2">
                   <h3 className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-white/80 uppercase">
                     <Play size={13} className="text-accent" />
-                    Watch on this machine
+                    Watch
                   </h3>
                   <span className="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-medium text-accent">
-                    {inMpv ? 'mpv' : 'in-app'}
+                    in-app
                   </span>
                 </div>
 
@@ -433,7 +422,7 @@ function DetailSheet({
                   </label>
 
                   <div className="block min-w-0">
-                    <span className="mb-1 block text-[11px] text-white/45">ani-cli search title</span>
+                    <span className="mb-1 block text-[11px] text-white/45">Search title</span>
                     <div className="flex gap-1.5">
                       <div className="relative min-w-0 flex-1">
                         <Search
@@ -441,12 +430,12 @@ function DetailSheet({
                           className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-white/30"
                         />
                         <input
-                          value={anicliQuery}
-                          onChange={(event) => setAnicliQuery(event.target.value)}
+                          value={providerQuery}
+                          onChange={(event) => setProviderQuery(event.target.value)}
                           onKeyDown={(event) => {
                             if (event.key === 'Enter') {
                               event.preventDefault()
-                              void onSearchAniCli()
+                              void onSearchProvider()
                             }
                           }}
                           placeholder="Title to search on the streaming site"
@@ -455,9 +444,9 @@ function DetailSheet({
                       </div>
                       <button
                         type="button"
-                        onClick={() => void onSearchAniCli()}
-                        disabled={searchBusy || !anicliQuery.trim()}
-                        title="Search ani-cli matches"
+                        onClick={() => void onSearchProvider()}
+                        disabled={searchBusy || !providerQuery.trim()}
+                        title="Search provider matches"
                         className="shrink-0 rounded-lg bg-white/5 px-2.5 text-white/60 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-accent disabled:opacity-40"
                       >
                         {searchBusy ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
@@ -466,17 +455,17 @@ function DetailSheet({
                   </div>
                 </div>
 
-                {anicliResults.length ? (
+                {providerResults.length ? (
                   <div className="mt-2 max-h-32 space-y-1 overflow-y-auto pr-1">
-                    {anicliResults.map((result) => {
-                      const on = result.index === anicliIndex
+                    {providerResults.map((result) => {
+                      const on = result.index === providerIndex
                       return (
                         <button
                           key={result.slug}
                           type="button"
                           onClick={() => {
-                            setAnicliIndex(result.index)
-                            setAnicliTitle(result.title)
+                            setProviderIndex(result.index)
+                            setProviderTitle(result.title)
                           }}
                           className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] ring-1 transition ${
                             on
@@ -493,12 +482,12 @@ function DetailSheet({
                   </div>
                 ) : (
                   <p className="mt-2 rounded-lg bg-white/[0.03] px-2.5 py-2 text-[11px] leading-relaxed text-white/35">
-                    {anicliTitle ? (
+                    {providerTitle ? (
                       <>
-                        Match: <span className="text-white/60">#{anicliIndex} {anicliTitle}</span>
+                        Match: <span className="text-white/60">#{providerIndex} {providerTitle}</span>
                       </>
                     ) : (
-                      <>Search to pick the right match. Result #{anicliIndex} is used by default.</>
+                      <>Search to pick the right match. Result #{providerIndex} is used by default.</>
                     )}
                   </p>
                 )}
@@ -506,31 +495,20 @@ function DetailSheet({
                 <button
                   type="button"
                   onClick={() => void onWatch(episode)}
-                  disabled={!media || !anicliQuery.trim() || watchBusy}
+                  disabled={!media || !providerQuery.trim() || watchBusy}
                   className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg bg-accent py-2 text-xs font-semibold text-black transition hover:bg-accent-600 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {watchBusy ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} className="fill-current" />}
-                  {inMpv ? `Open EP ${episode} in mpv` : `Play EP ${episode} in-browser`}
+                  Play EP {episode} in-browser
                 </button>
 
                 <p className="mt-2 text-[11px] leading-relaxed text-white/35">
-                  {inMpv ? (
-                    <>
-                      Runs <span className="text-white/55">ani-cli -q {settings.anicliQuality} -S {anicliIndex}</span>{' '}
-                      on this machine and opens mpv. English subtitles are a track — press{' '}
-                      <span className="text-white/55">v</span> in mpv.{' '}
-                      <Link to="/settings" onClick={onClose} className="text-accent hover:underline">
-                        ani-cli settings
-                      </Link>
-                    </>
-                  ) : (
-                    <>
-                      Streams the episode in the browser through an ani-cli-resolved link.{' '}
-                      <Link to="/settings" onClick={onClose} className="text-accent hover:underline">
-                        player settings
-                      </Link>
-                    </>
-                  )}
+                  Streams the episode in the browser from the built-in resolver. Quality{' '}
+                  <span className="text-white/55">{settings.quality}</span> · result #{' '}
+                  <span className="text-white/55">{providerIndex}</span>.{' '}
+                  <Link to="/settings" onClick={onClose} className="text-accent hover:underline">
+                    streaming settings
+                  </Link>
                 </p>
               </div>
             </div>

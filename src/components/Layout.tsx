@@ -87,8 +87,8 @@ export default function Layout() {
           </NavLink>
           <div className="rounded-xl bg-ink-850 p-3 ring-1 ring-white/5">
             <p className="text-[11px] leading-relaxed text-white/40">
-              Metadata from AniList &amp; AniDB. Episodes stream through{' '}
-              <span className="text-white/60">ani-cli</span> on this machine.
+              Metadata from AniList &amp; AniDB. Episodes stream from provider sites through{' '}
+              <span className="text-white/60">the built-in resolver</span>.
             </p>
           </div>
         </div>

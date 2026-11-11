@@ -1,13 +1,37 @@
 // Playback helpers for the in-app player.
 //
-// Live ani-cli streams are remuxed to fragmented MP4 with ffmpeg and piped
-// straight to the response; remote subtitles are relayed same-origin as VTT.
+// Remote streams are remuxed to fragmented MP4 with ffmpeg and piped straight
+// to the response; remote subtitles are relayed same-origin as VTT.
 
 import { spawn } from 'node:child_process'
-import * as anicli from './anicli.mjs'
+import fs from 'node:fs'
+import path from 'node:path'
 
 const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+
+/** Finds ffmpeg on PATH (or an absolute path) without spawning it. */
+export function resolveFfmpeg() {
+  const cmd = 'ffmpeg'
+  if (cmd.includes('/')) {
+    try {
+      fs.accessSync(cmd, fs.constants.X_OK)
+      return cmd
+    } catch {
+      return null
+    }
+  }
+  for (const dir of String(process.env.PATH ?? '').split(path.delimiter).filter(Boolean)) {
+    const candidate = path.join(dir, cmd)
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK)
+      return candidate
+    } catch {
+      /* keep looking */
+    }
+  }
+  return null
+}
 
 function srtToVtt(value) {
   return `WEBVTT\n\n${value
@@ -75,7 +99,7 @@ function kill(child) {
  * the network allows.
  */
 export function remux(req, res, { url, audioUrl, referer, hls = false, realtime = false } = {}) {
-  const ffmpeg = anicli.resolveBin('ffmpeg')
+  const ffmpeg = resolveFfmpeg()
   if (!ffmpeg) {
     res.status(503).json({ error: 'ffmpeg is required for this playback mode' })
     return

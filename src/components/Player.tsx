@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react'
@@ -68,12 +69,25 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
   const [attempt, setAttempt] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [mseFallback, setMseFallback] = useState(false)
+  const videoRef = useRef<HTMLVideoElement>(null)
   const urls = useMemo(() => sourcesFor(source), [source])
+
+  // Firefox on desktop cannot play progressive fragmented MP4 through a plain
+  // <video src> (the audio track is dropped). Feeding the same fragments
+  // through Media Source Extensions works there, and in Chrome; browsers
+  // without MSE (Safari, iOS) keep the direct source, which they can play.
+  const canUseMse = useMemo(() => {
+    const type = 'video/mp4; codecs="avc1.42E01E,mp4a.40.2"'
+    return typeof MediaSource === 'function' && MediaSource.isTypeSupported(type)
+  }, [])
+  const useMse = canUseMse && !mseFallback
 
   useEffect(() => {
     setAttempt(0)
     setLoading(true)
     setError(null)
+    setMseFallback(false)
   }, [source])
 
   useEffect(() => {
@@ -94,8 +108,91 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
   const heading =
     'episode' in source && source.episode ? `${source.title} · EP ${source.episode}` : source.title
 
+  useEffect(() => {
+    if (!useMse) return
+    const video = videoRef.current
+    if (!video) return
+
+    // Chrome rejects the bare 'video/mp4' type — include the codec strings that
+    // match what ffmpeg emits (H.264 baseline-ish + AAC-LC).
+    const MSE_TYPE = 'video/mp4; codecs="avc1.42E01E,mp4a.40.2"'
+    const mediaSource = new MediaSource() as MediaSource & { end(): void }
+    const objectUrl = URL.createObjectURL(mediaSource)
+    const controller = new AbortController()
+    const queue: Uint8Array[] = []
+    let sourceBuffer: SourceBuffer | null = null
+    let streamEnded = false
+    let aborted = false
+
+    const flush = () => {
+      if (!sourceBuffer || sourceBuffer.updating) return
+      if (queue.length > 0) {
+        sourceBuffer.appendBuffer(queue.shift() as BufferSource)
+        return
+      }
+      if (streamEnded && mediaSource.readyState === 'open') {
+        mediaSource.end()
+        void video.play().catch(() => {})
+      }
+    }
+
+    const fail = () => {
+      if (aborted) return
+      setLoading(false)
+      setError('The stream ended before it could be played. Try again.')
+    }
+
+    mediaSource.addEventListener('sourceopen', () => {
+      if (aborted) return
+      try {
+        sourceBuffer = mediaSource.addSourceBuffer(MSE_TYPE)
+        sourceBuffer.addEventListener('updateend', flush)
+        sourceBuffer.addEventListener('error', () => setMseFallback(true))
+        void (async () => {
+          try {
+            const response = await fetch(videoSrc, { signal: controller.signal })
+            if (!response.ok || !response.body) {
+              fail()
+              return
+            }
+            const reader = response.body.getReader()
+            for (;;) {
+              const { done, value } = await reader.read()
+              if (done) break
+              queue.push(value)
+              flush()
+            }
+            streamEnded = true
+            flush()
+          } catch {
+            fail()
+          }
+        })()
+      } catch {
+        setMseFallback(true)
+      }
+    })
+
+    video.src = objectUrl
+
+    return () => {
+      aborted = true
+      controller.abort()
+      URL.revokeObjectURL(objectUrl)
+      if (sourceBuffer) {
+        sourceBuffer.removeEventListener('updateend', flush)
+        if (mediaSource.readyState === 'open') mediaSource.end()
+      }
+      video.removeAttribute('src')
+    }
+  }, [videoSrc, useMse])
+
   return (
-    <div className="fixed inset-0 z-[60] flex flex-col bg-ink-950/95 backdrop-blur-sm" role="dialog" aria-modal="true">
+    <div
+      className="fixed inset-0 z-[60] flex flex-col bg-ink-950/95 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+    >
       <div className="flex items-center gap-3 border-b border-white/10 px-4 py-3 md:px-6">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -107,7 +204,7 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
               </span>
             ) : null}
           </div>
-          <p className="truncate text-[11px] text-white/35">Streaming from ani-cli</p>
+          <p className="truncate text-[11px] text-white/35">Streaming</p>
         </div>
         <button
           type="button"
@@ -122,8 +219,9 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
       <div className="flex min-h-0 flex-1 items-center justify-center p-2 md:p-6">
         <div className="relative w-full max-w-6xl">
           <video
-            key={`${videoSrc}`}
-            src={videoSrc}
+            ref={videoRef}
+            key={`${videoSrc}${useMse ? '-mse' : ''}`}
+            src={useMse ? undefined : videoSrc}
             controls
             autoPlay
             playsInline
@@ -131,7 +229,7 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
             onCanPlay={() => setLoading(false)}
             onError={() =>
               setError(
-                'This stream could not be played in the browser. Try again, or pick mpv in Settings to open it in a player window.',
+                'This stream could not be played in the browser. Try again, or pick a different quality in Settings.',
               )
             }
             className="max-h-[calc(100vh-8rem)] w-full rounded-xl bg-black shadow-2xl ring-1 ring-white/10"

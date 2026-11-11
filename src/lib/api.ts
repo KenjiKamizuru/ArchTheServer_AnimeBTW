@@ -1,11 +1,11 @@
 import type {
-  AniCliMatch,
-  AniCliSearchResult,
-  AniCliStatus,
   AppSettings,
   Bookmark,
   Media,
   MediaDetail,
+  ProviderMatch,
+  ProviderSearchResult,
+  ResolverStatus,
   WatchResult,
 } from '../types'
 
@@ -88,23 +88,23 @@ export const api = {
     return send<AppSettings>('/api/settings', 'PUT', patch)
   },
 
-  anicliStatus() {
-    return get<AniCliStatus>('/api/anicli/status', false)
+  resolverStatus() {
+    return get<ResolverStatus>('/api/resolver/status', false)
   },
 
-  anicliSearch(q: string) {
-    return get<{ q: string; results: AniCliSearchResult[] }>(`/api/anicli/search?q=${encodeURIComponent(q)}`)
+  resolverSearch(q: string) {
+    return get<{ q: string; results: ProviderSearchResult[] }>(`/api/resolver/search?q=${encodeURIComponent(q)}`)
   },
 
-  anicliMatch(mediaId: number) {
-    return get<{ match: AniCliMatch | null }>(`/api/anicli/matches/${mediaId}`, false)
+  resolverMatch(mediaId: number) {
+    return get<{ match: ProviderMatch | null }>(`/api/resolver/matches/${mediaId}`, false)
   },
 
   saveMatch(mediaId: number, match: { query: string; index: number; title?: string }) {
-    return send<{ match: AniCliMatch }>(`/api/anicli/matches/${mediaId}`, 'PUT', match)
+    return send<{ match: ProviderMatch }>(`/api/resolver/matches/${mediaId}`, 'PUT', match)
   },
 
-  /** Hands the episode to the ani-cli binary on this machine (opens mpv). */
+  /** Resolves the episode server-side (search, embed, quality pick). */
   watch(payload: {
     query: string
     resultIndex?: number

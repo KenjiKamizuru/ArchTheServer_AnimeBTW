@@ -51,24 +51,20 @@ export interface Bookmark {
   media: Media
 }
 
-export type PlayerTarget = 'mpv' | 'app'
-
 export interface AppSettings {
-  anicliBin: string
-  anicliQuality: string
-  anicliDub: boolean
-  anicliResultIndex: number
-  playerTarget: PlayerTarget
+  quality: string
+  dub: boolean
+  resultIndex: number
   updatedAt: number
 }
 
-export interface AniCliSearchResult {
+export interface ProviderSearchResult {
   index: number
   slug: string
   title: string
 }
 
-export interface AniCliMatch {
+export interface ProviderMatch {
   mediaId: number
   query: string
   index: number
@@ -76,21 +72,18 @@ export interface AniCliMatch {
   updatedAt: number
 }
 
-export interface AniCliStatus {
-  available: boolean
-  installed: boolean
-  bin: string
-  path: string | null
-  version: string | null
-  curl: boolean
-  mpv: boolean
+export interface ResolverStatus {
+  reachable: boolean
   ffmpeg: boolean
   error: string | null
 }
 
 export interface WatchResult {
-  launched: boolean
-  bin: string
-  args: string[]
-  pid: number | null
+  resolved: boolean
+  videoUrl: string
+  height: number
+  subtitleUrl: string | null
+  referer: string
+  title: string
+  slug: string
 }

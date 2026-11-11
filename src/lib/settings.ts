@@ -3,11 +3,9 @@ import type { AppSettings } from '../types'
 import { api } from './api'
 
 let state: AppSettings = {
-  anicliBin: 'ani-cli',
-  anicliQuality: 'best',
-  anicliDub: false,
-  anicliResultIndex: 1,
-  playerTarget: 'mpv',
+  quality: 'best',
+  dub: false,
+  resultIndex: 1,
   updatedAt: 0,
 }
 let started = false

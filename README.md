@@ -1,96 +1,99 @@
 # AnimeVault
 
-Browse this season's anime in a Jellyfin-style web UI, and watch episodes through
-[ani-cli](https://github.com/pystardust/ani-cli) — the same way you would in a terminal.
-Nothing is downloaded, nothing is stored. The server keeps AniList metadata in a cache and,
-when you press **Watch**, it runs `ani-cli` on this machine.
+A local web app for browsing anime and watching episodes in the browser. It has
+no external dependencies: the server resolves episodes in JavaScript by
+searching hianime.at, decoding the ZokoAnime embed, and remuxing the stream with
+ffmpeg. Nothing is downloaded, stored, or queued. The app is a single Express
+server (REST API + static build), with a React frontend.
 
-- Browse the current season, search the full catalogue, follow the airing schedule.
-- **Watch an episode with one click** — mpv opens (like `ani-cli` on the terminal), with English
-  subtitles available as a track (press `v` in mpv).
-- Prefer the browser? Pick the **In-app player** in Settings: the server resolves the stream through
-  `ani-cli` and remuxes it with `ffmpeg` into the page, subtitles included.
-- Bookmarks: save shows to watch later.
-- Per-show saved matches: pick the right ani-cli search result once, and AnimeVault reuses it.
+## Features
 
-## Prerequisites
-
-- **ani-cli** on your `PATH` (or set its full path in Settings). The server drives it with
-  `-q <quality> -S <result> -e <episode>` flags, so no interactive menu (fzf/rofi) is needed.
-- **mpv** — for the default `mpv` player target.
-- **ffmpeg** — for the In-app player (remuxes HLS to fragmented MP4 in the browser).
-- **curl** — ani-cli needs it to resolve streams.
-
-The server checks all of this live; the Settings page shows what is missing.
+- **This season, browsing, airing schedule** — live AniList GraphQL data.
+- **Watch** — the server resolves the episode (search title, result #, quality,
+  sub/dub) in JavaScript, remuxes the stream with ffmpeg, and plays it in the
+  browser with English subtitles. The first search for a show is saved as its
+  match; episode details let you pick a different title and result.
+- **Bookmarks** — a persisted list you can add to from any card, the detail
+  sheet, search results, or the schedule.
+- **Settings** — quality, default search result, sub/dub.
 
 ## Run it
 
-```
+```bash
 npm install
-npm run dev      # vite dev server + API, open http://127.0.0.1:5173
-npm run build    # production client, then:
-npm run start
+npm run dev        # server + Vite on http://127.0.0.1:5173
+npm run build      # creates dist/
+npm run start      # server + built UI on one port
 ```
 
-`npm run typecheck` runs `tsc --noEmit` over the client.
+Requirements: Node 18+, **ffmpeg** on PATH (used to remux streams for
+in-browser playback), and internet access (the server fetches hianime.at, the
+ZokoAnime embed, AniList and AniDB).
 
-## How watching works
+The Settings page shows the provider status, ffmpeg availability, quality, the
+default result number, and dub.
 
-- **mpv target (default, faithful to ani-cli):** `POST /api/watch` spawns
-  `ani-cli -q best -S 1 -e 12 "Frieren"` detached from the server. ani-cli resolves the stream and
-  hands it to mpv. Close the tab, the show keeps playing.
-- **In-app target:** `GET /api/live/stream` runs `ani-cli --debug` to capture the stream URL
-  (90s cache), and `ffmpeg` streams a fragmented MP4 into the `<video>` element.
-  `GET /api/live/subtitle` proxies the English subtitle track from the same run, same-origin,
-  so the player can show it.
+`PORT` and `HOST` env vars override the port/host. The server listens on
+127.0.0.1 by default — set `HOST=0.0.0.0` to expose it on the LAN. The in-app
+player works from any device; episodes stream through the server.
 
 ## API
 
-| Route | Purpose |
-| --- | --- |
-| `GET /api/health` | ok flag, season key |
-| `GET /api/season` | `?season&year&sort&page&perPage` — season list |
-| `GET /api/airing` | next 50 airing episodes |
-| `GET /api/search` | `?q` — AniList search |
-| `GET /api/media?ids=` | posters/meta for a batch of ids |
-| `GET /api/anime/:id` | full detail (cover, episodes, streams) |
-| `GET /api/settings`, `PUT /api/settings` | player target, quality, result number, dub, binary |
-| `GET /api/anicli/status` | ani-cli / curl / mpv / ffmpeg availability |
-| `GET /api/anicli/search?q=` | ani-cli search results (10 min cache) |
-| `GET/PUT /api/anicli/matches/:mediaId` | per-show saved match |
-| `POST /api/watch` | launch `ani-cli` in mpv (mpv target) |
-| `GET /api/live/stream?query&resultIndex&episode&quality&dub` | remoted stream → fragmented MP4 |
-| `GET /api/live/subtitle?...` | English subtitle track, same-origin VTT |
-| `GET /api/bookmarks`, `POST /api/bookmarks`, `DELETE /api/bookmarks/:id` | watch-later list |
+| Route | Method | Purpose |
+| --- | --- | --- |
+| `/api/season` | GET | Currently airing shows, sorted by next-airing time |
+| `/api/airing` | GET | Today's schedule |
+| `/api/search?q=` | GET | AniList title search |
+| `/api/media/:id` | GET | Full AniList detail, cached from AniDB |
+| `/api/media/many?ids=` | GET | Bulk metadata for bookmarked shows |
+| `/api/settings` | GET/POST | Stream settings |
+| `/api/resolver/status` | GET | Provider reachability + ffmpeg availability |
+| `/api/resolver/search?q=` | GET | Provider search results (1-based indices) |
+| `/api/resolver/matches/:mediaId` | GET/PUT | Saved provider match per show |
+| `/api/bookmarks` | GET/POST | Bookmarked media ids |
+| `/api/bookmarks/:mediaId` | PUT/DELETE | Toggle one bookmark |
+| `/api/watch` | POST | Resolve an episode (warms cache, saves the match) |
+| `/api/live/stream` | GET | Episode stream, remuxed for the browser |
+| `/api/live/subtitle` | GET | Episode subtitles as WebVTT |
+| `/api/health` | GET | Server status |
 
-Metadata is cached in memory (10 min server-side, 5 min in the browser); settings, bookmarks and
-saved matches persist in `data/` (gitignored).
+## Why not AniDB directly
 
-## Why not AniDB directly?
-
-AniDB has an XML API with anime metadata, and AniList GraphQL has richer schedule data,
-cover images, and trending rankings. We use AniList for browsing, AniDB where its data is better,
-and `ani-cli` for streams — exactly the way `ani-cli` itself works. No stream database is shipped
-in this repo.
+AniDB's API carries no streaming links, and AniList carries no episode list —
+ AniDB's `anime_ep_list` needs auth, AniList episode pages are unscoped
+GraphQL queries, and AniDB's `episodes.xml` is only a code table, so episode
+numbers come from AniList's `nextEpisode` / `airedEpisodes`. hianime.at exposes
+episode lists (an `id` key that is AniDB's anime id), server lists, embed
+decoding, and subtitles, and ZokoAnime serves the HLS stream. The app
+reimplements that resolution pipeline in JavaScript, fetching with Node's
+global fetch and keeping a small server-side cache.
 
 ## Layout
 
-- `server/index.mjs` — Express app: serves the built client and every API route below.
-- `server/anilist.mjs` — AniList GraphQL client with a small cache.
-- `server/anicli.mjs` — ani-cli detection, search, stream resolution, per-show saved matches.
-- `server/viewer.mjs` — launches `ani-cli` detached for the mpv target.
-- `server/playback.mjs` — `ffmpeg` remux to fragmented MP4, subtitle proxy.
-- `server/settings.mjs` — persisted settings (`data/settings.json`).
-- `server/store.mjs` — bookmarks, persisted (`data/bookmarks.json`).
-- `src/components/Player.tsx` — full-screen in-app player overlay (live streams + subtitles).
-- `src/` — React 19 + Tailwind 4, dark Jellyfin-like theme.
+```
+server/index.mjs      Express server: REST API + static build
+server/anilist.mjs    AniList GraphQL + AniDB helpers, LRU cache
+server/resolver.mjs   hianime/ZokoAnime resolver (search, embed, quality)
+server/cache.mjs      TTL/LRU cache for provider requests
+server/playback.mjs   ffmpeg remux + subtitle proxy for the browser
+server/settings.mjs   settings, persisted to data/settings.json
+server/store.mjs      bookmarks, persisted to data/bookmarks.json
+src/components/       React UI (MediaCard, MediaModal, Player, Layout, …)
+src/lib/              API client, settings store, formatting
+src/pages/            This Season, Browse, Airing, Search, Bookmarks, Settings
+```
 
-`data/` is gitignored. There is no `library/` — nothing is written to disk beyond settings,
-bookmarks, saved matches, and ani-cli's own history.
+`data/` (settings, bookmarks, provider matches) is created on first run and
+gitignored. Metadata, searches, and resolved streams are cached in memory.
 
 ## Notes
 
-- The server binds `127.0.0.1:5173`. Nothing is exposed on the LAN.
-- Streams are resolved at play time; stream URLs are cached for 90 seconds.
-- Streaming anime through ani-cli is subject to the laws where you live — use it only for media you
-  are allowed to watch. This app does not download, store, or serve files.
+- The server binds to 127.0.0.1 by default, and the cache lives in process
+  memory, so single-instance use is intended.
+- AniList/AniDB responses cache 10 minutes, provider searches and resolutions
+  10 minutes, provider status 5 minutes, browser requests 5 minutes. The live
+  stream is proxied with ffmpeg continuously — it needs ffmpeg on the server.
+- `npm run typecheck` runs `tsc --noEmit` over `src/`.
+- The app does not download, store, or serve files, and streams only through
+  the built-in resolver. Use it only for media you are allowed to watch where
+  you live.
