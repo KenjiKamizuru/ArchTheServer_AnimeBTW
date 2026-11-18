@@ -16,7 +16,7 @@ import * as settings from './settings.mjs'
 import * as playback from './playback.mjs'
 import {
   ensureSafeLibraryParentDir,
-  inspectMp4File,
+  inspectUploadedVideoFile,
   resolveInsideLibrary,
   sanitizeFileName,
   sanitizeFileSegment,
@@ -30,6 +30,20 @@ const INCOMPLETE_DIR = '.incomplete'
 const MAX_SCAN_DEPTH = 6
 const MAX_SCAN_FILES = 10_000
 const SCAN_CACHE_TTL_MS = 1_500
+
+// Start chunks at 900 KB so uploads succeed out of the box even behind default
+// Nginx (`client_max_body_size 1m`), then allow clients to probe up to 8 MB on
+// direct LAN / higher-limit proxies and auto-step down on HTTP 413.
+export const UPLOAD_CHUNK_SIZE = 900 * 1024
+export const MAX_RECOMMENDED_CHUNK_SIZE = 8 * 1024 * 1024
+export const MAX_CHUNK_BODY_BYTES = 32 * 1024 * 1024
+const envMaxUploadGb = Number(process.env.ANIME_MAX_UPLOAD_GB ?? process.env.MAX_UPLOAD_GB)
+export const MAX_UPLOAD_BYTES =
+  Number.isFinite(envMaxUploadGb) && envMaxUploadGb >= 1
+    ? Math.floor(envMaxUploadGb * 1024 * 1024 * 1024)
+    : 256 * 1024 * 1024 * 1024 // 256 GB default
+const UPLOAD_SESSION_TTL_MS = 24 * 60 * 60 * 1000 // 24h resumable window
+const uploadLocks = new Map()
 
 /** relPosix -> metadata record persisted in data/library-index.json */
 let catalog = {}
@@ -100,7 +114,7 @@ export async function allocateTempPath(name) {
   return absPath
 }
 
-/** Removes orphaned `.part*` files in `.incomplete/` that belong to no active/paused job. */
+/** Removes orphaned `.part*` files in `.incomplete/` while keeping active jobs & recent uploads. */
 export async function cleanupIncompleteFiles(keepFileNames = new Set()) {
   const dir = settings.resolveLibraryDir()
   const incDir = path.join(dir, INCOMPLETE_DIR)
@@ -110,8 +124,27 @@ export async function cleanupIncompleteFiles(keepFileNames = new Set()) {
   } catch {
     return
   }
+
+  const protectedNames = new Set(keepFileNames)
+  const cutoff = Date.now() - UPLOAD_SESSION_TTL_MS
+
+  // Preserve active/resumable chunked movie upload sessions from the last 24h.
   for (const entry of entries) {
-    if (keepFileNames.has(entry.name)) continue
+    if (!entry.isFile() || !/^upload-up_[0-9a-f]{20}\.meta\.json$/.test(entry.name)) continue
+    const metaPath = path.join(incDir, entry.name)
+    try {
+      const raw = JSON.parse(await fsp.readFile(metaPath, 'utf8'))
+      if (raw && Number(raw.updatedAt) >= cutoff && typeof raw.partFileName === 'string') {
+        protectedNames.add(entry.name)
+        protectedNames.add(raw.partFileName)
+      }
+    } catch {
+      /* corrupt/stale meta will be removed below */
+    }
+  }
+
+  for (const entry of entries) {
+    if (protectedNames.has(entry.name)) continue
     if (!entry.isFile()) continue
     await fsp.rm(path.join(incDir, entry.name), { force: true }).catch(() => {})
   }
@@ -314,7 +347,9 @@ export async function commitTempFile(tempAbsPath, targetRelPath, metadata = null
       dub: Boolean(metadata.dub),
       format: metadata.format ? String(metadata.format).slice(0, 32) : null,
       cover: metadata.cover ? String(metadata.cover).slice(0, 500) : null,
-      sourceType: metadata.sourceType === 'external' ? 'external' : metadata.sourceType === 'import' ? 'import' : 'resolver',
+      sourceType: ['external', 'import', 'upload-movie', 'upload-episode'].includes(metadata.sourceType)
+        ? metadata.sourceType
+        : 'resolver',
       addedAt: Date.now(),
     }
     await persistCatalog()
@@ -781,24 +816,560 @@ export async function bulkRemove(ids = []) {
   return { deleted, notFound }
 }
 
-/**
- * Imports a streamed video file (such as an unknown `.mp4` uploaded by the user)
- * into `<libraryDir>/Unsorted/<fileName>` atomically after container validation.
- */
-export async function importVideoStream(readable, rawFileName, { maxBytes = 8 * 1024 * 1024 * 1024 } = {}) {
-  const safeName = sanitizeFileName(rawFileName, playback.VIDEO_EXTENSIONS, 'video')
-  const relPosix = `Unsorted/${safeName}`
+function withUploadLock(uploadId, fn) {
+  const prev = uploadLocks.get(uploadId) ?? Promise.resolve()
+  const next = prev.catch(() => {}).then(fn)
+  uploadLocks.set(uploadId, next)
+  return next.finally(() => {
+    if (uploadLocks.get(uploadId) === next) uploadLocks.delete(uploadId)
+  })
+}
 
-  const existing = await getExistingByRelPath(relPosix)
-  if (existing) {
-    throw Object.assign(new Error(`"${safeName}" already exists in the library`), {
-      status: 409,
-      fileId: existing.id,
-    })
+function cleanStemTitle(fileName) {
+  const ext = path.posix.extname(fileName)
+  return fileName
+    .slice(0, fileName.length - ext.length)
+    .replace(/[._]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function buildUploadPlan(rawFileName, options = {}) {
+  const safeName = sanitizeFileName(rawFileName, playback.VIDEO_EXTENSIONS, 'video')
+  const ext = path.posix.extname(safeName).toLowerCase()
+  const rawCategory = String(options.category ?? '').trim().toLowerCase()
+  const category =
+    rawCategory === 'movie' ? 'movie' : rawCategory === 'episode' ? 'episode' : 'unknown'
+  const quality = options.quality ? String(options.quality).trim().slice(0, 32) : null
+  const dub = Boolean(options.dub)
+
+  if (category === 'movie') {
+    const movieTitle = String(options.title ?? '').trim().slice(0, 160) || cleanStemTitle(safeName) || 'Movie'
+    const safeMovie = sanitizeFileSegment(movieTitle, 'Movie', 96)
+    const fileName = `${safeMovie}${ext}`
+    const relPosix = `Movies/${fileName}`
+    resolveInsideLibrary(settings.resolveLibraryDir(), relPosix)
+    return {
+      category,
+      ext,
+      fileName,
+      folder: 'Movies',
+      relPosix,
+      metadata: {
+        animeTitle: movieTitle,
+        seriesTitle: movieTitle,
+        season: 1,
+        episode: 1,
+        quality,
+        dub,
+        format: 'MOVIE',
+        sourceType: 'upload-movie',
+      },
+    }
   }
 
-  const ext = path.posix.extname(safeName).toLowerCase()
-  const tempPath = await allocateTempPath(`import-${crypto.randomBytes(8).toString('hex')}.part${ext}`)
+  if (category === 'episode') {
+    const animeTitle = String(options.title ?? '').trim().slice(0, 160) || cleanStemTitle(safeName) || 'Anime'
+    const loc = buildEpisodeLocation(animeTitle, {
+      season: options.season ?? 1,
+      episode: options.episode ?? 1,
+      ext,
+    })
+    return {
+      category,
+      ext,
+      fileName: loc.fileName,
+      folder: `${loc.seriesFolder}/${loc.seasonFolder}`,
+      relPosix: loc.relPosix,
+      metadata: {
+        animeTitle,
+        seriesTitle: loc.seriesTitle,
+        season: loc.season,
+        episode: loc.episode,
+        quality,
+        dub,
+        format: 'TV',
+        sourceType: 'upload-episode',
+      },
+    }
+  }
+
+  const relPosix = `Unsorted/${safeName}`
+  resolveInsideLibrary(settings.resolveLibraryDir(), relPosix)
+  return {
+    category: 'unknown',
+    ext,
+    fileName: safeName,
+    folder: 'Unsorted',
+    relPosix,
+    metadata: {
+      quality,
+      dub,
+      sourceType: 'import',
+    },
+  }
+}
+
+async function pickNonCollidingRelPath(relPosix) {
+  if (!(await getExistingByRelPath(relPosix))) return relPosix
+  const ext = path.posix.extname(relPosix)
+  const base = relPosix.slice(0, relPosix.length - ext.length)
+  for (let n = 2; n <= 999; n++) {
+    const candidate = `${base} (${n})${ext}`
+    if (!(await getExistingByRelPath(candidate))) return candidate
+  }
+  throw Object.assign(new Error('Too many files with the same name in library'), { status: 409 })
+}
+
+async function uploadMetaPathFor(uploadId) {
+  const clean = String(uploadId ?? '').trim()
+  if (!/^up_[0-9a-f]{20}$/.test(clean)) {
+    throw Object.assign(new Error('Invalid upload session ID'), { status: 400 })
+  }
+  return allocateTempPath(`upload-${clean}.meta.json`)
+}
+
+async function readUploadSession(uploadId) {
+  const metaPath = await uploadMetaPathFor(uploadId)
+  let meta
+  try {
+    meta = JSON.parse(await fsp.readFile(metaPath, 'utf8'))
+  } catch {
+    throw Object.assign(new Error('Upload session not found or expired'), { status: 404 })
+  }
+  const partPath = await allocateTempPath(meta.partFileName)
+  let uploadedBytes = 0
+  try {
+    const st = await fsp.stat(partPath)
+    if (st.isFile()) uploadedBytes = st.size
+  } catch {
+    // Recreate empty part file if missing.
+    await fsp.writeFile(partPath, Buffer.alloc(0))
+    uploadedBytes = 0
+  }
+  return { meta, metaPath, partPath, uploadedBytes }
+}
+
+async function writeUploadMeta(metaPath, meta) {
+  const tmp = `${metaPath}.tmp`
+  await fsp.writeFile(tmp, JSON.stringify(meta, null, 2))
+  await fsp.rename(tmp, metaPath)
+}
+
+/**
+ * Starts a new resumable chunked upload session (or resumes an existing
+ * unfinished upload of the exact same file after a disconnect or page reload).
+ */
+export async function createUploadSession(spec = {}) {
+  const rawFileName = String(spec.fileName ?? '').trim()
+  if (!rawFileName) {
+    throw Object.assign(new Error('A video file name is required'), { status: 400 })
+  }
+  const totalSize = Math.floor(Number(spec.totalSize))
+  if (!Number.isFinite(totalSize) || totalSize <= 0) {
+    throw Object.assign(new Error('File is empty or has an invalid size'), { status: 400 })
+  }
+  if (totalSize > MAX_UPLOAD_BYTES) {
+    const maxGb = Math.round(MAX_UPLOAD_BYTES / (1024 * 1024 * 1024))
+    throw Object.assign(new Error(`File exceeds the ${maxGb} GB maximum upload size`), { status: 413 })
+  }
+
+  const dir = await ensureLibraryDir()
+  const plan = buildUploadPlan(rawFileName, spec)
+  const keepBoth = spec.keepBoth === undefined ? false : Boolean(spec.keepBoth)
+
+  const fingerprint = crypto
+    .createHash('sha256')
+    .update(
+      JSON.stringify([
+        rawFileName,
+        totalSize,
+        Number(spec.lastModified) || 0,
+        plan.category,
+        plan.relPosix,
+      ]),
+    )
+    .digest('hex')
+    .slice(0, 24)
+
+  // Resume an in-progress session for the exact same file if one already exists.
+  const incDir = path.join(dir, INCOMPLETE_DIR)
+  const cutoff = Date.now() - UPLOAD_SESSION_TTL_MS
+  try {
+    const entries = await fsp.readdir(incDir)
+    for (const name of entries) {
+      if (!/^upload-up_[0-9a-f]{20}\.meta\.json$/.test(name)) continue
+      try {
+        const existingMeta = JSON.parse(await fsp.readFile(path.join(incDir, name), 'utf8'))
+        if (
+          existingMeta?.fingerprint === fingerprint &&
+          existingMeta.totalSize === totalSize &&
+          Number(existingMeta.updatedAt) >= cutoff
+        ) {
+          const partPath = await allocateTempPath(existingMeta.partFileName)
+          const st = await fsp.stat(partPath)
+          if (st.isFile() && st.size <= totalSize) {
+            existingMeta.updatedAt = Date.now()
+            await writeUploadMeta(path.join(incDir, name), existingMeta)
+            return {
+              uploadId: existingMeta.uploadId,
+              chunkSize: UPLOAD_CHUNK_SIZE,
+              maxChunkSize: MAX_RECOMMENDED_CHUNK_SIZE,
+              uploadedBytes: st.size,
+              totalSize,
+              fileName: path.posix.basename(existingMeta.targetRelPath),
+              folder: path.posix.dirname(existingMeta.targetRelPath),
+              category: existingMeta.category,
+              resumed: st.size > 0,
+            }
+          }
+        }
+      } catch {
+        /* ignore unreadable session */
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  // Check duplicate target upfront BEFORE uploading gigabytes of data.
+  let targetRelPath = plan.relPosix
+  const existing = await getExistingByRelPath(targetRelPath)
+  if (existing) {
+    if (keepBoth || plan.category === 'movie' || plan.category === 'unknown') {
+      if (!keepBoth) {
+        throw Object.assign(
+          new Error(
+            `"${plan.fileName}" already exists in ${plan.folder}/. Delete the old copy first or choose a different title.`,
+          ),
+          { status: 409, fileId: existing.id },
+        )
+      }
+      targetRelPath = await pickNonCollidingRelPath(targetRelPath)
+    } else {
+      throw Object.assign(
+        new Error(`"${plan.fileName}" is already in your library (${plan.folder}/)`),
+        { status: 409, fileId: existing.id },
+      )
+    }
+  }
+
+  const uploadId = `up_${crypto.randomBytes(10).toString('hex')}`
+  const partFileName = `upload-${uploadId}.part${plan.ext}`
+  const partPath = await allocateTempPath(partFileName)
+  const metaPath = await uploadMetaPathFor(uploadId)
+
+  await fsp.writeFile(partPath, Buffer.alloc(0))
+  const now = Date.now()
+  const meta = {
+    uploadId,
+    fingerprint,
+    partFileName,
+    ext: plan.ext,
+    category: plan.category,
+    targetRelPath,
+    totalSize,
+    metadata: plan.metadata,
+    createdAt: now,
+    updatedAt: now,
+  }
+  await writeUploadMeta(metaPath, meta)
+
+  return {
+    uploadId,
+    chunkSize: UPLOAD_CHUNK_SIZE,
+    maxChunkSize: MAX_RECOMMENDED_CHUNK_SIZE,
+    uploadedBytes: 0,
+    totalSize,
+    fileName: path.posix.basename(targetRelPath),
+    folder: path.posix.dirname(targetRelPath),
+    category: plan.category,
+    resumed: false,
+  }
+}
+
+/** Returns current byte offset for a resumable upload session. */
+export async function getUploadSession(uploadId) {
+  const { meta, uploadedBytes } = await readUploadSession(uploadId)
+  return {
+    uploadId: meta.uploadId,
+    chunkSize: UPLOAD_CHUNK_SIZE,
+    maxChunkSize: MAX_RECOMMENDED_CHUNK_SIZE,
+    uploadedBytes,
+    totalSize: meta.totalSize,
+    fileName: path.posix.basename(meta.targetRelPath),
+    folder: path.posix.dirname(meta.targetRelPath),
+    category: meta.category,
+  }
+}
+
+/** Appends one sequential binary chunk to an active upload session. */
+export async function appendUploadChunk(uploadId, rawOffset, readable) {
+  const expectedOffset = Math.floor(Number(rawOffset))
+  if (!Number.isFinite(expectedOffset) || expectedOffset < 0) {
+    throw Object.assign(new Error('Invalid X-Upload-Offset header'), { status: 400 })
+  }
+
+  return withUploadLock(uploadId, async () => {
+    const { meta, metaPath, partPath, uploadedBytes } = await readUploadSession(uploadId)
+
+    if (expectedOffset !== uploadedBytes) {
+      throw Object.assign(
+        new Error(`Upload offset mismatch (expected ${uploadedBytes}, received ${expectedOffset})`),
+        { status: 409, code: 'OFFSET_MISMATCH', uploadedBytes },
+      )
+    }
+
+    if (uploadedBytes >= meta.totalSize) {
+      return { uploadId: meta.uploadId, uploadedBytes, totalSize: meta.totalSize }
+    }
+
+    const remaining = meta.totalSize - uploadedBytes
+    let chunkWritten = 0
+
+    await new Promise((resolve, reject) => {
+      const out = fs.createWriteStream(partPath, { flags: 'a' })
+      let settled = false
+      const fail = (err, flushPartial = false) => {
+        if (settled) return
+        settled = true
+        if (flushPartial) {
+          out.once('error', () => reject(err))
+          out.end(() => reject(err))
+        } else {
+          out.once('close', () => reject(err))
+          out.destroy()
+        }
+      }
+
+      readable.on('data', (chunk) => {
+        if (settled) return
+        if (chunkWritten + chunk.length > MAX_CHUNK_BODY_BYTES) {
+          fail(Object.assign(new Error('Chunk exceeds maximum chunk size'), { status: 413 }))
+          return
+        }
+        if (chunkWritten + chunk.length > remaining) {
+          fail(Object.assign(new Error('Uploaded data exceeds declared file size'), { status: 400 }))
+          return
+        }
+        chunkWritten += chunk.length
+        if (!out.write(chunk)) {
+          readable.pause?.()
+        }
+      })
+      out.on('drain', () => readable.resume?.())
+      // Flush valid sequential bytes even if the client's connection drops mid-chunk,
+      // so the next retry picks up from the exact byte written to disk.
+      readable.once('aborted', () =>
+        fail(Object.assign(new Error('Chunk upload interrupted'), { status: 499 }), true),
+      )
+      readable.once('error', (err) => fail(err, true))
+      out.once('error', (err) => fail(err, false))
+      readable.once('end', () => {
+        if (settled) return
+        out.end(() => {
+          if (!settled) {
+            settled = true
+            resolve()
+          }
+        })
+      })
+    })
+
+    const afterStat = await fsp.stat(partPath)
+    meta.updatedAt = Date.now()
+    await writeUploadMeta(metaPath, meta)
+
+    return {
+      uploadId: meta.uploadId,
+      uploadedBytes: afterStat.size,
+      totalSize: meta.totalSize,
+    }
+  })
+}
+
+/** Validates a completed chunked upload and moves it atomically into the library. */
+export async function completeUploadSession(uploadId) {
+  return withUploadLock(uploadId, async () => {
+    const { meta, metaPath, partPath, uploadedBytes } = await readUploadSession(uploadId)
+
+    if (uploadedBytes < meta.totalSize) {
+      throw Object.assign(
+        new Error(`Upload incomplete (${uploadedBytes} of ${meta.totalSize} bytes received)`),
+        { status: 409, code: 'INCOMPLETE', uploadedBytes },
+      )
+    }
+
+    const check = await inspectUploadedVideoFile(partPath, meta.ext)
+    if (!check.valid) {
+      await fsp.rm(partPath, { force: true }).catch(() => {})
+      await fsp.rm(metaPath, { force: true }).catch(() => {})
+      throw Object.assign(new Error(check.error || 'Uploaded file is not a valid video'), { status: 422 })
+    }
+
+    // Never discard a completed upload if another file grabbed the same name mid-upload.
+    const finalRelPath =
+      meta.category === 'episode'
+        ? meta.targetRelPath
+        : await pickNonCollidingRelPath(meta.targetRelPath)
+
+    try {
+      const committed = await commitTempFile(partPath, finalRelPath, meta.metadata)
+      await fsp.rm(metaPath, { force: true }).catch(() => {})
+      const resolved = await resolveById(committed.id)
+      return (
+        resolved?.publicItem ?? {
+          id: committed.id,
+          fileName: path.posix.basename(finalRelPath),
+          size: committed.size,
+        }
+      )
+    } catch (err) {
+      await fsp.rm(partPath, { force: true }).catch(() => {})
+      await fsp.rm(metaPath, { force: true }).catch(() => {})
+      throw err
+    }
+  })
+}
+
+/** Cancels an active chunked upload session and cleans up its staged file. */
+export async function cancelUploadSession(uploadId) {
+  const metaPath = await uploadMetaPathFor(uploadId)
+  return withUploadLock(uploadId, async () => {
+    let partFileName = null
+    try {
+      const meta = JSON.parse(await fsp.readFile(metaPath, 'utf8'))
+      partFileName = meta?.partFileName ?? null
+    } catch {
+      return { cancelled: false }
+    }
+    if (partFileName) {
+      const partPath = await allocateTempPath(partFileName).catch(() => null)
+      if (partPath) await fsp.rm(partPath, { force: true }).catch(() => {})
+    }
+    await fsp.rm(metaPath, { force: true }).catch(() => {})
+    return { cancelled: true }
+  })
+}
+
+/**
+ * Attaches a user-supplied subtitle file (.vtt, .srt, .ass, .ssa) next to a library video.
+ * Also supports multi-chunk delivery (`offset` + `final`) so large font-embedded `.ass`
+ * files work behind strict 1 MB reverse proxies without hitting HTTP 413.
+ */
+export async function attachSubtitleFile(itemId, rawSubName, contentBuffer, { offset = 0, final = true } = {}) {
+  const resolved = await resolveById(itemId)
+  if (!resolved) {
+    throw Object.assign(new Error('Library video not found'), { status: 404 })
+  }
+  const cleanOffset = Math.floor(Number(offset) || 0)
+  if (!Number.isFinite(cleanOffset) || cleanOffset < 0) {
+    throw Object.assign(new Error('Invalid subtitle offset'), { status: 400 })
+  }
+  if (!contentBuffer || (contentBuffer.length === 0 && cleanOffset === 0)) {
+    throw Object.assign(new Error('Subtitle file is empty'), { status: 400 })
+  }
+  const MAX_SUB_BYTES = 32 * 1024 * 1024
+  if (cleanOffset + contentBuffer.length > MAX_SUB_BYTES) {
+    throw Object.assign(new Error('Subtitle file is too large (max 32 MB)'), { status: 413 })
+  }
+
+  const allowedSub = new Set(playback.SUBTITLE_EXTENSIONS)
+  const safeSub = sanitizeFileName(rawSubName || 'subtitle.vtt', allowedSub, 'subtitle')
+  const subExt = path.posix.extname(safeSub).toLowerCase()
+  const videoExt = path.posix.extname(resolved.entry.relPosix)
+  const baseRel = resolved.entry.relPosix.slice(0, resolved.entry.relPosix.length - videoExt.length)
+
+  const targetExt = subExt === '.ass' || subExt === '.ssa' ? subExt : '.vtt'
+  const subRelPosix = `${baseRel}${targetExt}`
+  const { absPath: subAbs } = resolveInsideLibrary(resolved.libraryDir, subRelPosix)
+  await ensureSafeLibraryParentDir(resolved.libraryDir, subAbs)
+
+  // Single-chunk fast path.
+  if (cleanOffset === 0 && final) {
+    const rawText = contentBuffer.toString('utf8')
+    const finalText = targetExt === '.vtt' ? playback.normalizeSubtitleToVtt(rawText) : rawText
+    const tmp = await allocateTempPath(`sub-${crypto.randomBytes(8).toString('hex')}.part${targetExt}`)
+    try {
+      await fsp.writeFile(tmp, finalText, 'utf8')
+      await fsp.rename(tmp, subAbs)
+      invalidateCache()
+      notifyChange()
+      return { saved: true, uploadedBytes: contentBuffer.length }
+    } catch (err) {
+      await fsp.rm(tmp, { force: true }).catch(() => {})
+      throw err
+    }
+  }
+
+  // Multi-chunk path (staged per itemId).
+  return withUploadLock(`sub_${resolved.entry.id}`, async () => {
+    const stagePath = await allocateTempPath(`sub-stage-${resolved.entry.id}.part`)
+    if (cleanOffset === 0) {
+      await fsp.writeFile(stagePath, contentBuffer)
+    } else {
+      let curSize = 0
+      try {
+        curSize = (await fsp.stat(stagePath)).size
+      } catch {
+        throw Object.assign(new Error('Subtitle upload session missing'), { status: 409, uploadedBytes: 0 })
+      }
+      if (curSize !== cleanOffset) {
+        throw Object.assign(new Error('Subtitle offset mismatch'), { status: 409, uploadedBytes: curSize })
+      }
+      if (curSize + contentBuffer.length > MAX_SUB_BYTES) {
+        await fsp.rm(stagePath, { force: true }).catch(() => {})
+        throw Object.assign(new Error('Subtitle file is too large (max 32 MB)'), { status: 413 })
+      }
+      await fsp.appendFile(stagePath, contentBuffer)
+    }
+
+    const total = (await fsp.stat(stagePath)).size
+    if (!final) {
+      return { saved: false, uploadedBytes: total }
+    }
+
+    try {
+      if (targetExt === '.vtt') {
+        const rawText = await fsp.readFile(stagePath, 'utf8')
+        await fsp.writeFile(stagePath, playback.normalizeSubtitleToVtt(rawText), 'utf8')
+      }
+      await fsp.rename(stagePath, subAbs)
+      invalidateCache()
+      notifyChange()
+      return { saved: true, uploadedBytes: total }
+    } catch (err) {
+      await fsp.rm(stagePath, { force: true }).catch(() => {})
+      throw err
+    }
+  })
+}
+
+/**
+ * Single-request video stream import (for small files or direct API clients).
+ * Supports `category: 'movie' | 'episode' | 'unknown'`.
+ */
+export async function importVideoStream(
+  readable,
+  rawFileName,
+  { category = 'unknown', title, season, episode, quality, dub, keepBoth = false, maxBytes = MAX_UPLOAD_BYTES } = {},
+) {
+  const plan = buildUploadPlan(rawFileName, { category, title, season, episode, quality, dub })
+  let targetRelPath = plan.relPosix
+
+  const existing = await getExistingByRelPath(targetRelPath)
+  if (existing) {
+    if (keepBoth) {
+      targetRelPath = await pickNonCollidingRelPath(targetRelPath)
+    } else {
+      throw Object.assign(new Error(`"${plan.fileName}" already exists in the library`), {
+        status: 409,
+        fileId: existing.id,
+      })
+    }
+  }
+
+  const tempPath = await allocateTempPath(`import-${crypto.randomBytes(8).toString('hex')}.part${plan.ext}`)
 
   try {
     let written = 0
@@ -839,18 +1410,14 @@ export async function importVideoStream(readable, rawFileName, { maxBytes = 8 * 
       throw Object.assign(new Error('Uploaded file is empty'), { status: 400 })
     }
 
-    if (ext === '.mp4' || ext === '.m4v') {
-      const check = await inspectMp4File(tempPath)
-      if (!check.valid) {
-        throw Object.assign(new Error(check.error || 'Uploaded file is not a valid MP4'), { status: 422 })
-      }
+    const check = await inspectUploadedVideoFile(tempPath, plan.ext)
+    if (!check.valid) {
+      throw Object.assign(new Error(check.error || 'Uploaded file is not a valid video'), { status: 422 })
     }
 
-    const committed = await commitTempFile(tempPath, relPosix, {
-      sourceType: 'import',
-    })
+    const committed = await commitTempFile(tempPath, targetRelPath, plan.metadata)
     const resolved = await resolveById(committed.id)
-    return resolved?.publicItem ?? { id: committed.id, fileName: safeName, size: committed.size }
+    return resolved?.publicItem ?? { id: committed.id, fileName: plan.fileName, size: committed.size }
   } catch (err) {
     await fsp.rm(tempPath, { force: true }).catch(() => {})
     throw err

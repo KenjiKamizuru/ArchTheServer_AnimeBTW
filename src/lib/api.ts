@@ -16,6 +16,8 @@ import type {
   ProviderMatch,
   ProviderSearchResult,
   ResolverStatus,
+  UploadSessionInfo,
+  UploadSessionSpec,
   WatchResult,
 } from '../types'
 
@@ -215,33 +217,59 @@ export const api = {
     return send<{ deleted: string[]; notFound: string[] }>('/api/library/bulk-delete', 'POST', { ids })
   },
 
-  importLibraryVideo(file: File, onProgress?: (percent: number) => void): Promise<{ item: LibraryItem }> {
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest()
-      xhr.open('POST', `/api/library/import?filename=${encodeURIComponent(file.name)}`)
-      xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream')
-      xhr.upload.onprogress = (event) => {
-        if (event.lengthComputable && onProgress) {
-          onProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)))
-        }
+  createUploadSession(spec: UploadSessionSpec) {
+    return send<UploadSessionInfo>('/api/library/uploads', 'POST', spec)
+  },
+
+  getUploadSession(uploadId: string) {
+    return get<UploadSessionInfo>(`/api/library/uploads/${encodeURIComponent(uploadId)}`, false)
+  },
+
+  completeUploadSession(uploadId: string) {
+    return send<{ item: LibraryItem }>(
+      `/api/library/uploads/${encodeURIComponent(uploadId)}/complete`,
+      'POST',
+    )
+  },
+
+  cancelUploadSession(uploadId: string) {
+    return send<{ cancelled: boolean }>(`/api/library/uploads/${encodeURIComponent(uploadId)}`, 'DELETE')
+  },
+
+  /**
+   * Attaches a companion subtitle (.vtt, .srt, .ass, .ssa) to any library item.
+   * Automatically splits files in 450 KB chunks so even large font-embedded .ass
+   * subtitles succeed behind default 1 MB Nginx proxies without HTTP 413.
+   */
+  async uploadLibrarySubtitle(itemId: string, file: File): Promise<{ saved: boolean }> {
+    const CHUNK = 450 * 1024
+    const total = file.size
+    if (total <= 0) throw new Error('Subtitle file is empty')
+    let offset = 0
+    while (offset < total) {
+      const end = Math.min(offset + CHUNK, total)
+      const isFinal = end >= total
+      const slice = file.slice(offset, end)
+      const qs = new URLSearchParams({
+        filename: file.name,
+        offset: String(offset),
+        final: isFinal ? '1' : '0',
+      })
+      const res = await fetch(`/api/library/${encodeURIComponent(itemId)}/subtitle?${qs.toString()}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Upload-Offset': String(offset),
+        },
+        body: slice,
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => null)
+        throw new Error(body?.error ?? `Subtitle upload failed (${res.status})`)
       }
-      xhr.onload = () => {
-        let parsed: { item?: LibraryItem; error?: string } | null = null
-        try {
-          parsed = JSON.parse(xhr.responseText) as { item?: LibraryItem; error?: string }
-        } catch {
-          parsed = null
-        }
-        if (xhr.status >= 200 && xhr.status < 300 && parsed?.item) {
-          resolve({ item: parsed.item })
-        } else {
-          reject(new Error(parsed?.error || `Upload failed (${xhr.status})`))
-        }
-      }
-      xhr.onerror = () => reject(new Error('Network error while uploading file'))
-      xhr.onabort = () => reject(new Error('Upload cancelled'))
-      xhr.send(file)
-    })
+      offset = end
+    }
+    return { saved: true }
   },
 
   localStreamUrl(id: string, opts?: { remux?: boolean }) {

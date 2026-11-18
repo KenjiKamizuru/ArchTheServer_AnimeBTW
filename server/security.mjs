@@ -945,6 +945,11 @@ export async function inspectMp4File(filePath) {
       }
 
       if (size < header || offset + size > stat.size) {
+        // Tolerate small trailing tags/padding (e.g. 128-byte ID3v1 TAG) at EOF
+        // when both moov and mdat boxes have already been verified complete.
+        if (moovOffset >= 0 && hasMdat && stat.size - offset <= 4096) {
+          break
+        }
         return { valid: false, error: 'Downloaded MP4 file is incomplete or truncated' }
       }
 
@@ -996,4 +1001,93 @@ export async function inspectMp4File(filePath) {
   } finally {
     await fh.close()
   }
+}
+
+const ISO_BMFF_FIRST_BOXES = new Set([
+  'ftyp',
+  'styp',
+  'moov',
+  'mdat',
+  'free',
+  'skip',
+  'wide',
+  'pnot',
+  'jP  ',
+])
+
+function detectVideoContainerFromHeader(head) {
+  if (head.length >= 4 && head[0] === 0x1a && head[1] === 0x45 && head[2] === 0xdf && head[3] === 0xa3) {
+    return 'matroska' // MKV or WebM (EBML)
+  }
+  if (head.length >= 8 && ISO_BMFF_FIRST_BOXES.has(head.toString('latin1', 4, 8))) {
+    return 'isobmff' // MP4, M4V, MOV
+  }
+  if (
+    head.length >= 12 &&
+    head.toString('latin1', 0, 4) === 'RIFF' &&
+    (head.toString('latin1', 8, 12) === 'AVI ' || head.toString('latin1', 8, 12) === 'AVIX')
+  ) {
+    return 'avi'
+  }
+  if (head.length >= 4 && head.toString('latin1', 0, 4) === 'OggS') {
+    return 'ogg'
+  }
+  // 188-byte MPEG-TS or 192-byte BDAV M2TS sync bytes (0x47)
+  if (head[0] === 0x47 && (head.length < 189 || head[188] === 0x47)) {
+    return 'mpegts'
+  }
+  if (head.length >= 197 && head[4] === 0x47 && head[196] === 0x47) {
+    return 'mpegts'
+  }
+  return null
+}
+
+/**
+ * Validates a user-uploaded movie or episode file before committing it into the
+ * shared library. Accepts genuine video containers (including MKV/TS files that
+ * were saved with a `.mp4` extension) while rejecting empty, HTML, text, or
+ * DRM-encrypted files.
+ */
+export async function inspectUploadedVideoFile(filePath, ext = '') {
+  let stat
+  try {
+    stat = await fsp.stat(filePath)
+  } catch {
+    return { valid: false, error: 'Uploaded file could not be read' }
+  }
+  if (!stat.isFile() || stat.size < 16) {
+    return { valid: false, error: 'Uploaded file is empty or too small to be a video' }
+  }
+
+  const fh = await fsp.open(filePath, 'r')
+  let head
+  try {
+    const len = Math.min(512, stat.size)
+    head = Buffer.alloc(len)
+    const { bytesRead } = await fh.read(head, 0, len, 0)
+    head = head.subarray(0, bytesRead)
+  } finally {
+    await fh.close()
+  }
+
+  const headText = head.subarray(0, Math.min(head.length, 256)).toString('utf8').trimStart()
+  if (/^<!doctype\s+html|^<html[\s>]/i.test(headText)) {
+    return { valid: false, error: 'File is an HTML document, not a video file' }
+  }
+
+  const detected = detectVideoContainerFromHeader(head)
+  if (!detected) {
+    return {
+      valid: false,
+      error: `File is not a recognized video container (${ext || 'unknown'}). Supported: MP4, MKV, WebM, MOV, M4V, AVI, TS.`,
+    }
+  }
+
+  if (detected === 'isobmff') {
+    const mp4Check = await inspectMp4File(filePath)
+    if (!mp4Check.valid) return mp4Check
+    return { valid: true, container: 'isobmff', fastStart: mp4Check.fastStart, size: stat.size, error: null }
+  }
+
+  return { valid: true, container: detected, fastStart: true, size: stat.size, error: null }
 }

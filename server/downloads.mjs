@@ -669,7 +669,35 @@ export async function enqueueBulk(payload = {}) {
   const dub = payload.dub === undefined ? Boolean(config.dub) : Boolean(payload.dub)
 
   let seasonEntries = []
-  if (mode === 'series' && Array.isArray(payload.seasons) && payload.seasons.length > 0) {
+  if (mode === 'multi-anime' && Array.isArray(payload.items) && payload.items.length > 0) {
+    // Queue whole seasons (or latest episodes) across multiple anime from Browse / Bookmarks.
+    const latestOnly = Boolean(payload.latestOnly)
+    seasonEntries = payload.items.slice(0, 60).map((item) => {
+      const title = String(item.animeTitle ?? item.title ?? item.query ?? 'Anime').trim()
+      const inferred = library.inferSeriesAndSeason(title, item.season)
+      const saved = item.mediaId ? resolver.getMatch(item.mediaId) : null
+      const epCount = Math.max(0, Math.floor(Number(item.episodeCount ?? 0)))
+      return {
+        mediaId: item.mediaId ?? null,
+        animeTitle: title,
+        seriesTitle: inferred.seriesTitle,
+        query: saved?.query || String(item.query ?? title).trim(),
+        resultIndex: saved?.index || item.resultIndex || config.resultIndex,
+        providerTitle: item.providerTitle,
+        season: inferred.season,
+        episodes: latestOnly ? [Math.max(1, epCount || 1)] : item.episodes,
+        episodeCount: latestOnly ? undefined : epCount || undefined,
+        discoverFromProvider: latestOnly
+          ? false
+          : item.discoverFromProvider !== undefined
+            ? Boolean(item.discoverFromProvider)
+            : true,
+        format: item.format ?? null,
+        cover: item.cover ?? null,
+        durationMinutes: item.durationMinutes ?? null,
+      }
+    })
+  } else if (mode === 'series' && Array.isArray(payload.seasons) && payload.seasons.length > 0) {
     const sharedSeries =
       String(payload.seriesTitle ?? '').trim() ||
       library.inferSeriesAndSeason(payload.seasons[0]?.animeTitle || payload.animeTitle || payload.title).seriesTitle
@@ -683,7 +711,7 @@ export async function enqueueBulk(payload = {}) {
       season: Number(item.season) >= 1 ? Math.floor(Number(item.season)) : idx + 1,
       episodes: item.episodes,
       episodeCount: item.episodeCount,
-      discoverFromProvider: Boolean(item.discoverFromProvider),
+      discoverFromProvider: item.discoverFromProvider !== undefined ? Boolean(item.discoverFromProvider) : true,
       format: item.format ?? null,
       cover: item.cover ?? null,
       durationMinutes: item.durationMinutes ?? null,
@@ -705,7 +733,7 @@ export async function enqueueBulk(payload = {}) {
         discoverFromProvider:
           payload.discoverFromProvider !== undefined
             ? Boolean(payload.discoverFromProvider)
-            : mode === 'series',
+            : mode === 'season' || mode === 'series',
         format: payload.format ?? null,
         cover: payload.cover ?? null,
         durationMinutes: payload.durationMinutes ?? null,
@@ -719,8 +747,18 @@ export async function enqueueBulk(payload = {}) {
   let totalRequested = 0
   let baseTimestamp = Date.now()
 
+  const errors = []
   for (const entry of seasonEntries) {
-    const epNumbers = await resolveEpisodeNumbersForEntry(entry, config)
+    let epNumbers
+    try {
+      epNumbers = await resolveEpisodeNumbersForEntry(entry, config)
+    } catch (err) {
+      if (mode === 'multi-anime' && seasonEntries.length > 1) {
+        errors.push(`${entry.animeTitle}: ${err?.message || 'not found'}`)
+        continue
+      }
+      throw err
+    }
     if (entry.mediaId && entry.query) {
       // Preserve existing user-picked match for related seasons if one was saved earlier.
       const saved = entry.mediaId !== payload.mediaId ? resolver.getMatch(entry.mediaId) : null
@@ -791,6 +829,7 @@ export async function enqueueBulk(payload = {}) {
     skippedDownloaded,
     skippedQueued,
     totalRequested,
+    errors,
   }
 }
 

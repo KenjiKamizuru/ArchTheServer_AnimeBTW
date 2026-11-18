@@ -12,6 +12,7 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { useDownloads, useLibrary } from '../lib/downloads'
+import { useUploads } from '../lib/uploads'
 
 const DESKTOP_NAV = [
   { to: '/', label: 'This Season', icon: Sparkles, end: true, badgeKey: null },
@@ -50,7 +51,8 @@ export default function Layout() {
   const [term, setTerm] = useState('')
   const { counts } = useDownloads()
   const { stats } = useLibrary()
-  const activeQueue = counts.active + counts.queued
+  const { activeCount: activeUploads } = useUploads()
+  const activeQueue = counts.active + counts.queued + activeUploads
 
   useEffect(() => {
     if (location.pathname === '/search') {

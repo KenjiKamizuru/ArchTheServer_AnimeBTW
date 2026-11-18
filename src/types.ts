@@ -252,8 +252,23 @@ export interface BulkSeasonSpec {
   durationMinutes?: number | null
 }
 
+export interface BulkMultiAnimeItem {
+  mediaId?: number | null
+  animeTitle: string
+  query?: string
+  resultIndex?: number
+  providerTitle?: string
+  season?: number
+  episodes?: number[]
+  episodeCount?: number
+  discoverFromProvider?: boolean
+  format?: string | null
+  cover?: string | null
+  durationMinutes?: number | null
+}
+
 export interface BulkEnqueuePayload {
-  mode: 'episodes' | 'range' | 'season' | 'series'
+  mode: 'episodes' | 'range' | 'season' | 'series' | 'multi-anime'
   mediaId?: number | null
   animeTitle?: string
   seriesTitle?: string
@@ -267,6 +282,8 @@ export interface BulkEnqueuePayload {
   episodeCount?: number
   discoverFromProvider?: boolean
   seasons?: BulkSeasonSpec[]
+  items?: BulkMultiAnimeItem[]
+  latestOnly?: boolean
   quality?: string
   dub?: boolean
   format?: string | null
@@ -280,6 +297,34 @@ export interface BulkEnqueueResult {
   skippedDownloaded: number
   skippedQueued: number
   totalRequested: number
+  errors?: string[]
 }
 
 export type BulkDownloadAction = 'delete' | 'cancel' | 'retry' | 'pause' | 'resume' | 'clear-finished'
+
+export type UploadCategory = 'movie' | 'episode' | 'unknown'
+
+export interface UploadSessionSpec {
+  fileName: string
+  totalSize: number
+  lastModified?: number
+  category: UploadCategory
+  title?: string
+  season?: number
+  episode?: number
+  quality?: string
+  dub?: boolean
+  keepBoth?: boolean
+}
+
+export interface UploadSessionInfo {
+  uploadId: string
+  chunkSize: number
+  maxChunkSize?: number
+  uploadedBytes: number
+  totalSize: number
+  fileName: string
+  folder: string
+  category: UploadCategory
+  resumed?: boolean
+}

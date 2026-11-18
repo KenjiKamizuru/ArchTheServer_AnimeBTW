@@ -23,6 +23,9 @@ export const VIDEO_MIME = {
   '.mkv': 'video/x-matroska',
   '.mov': 'video/quicktime',
   '.ts': 'video/mp2t',
+  '.m2ts': 'video/mp2t',
+  '.avi': 'video/x-msvideo',
+  '.ogv': 'video/ogg',
 }
 
 export const VIDEO_EXTENSIONS = new Set(Object.keys(VIDEO_MIME))
@@ -396,7 +399,10 @@ function appendRemoteInputArgs(
   args.push('-i', target)
 }
 
-function appendMappingAndCodecArgs(args, { hasSecondAudioInput, needsAacBsf, transcodeAudio }) {
+function appendMappingAndCodecArgs(
+  args,
+  { hasSecondAudioInput, needsAacBsf, transcodeAudio, transcodeVideo = false },
+) {
   if (hasSecondAudioInput) {
     args.push('-map', '0:v:0?', '-map', '1:a:0?')
   } else {
@@ -404,16 +410,33 @@ function appendMappingAndCodecArgs(args, { hasSecondAudioInput, needsAacBsf, tra
   }
   args.push('-disposition:v:0', 'default', '-disposition:a:0', 'default')
 
-  if (transcodeAudio) {
-    args.push('-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ac', '2', '-ar', '48000')
+  if (transcodeVideo) {
+    args.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21', '-pix_fmt', 'yuv420p')
   } else {
-    args.push('-c:v', 'copy', '-c:a', 'copy')
+    args.push('-c:v', 'copy')
+  }
+
+  if (transcodeAudio || transcodeVideo) {
+    args.push('-c:a', 'aac', '-b:a', '192k', '-ac', '2', '-ar', '48000')
+  } else {
+    args.push('-c:a', 'copy')
     // hianime audio arrives as ADTS AAC inside MPEG-TS; MP4 needs ASC framing.
     if (needsAacBsf) args.push('-bsf:a', 'aac_adtstoasc')
   }
 }
 
-function buildRemuxArgs({ filePath, url, audioUrl, referer, headers, hls, realtime, transcodeAudio, caps }) {
+function buildRemuxArgs({
+  filePath,
+  url,
+  audioUrl,
+  referer,
+  headers,
+  hls,
+  realtime,
+  transcodeAudio,
+  transcodeVideo = false,
+  caps,
+}) {
   const args = ['-hide_banner', '-loglevel', 'error', '-nostdin']
 
   if (url) {
@@ -440,11 +463,17 @@ function buildRemuxArgs({ filePath, url, audioUrl, referer, headers, hls, realti
     })
   }
 
-  const localTs = Boolean(filePath && path.extname(filePath).toLowerCase() === '.ts')
+  const localExt = filePath ? path.extname(filePath).toLowerCase() : ''
+  const localTs = localExt === '.ts' || localExt === '.m2ts'
+  // Local movies remuxed from MKV/AVI/fallback often carry DTS, AC-3, FLAC, or
+  // Vorbis audio; transcoding just audio to AAC-LC runs far faster than realtime
+  // and plays reliably in every browser.
+  const forceLocalAac = Boolean(filePath && !localTs)
   appendMappingAndCodecArgs(args, {
     hasSecondAudioInput: Boolean(audioUrl),
     needsAacBsf: Boolean(audioUrl || hls || localTs),
-    transcodeAudio,
+    transcodeAudio: Boolean(transcodeAudio || forceLocalAac),
+    transcodeVideo,
   })
 
   // `delay_moov` waits for the first fragment so `aac_adtstoasc` has populated
@@ -517,7 +546,7 @@ export function remux(
   res.on('drain', onDrain)
   req.on('aborted', onClientClose)
 
-  const run = ({ transcodeAudio = false, dropAudioUrl = false } = {}) => {
+  const run = ({ transcodeAudio = false, transcodeVideo = false, dropAudioUrl = false } = {}) => {
     const activeAudioUrl = dropAudioUrl ? null : audioUrl
     const args = buildRemuxArgs({
       filePath,
@@ -528,6 +557,7 @@ export function remux(
       hls,
       realtime,
       transcodeAudio,
+      transcodeVideo,
       caps,
     })
     let proc
@@ -572,7 +602,13 @@ export function remux(
       // Non-AAC source audio (MP3, AC-3/E-AC-3, Opus, etc.) cannot be copied
       // with `aac_adtstoasc`; transcode just the audio track to AAC-LC.
       if (!started && !transcodeAudio && shouldTranscodeAudioFallback(stderr)) {
-        run({ transcodeAudio: true, dropAudioUrl })
+        run({ transcodeAudio: true, transcodeVideo, dropAudioUrl })
+        return
+      }
+      // Local movies with non-MP4 video codecs (e.g. VP8/VP9/MPEG-4 in MKV/AVI)
+      // fall back to H.264 + AAC transcoding so they still play in-browser.
+      if (!started && filePath && !transcodeVideo && shouldTranscodeAudioFallback(stderr)) {
+        run({ transcodeAudio: true, transcodeVideo: true, dropAudioUrl })
         return
       }
       // If a separate audio rendition URL is broken, fall back to the main

@@ -24,7 +24,17 @@ await downloads.init()
 
 const app = express()
 app.disable('x-powered-by')
-app.use(express.json({ limit: '2mb' }))
+const jsonParser = express.json({ limit: '2mb' })
+app.use((req, res, next) => {
+  if (
+    req.path === '/api/library/import' ||
+    /^\/api\/library\/uploads\/[^/]+(\/chunk)?$/.test(req.path) ||
+    (req.method === 'POST' && /^\/api\/library\/[^/]+\/subtitle$/.test(req.path))
+  ) {
+    return next()
+  }
+  return jsonParser(req, res, next)
+})
 
 // All API responses are JSON; gzip the string payloads for capable clients.
 // Streaming routes (video, subtitle proxy) write directly and are untouched.
@@ -44,6 +54,31 @@ app.use((req, res, next) => {
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next)
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n))
+
+function disableTimeouts(req, res) {
+  req.setTimeout?.(0)
+  res.setTimeout?.(0)
+  req.socket?.setTimeout?.(0)
+}
+
+function readStreamToBuffer(readable, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = []
+    let total = 0
+    readable.on('data', (chunk) => {
+      total += chunk.length
+      if (total > maxBytes) {
+        reject(Object.assign(new Error('Payload too large'), { status: 413 }))
+        readable.destroy?.()
+        return
+      }
+      chunks.push(chunk)
+    })
+    readable.once('aborted', () => reject(Object.assign(new Error('Upload aborted'), { status: 499 })))
+    readable.once('error', reject)
+    readable.once('end', () => resolve(Buffer.concat(chunks)))
+  })
+}
 
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, season: anilist.currentSeason() })
@@ -252,6 +287,7 @@ app.get(
 app.get(
   '/api/live/stream',
   wrap(async (req, res) => {
+    disableTimeouts(req, res)
     const query = String(req.query.query ?? '').trim()
     if (!query) {
       res.status(400).json({ error: 'A title to search for is required' })
@@ -281,6 +317,7 @@ app.get('/api/downloads', (req, res) => {
 })
 
 app.get('/api/downloads/events', (req, res) => {
+  disableTimeouts(req, res)
   res.status(200)
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
   res.setHeader('Cache-Control', 'no-cache, no-transform')
@@ -407,15 +444,71 @@ app.get(
   }),
 )
 
+// Resumable chunked video upload sessions (movies, episodes, and standalone videos).
+// Keeps individual requests small (default 900 KB, auto-scaling up to 8 MB or down
+// to 96 KB) so uploads never hit HTTP 413 behind Nginx/Cloudflare/Caddy proxies
+// and never reset on slow networks or brief disconnects.
+app.post(
+  '/api/library/uploads',
+  wrap(async (req, res) => {
+    const session = await library.createUploadSession(req.body ?? {})
+    res.status(session.resumed ? 200 : 201).json(session)
+  }),
+)
+
+app.get(
+  '/api/library/uploads/:uploadId',
+  wrap(async (req, res) => {
+    res.set('Cache-Control', 'no-store')
+    res.json(await library.getUploadSession(req.params.uploadId))
+  }),
+)
+
+const handleUploadChunk = wrap(async (req, res) => {
+  disableTimeouts(req, res)
+  const rawOffset = req.query.offset ?? req.headers['x-upload-offset'] ?? 0
+  const result = await library.appendUploadChunk(req.params.uploadId, rawOffset, req)
+  res.json(result)
+})
+
+// Accept both POST (works through every proxy/WAF) and PATCH.
+app.post('/api/library/uploads/:uploadId/chunk', handleUploadChunk)
+app.patch('/api/library/uploads/:uploadId', handleUploadChunk)
+
+app.post(
+  '/api/library/uploads/:uploadId/complete',
+  wrap(async (req, res) => {
+    disableTimeouts(req, res)
+    const item = await library.completeUploadSession(req.params.uploadId)
+    res.status(201).json({ item })
+  }),
+)
+
+app.delete(
+  '/api/library/uploads/:uploadId',
+  wrap(async (req, res) => {
+    res.json(await library.cancelUploadSession(req.params.uploadId))
+  }),
+)
+
 app.post(
   '/api/library/import',
   wrap(async (req, res) => {
+    disableTimeouts(req, res)
     const rawName = String(req.query.filename ?? req.headers['x-file-name'] ?? '').trim()
     if (!rawName) {
       res.status(400).json({ error: 'A filename query parameter is required' })
       return
     }
-    const item = await library.importVideoStream(req, rawName)
+    const item = await library.importVideoStream(req, rawName, {
+      category: req.query.category ? String(req.query.category) : 'unknown',
+      title: req.query.title ? String(req.query.title).slice(0, 160) : undefined,
+      season: req.query.season ? Number(req.query.season) : undefined,
+      episode: req.query.episode ? Number(req.query.episode) : undefined,
+      quality: req.query.quality ? String(req.query.quality) : undefined,
+      dub: req.query.dub !== undefined ? resolveDubParam(req.query.dub, false) : undefined,
+      keepBoth: resolveDubParam(req.query.keepBoth, false),
+    })
     res.status(201).json({ item })
   }),
 )
@@ -437,6 +530,7 @@ app.post(
 app.get(
   '/api/library/:id/stream',
   wrap(async (req, res) => {
+    disableTimeouts(req, res)
     const resolved = await library.resolveById(req.params.id)
     if (!resolved) {
       res.status(404).json({ error: 'Local episode not found' })
@@ -460,6 +554,7 @@ app.get(
 app.get(
   '/api/library/:id/download',
   wrap(async (req, res) => {
+    disableTimeouts(req, res)
     const resolved = await library.resolveById(req.params.id)
     if (!resolved) {
       res.status(404).json({ error: 'File not found' })
@@ -494,6 +589,19 @@ app.get(
   }),
 )
 
+app.post(
+  '/api/library/:id/subtitle',
+  wrap(async (req, res) => {
+    disableTimeouts(req, res)
+    const rawName = String(req.query.filename ?? req.headers['x-file-name'] ?? 'subtitle.vtt').trim()
+    const offset = Number(req.query.offset ?? req.headers['x-upload-offset'] ?? 0)
+    const final = req.query.final === undefined ? true : resolveDubParam(req.query.final, true)
+    const buf = await readStreamToBuffer(req, 32 * 1024 * 1024)
+    const result = await library.attachSubtitleFile(req.params.id, rawName, buf, { offset, final })
+    res.status(result.saved ? 201 : 200).json(result)
+  }),
+)
+
 app.delete(
   '/api/library/:id',
   wrap(async (req, res) => {
@@ -515,7 +623,11 @@ app.use((err, req, res, next) => {
   if (!req.path.startsWith('/api')) return next(err)
   const status = err.status && err.status < 600 ? err.status : 500
   if (status >= 500) console.error('[api]', err)
-  res.status(status).json({ error: err.message || 'Server error' })
+  const payload = { error: err.message || 'Server error' }
+  if (typeof err.code === 'string') payload.code = err.code
+  if (typeof err.uploadedBytes === 'number') payload.uploadedBytes = err.uploadedBytes
+  if (typeof err.fileId === 'string') payload.fileId = err.fileId
+  res.status(status).json(payload)
 })
 
 if (isProd) {
@@ -553,18 +665,27 @@ if (isProd) {
   const { createServer } = await import('vite')
   const vite = await createServer({
     root: ROOT,
-    server: { middlewareMode: true },
+    server: {
+      middlewareMode: true,
+      watch: {
+        ignored: ['**/library/**', '**/data/**', '**/.incomplete/**'],
+      },
+    },
     appType: 'spa',
   })
   app.use(vite.middlewares)
 }
 
-app.listen(PORT, HOST, () => {
+const httpServer = app.listen(PORT, HOST, () => {
   console.log(`\n  AnimeVault ready → http://${HOST}:${PORT}`)
   console.log(`  pid ${process.pid}`)
   console.log(`  Library:   ${settings.resolveLibraryDir()}`)
   console.log(`  Streaming: built-in resolver (hianime.at) · ffmpeg ${playback.resolveFfmpeg() ?? 'NOT FOUND'}\n`)
 })
+// Never kill long-running local video streams, SSE feeds, or multi-GB uploads
+// after Node's default 5-minute requestTimeout.
+httpServer.requestTimeout = 0
+httpServer.headersTimeout = 120_000
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {

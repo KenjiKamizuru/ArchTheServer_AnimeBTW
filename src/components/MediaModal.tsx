@@ -485,7 +485,7 @@ function DetailSheet({
         providerTitle: providerTitle ?? undefined,
         season,
         episodeCount: count,
-        discoverFromProvider: !count,
+        discoverFromProvider: true,
         quality: selectedQuality,
         dub: settings.dub,
         format: media.format,
@@ -559,7 +559,7 @@ function DetailSheet({
           providerTitle: entry.providerTitle,
           season: idx + 1,
           episodeCount: entry.episodeCount || undefined,
-          discoverFromProvider: entry.episodeCount <= 0,
+          discoverFromProvider: true,
           format: entry.format,
           cover: entry.cover,
           durationMinutes: entry.duration,
@@ -801,6 +801,40 @@ function DetailSheet({
                       Download EP {episode}
                     </button>
                   )}
+
+                  {media && media.format !== 'MOVIE' ? (
+                    <button
+                      type="button"
+                      onClick={() => void onDownloadSeason()}
+                      disabled={!providerQuery.trim() || bulkBusy !== null}
+                      title={`Bulk download every available episode of Season ${String(season).padStart(2, '0')} to the local library`}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-accent/18 px-3 py-2 text-xs font-semibold text-accent ring-1 ring-accent/45 transition hover:bg-accent/28 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {bulkBusy === 'season' ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <FolderDown size={14} />
+                      )}
+                      Download Full Season{aired > 1 ? ` (${aired} eps)` : ''}
+                    </button>
+                  ) : null}
+
+                  {media && relatedCount > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => void onDownloadSeries()}
+                      disabled={!providerQuery.trim() || bulkBusy !== null}
+                      title={`Bulk download all ${relatedCount + 1} seasons of this series`}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-white/8 px-3 py-2 text-xs font-medium text-white/90 ring-1 ring-white/15 transition hover:bg-white/14 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {bulkBusy === 'series' ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <Layers size={14} className="text-accent" />
+                      )}
+                      All Seasons ({relatedCount + 1})
+                    </button>
+                  ) : null}
 
                   <button
                     type="button"
@@ -1080,6 +1114,45 @@ function DetailSheet({
                   )}
                 </div>
 
+                {media && media.format !== 'MOVIE' ? (
+                  <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() => void onDownloadSeason()}
+                      disabled={!providerQuery.trim() || bulkBusy !== null}
+                      title={`Queue all available episodes of Season ${String(season).padStart(2, '0')}`}
+                      className="flex items-center justify-center gap-1.5 rounded-lg bg-accent/18 px-2.5 py-2 text-xs font-semibold text-accent ring-1 ring-accent/45 transition hover:bg-accent/28 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {bulkBusy === 'season' ? (
+                        <Loader2 size={13} className="animate-spin" />
+                      ) : (
+                        <FolderDown size={13} />
+                      )}
+                      Whole Season {String(season).padStart(2, '0')}
+                      {aired > 1 ? ` (${aired})` : ''}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => void onDownloadSeries()}
+                      disabled={!providerQuery.trim() || bulkBusy !== null}
+                      title={
+                        relatedCount > 0
+                          ? `Queue all ${relatedCount + 1} seasons`
+                          : 'Discover and queue every episode from provider'
+                      }
+                      className="flex items-center justify-center gap-1.5 rounded-lg bg-white/7 px-2.5 py-2 text-xs font-medium text-white/85 ring-1 ring-white/12 transition hover:bg-white/12 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {bulkBusy === 'series' ? (
+                        <Loader2 size={13} className="animate-spin" />
+                      ) : (
+                        <Layers size={13} className="text-accent" />
+                      )}
+                      {relatedCount > 0 ? `All ${relatedCount + 1} Seasons` : 'Full Series'}
+                    </button>
+                  </div>
+                ) : null}
+
                 {currentLocal ? (
                   <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-emerald-950/30 px-2.5 py-1.5 text-[11px] text-emerald-200/80 ring-1 ring-emerald-500/20">
                     <span className="truncate">
@@ -1142,14 +1215,14 @@ function DetailSheet({
                       onClick={() => void onDownloadSeason()}
                       disabled={!providerQuery.trim() || bulkBusy !== null}
                       title={`Queue all episodes of Season ${String(season).padStart(2, '0')}`}
-                      className="inline-flex items-center gap-1 rounded-md bg-white/6 px-2.5 py-1 text-[11px] font-medium text-white/80 ring-1 ring-white/10 transition hover:bg-white/12 hover:text-white disabled:opacity-40"
+                      className="inline-flex items-center gap-1 rounded-md bg-accent/18 px-2.5 py-1.5 text-[11px] font-semibold text-accent ring-1 ring-accent/40 transition hover:bg-accent/28 disabled:opacity-40"
                     >
                       {bulkBusy === 'season' ? (
-                        <Loader2 size={11} className="animate-spin" />
+                        <Loader2 size={12} className="animate-spin" />
                       ) : (
-                        <FolderDown size={11} className="text-accent" />
+                        <FolderDown size={12} />
                       )}
-                      Download Season {String(season).padStart(2, '0')}
+                      Download Whole Season {String(season).padStart(2, '0')}
                     </button>
 
                     <button

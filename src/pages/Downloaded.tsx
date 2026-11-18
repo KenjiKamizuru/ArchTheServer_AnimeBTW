@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useMemo, useState, type ChangeEvent } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   Captions,
   CheckSquare,
@@ -7,21 +7,22 @@ import {
   FileVideo,
   Film,
   Folder,
+  FolderDown,
   HardDrive,
   Loader2,
   Play,
   RefreshCw,
   Search,
   Square,
+  Subtitles,
   Trash2,
   Upload,
 } from 'lucide-react'
-import type { LibraryItem, Media } from '../types'
+import type { LibraryItem, Media, UploadCategory } from '../types'
 import { api } from '../lib/api'
 import {
   bulkDeleteLibraryFiles,
   deleteLibraryFile,
-  importLibraryVideo,
   refreshLibrary,
   useLibrary,
 } from '../lib/downloads'
@@ -29,6 +30,7 @@ import { exactDate, formatBytes, formatEpisodeCode, formatQualityLabel } from '.
 import { DownloadsTabs } from '../components/DownloadsTabs'
 import { useDetail } from '../components/MediaModal'
 import { localItemToPlayback, usePlayer } from '../components/Player'
+import { UploadQueuePanel, UploadVideoModal } from '../components/UploadVideoModal'
 import { useToast } from '../components/Toasts'
 
 type KindFilter = 'all' | 'episodes' | 'movies' | 'unknown'
@@ -48,7 +50,7 @@ export default function DownloadedPage() {
   const player = usePlayer()
   const openDetail = useDetail()
   const toast = useToast()
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const [kind, setKind] = useState<KindFilter>('all')
   const [query, setQuery] = useState('')
@@ -56,8 +58,32 @@ export default function DownloadedPage() {
   const [selectMode, setSelectMode] = useState(false)
   const [rescanBusy, setRescanBusy] = useState(false)
   const [deleteBusy, setDeleteBusy] = useState<string | null>(null)
-  const [uploadPct, setUploadPct] = useState<number | null>(null)
+  const [subBusyId, setSubBusyId] = useState<string | null>(null)
+  const [uploadOpen, setUploadOpen] = useState(false)
+  const [uploadCategory, setUploadCategory] = useState<UploadCategory>('movie')
+  const [droppedFiles, setDroppedFiles] = useState<File[] | undefined>(undefined)
+  const [pageDrag, setPageDrag] = useState(false)
   const [mediaMap, setMediaMap] = useState<Map<number, Media>>(() => new Map())
+
+  useEffect(() => {
+    const up = searchParams.get('upload')
+    if (up === 'movie' || up === 'episode' || up === 'unknown' || up === '1') {
+      setUploadCategory(up === 'episode' ? 'episode' : up === 'unknown' ? 'unknown' : 'movie')
+      setDroppedFiles(undefined)
+      setUploadOpen(true)
+      const next = new URLSearchParams(searchParams)
+      next.delete('upload')
+      setSearchParams(next, { replace: true })
+    }
+  }, [searchParams, setSearchParams])
+
+  function openUpload(cat?: UploadCategory, files?: File[]) {
+    const resolved: UploadCategory =
+      cat ?? (kind === 'episodes' ? 'episode' : kind === 'unknown' ? 'unknown' : 'movie')
+    setUploadCategory(resolved)
+    setDroppedFiles(files)
+    setUploadOpen(true)
+  }
 
   // Optional poster enrichment for items without stored cover; fails silently offline.
   useEffect(() => {
@@ -215,18 +241,19 @@ export default function DownloadedPage() {
     }
   }
 
-  async function onUploadChange(event: ChangeEvent<HTMLInputElement>) {
+  async function onAttachSubtitle(item: LibraryItem, event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
     event.target.value = ''
     if (!file) return
-    setUploadPct(0)
+    setSubBusyId(item.id)
     try {
-      const imported = await importLibraryVideo(file, (pct) => setUploadPct(pct))
-      toast(`Saved "${imported.fileName}" to the shared library`)
+      await api.uploadLibrarySubtitle(item.id, file)
+      await refreshLibrary(true)
+      toast(`Attached subtitle "${file.name}" to ${item.fileName}`)
     } catch (err) {
-      toast(err instanceof Error ? err.message : 'Could not import MP4 file', 'err')
+      toast(err instanceof Error ? err.message : 'Could not attach subtitle', 'err')
     } finally {
-      setUploadPct(null)
+      setSubBusyId(null)
     }
   }
 
@@ -234,12 +261,38 @@ export default function DownloadedPage() {
     { key: 'all', label: 'All', count: stats.totalFiles },
     { key: 'episodes', label: 'Episodes', count: stats.episodeCount },
     { key: 'movies', label: 'Movies', count: stats.movieCount },
-    { key: 'unknown', label: 'Unknown MP4s', count: stats.unknownCount },
+    { key: 'unknown', label: 'Unsorted Videos', count: stats.unknownCount },
   ]
 
   return (
-    <div>
+    <div
+      onDragOver={(ev) => {
+        if (ev.dataTransfer.types.includes('Files')) {
+          ev.preventDefault()
+          if (!uploadOpen) setPageDrag(true)
+        }
+      }}
+      onDragLeave={(ev) => {
+        if (ev.currentTarget === ev.target) setPageDrag(false)
+      }}
+      onDrop={(ev) => {
+        if (ev.dataTransfer.files?.length && !uploadOpen) {
+          ev.preventDefault()
+          setPageDrag(false)
+          openUpload(undefined, Array.from(ev.dataTransfer.files))
+        }
+      }}
+    >
       <DownloadsTabs />
+
+      {pageDrag && !uploadOpen ? (
+        <div
+          onDragLeave={() => setPageDrag(false)}
+          className="mb-4 rounded-xl border-2 border-dashed border-accent bg-accent/12 px-4 py-5 text-center text-sm font-medium text-accent"
+        >
+          Drop your movie or video file anywhere to start a resumable upload
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
@@ -249,38 +302,28 @@ export default function DownloadedPage() {
           <p className="mt-0.5 text-xs text-white/40">
             {stats.totalFiles > 0
               ? `${stats.totalFiles} file${stats.totalFiles === 1 ? '' : 's'} (${formatBytes(stats.totalBytes)}) · plays directly from this server without internet`
-              : 'Downloaded episodes, movies, and custom MP4 files stored on this server'}
+              : 'Downloaded episodes, your uploaded movies, and local video files stored on this server'}
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".mp4,.m4v,.webm,.mkv,.mov,video/mp4,video/*"
-            onChange={(e) => void onUploadChange(e)}
-            className="hidden"
-          />
-
           <button
             type="button"
-            disabled={uploadPct !== null}
-            onClick={() => fileInputRef.current?.click()}
-            title="Upload a local or unknown MP4 file into the server's shared library"
-            className="inline-flex items-center gap-1.5 rounded-lg bg-white/6 px-2.5 py-1.5 text-xs font-medium text-white/80 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-white disabled:opacity-40"
+            onClick={() => openUpload()}
+            title="Upload your own movie, episode, or video file (resumable chunked transfer — no 413 errors)"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-black transition hover:bg-accent-600"
           >
-            {uploadPct !== null ? (
-              <>
-                <Loader2 size={13} className="animate-spin text-accent" />
-                Uploading {uploadPct}%
-              </>
-            ) : (
-              <>
-                <Upload size={13} />
-                Import MP4
-              </>
-            )}
+            <Upload size={13} />
+            Upload Movie / Video
           </button>
+
+          <Link
+            to="/downloads?bulk=1"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-accent/15 px-2.5 py-1.5 text-xs font-semibold text-accent ring-1 ring-accent/35 transition hover:bg-accent/25"
+          >
+            <FolderDown size={13} />
+            Bulk Download Season
+          </Link>
 
           <button
             type="button"
@@ -314,6 +357,25 @@ export default function DownloadedPage() {
           ) : null}
         </div>
       </div>
+
+      <div className="mt-4">
+        <UploadQueuePanel onPlayItem={(item) => player.open(localItemToPlayback(item))} />
+      </div>
+
+      <UploadVideoModal
+        open={uploadOpen}
+        initialCategory={uploadCategory}
+        initialFiles={droppedFiles}
+        onClose={() => {
+          setUploadOpen(false)
+          setDroppedFiles(undefined)
+        }}
+        onQueued={(count, cat) => {
+          toast(
+            `Uploading ${count} ${cat === 'movie' ? (count === 1 ? 'movie' : 'movies') : count === 1 ? 'video' : 'videos'} in resumable chunks`,
+          )
+        }}
+      />
 
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-1">
@@ -399,20 +461,21 @@ export default function DownloadedPage() {
           </p>
           {items.length === 0 ? (
             <div className="mt-4 flex flex-wrap justify-center gap-2">
-              <Link
-                to="/"
-                className="rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-black transition hover:bg-accent-600"
-              >
-                Find anime to download
-              </Link>
               <button
                 type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-white/6 px-4 py-2 text-xs font-medium text-white/80 ring-1 ring-white/10 transition hover:bg-white/10"
+                onClick={() => openUpload('movie')}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-black transition hover:bg-accent-600"
               >
                 <Upload size={13} />
-                Import an MP4 file
+                Upload a Movie or Video
               </button>
+              <Link
+                to="/downloads?bulk=1"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-white/8 px-4 py-2 text-xs font-medium text-white/85 ring-1 ring-white/12 transition hover:bg-white/12"
+              >
+                <FolderDown size={13} className="text-accent" />
+                Bulk Download a Season
+              </Link>
             </div>
           ) : null}
         </div>
@@ -456,8 +519,9 @@ export default function DownloadedPage() {
                       ) : null}
                     </div>
                     <p className="mt-0.5 text-[11px] text-white/40">
-                      {group.seasons.length} season{group.seasons.length === 1 ? '' : 's'} · {totalEps}{' '}
-                      file{totalEps === 1 ? '' : 's'} · {formatBytes(group.totalBytes)}
+                      {group.isMovieGroup
+                        ? `${totalEps} movie file${totalEps === 1 ? '' : 's'} · ${formatBytes(group.totalBytes)}`
+                        : `${group.seasons.length} season${group.seasons.length === 1 ? '' : 's'} · ${totalEps} file${totalEps === 1 ? '' : 's'} · ${formatBytes(group.totalBytes)}`}
                     </p>
                   </div>
                 </div>
@@ -465,13 +529,15 @@ export default function DownloadedPage() {
                 <div className="divide-y divide-white/5">
                   {group.seasons.map((seasonBlock) => (
                     <div key={seasonBlock.season} className="px-4 py-3">
-                      <h3 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold tracking-wider text-white/40 uppercase">
-                        <Folder size={12} className="text-accent/80" />
-                        {seasonBlock.label}
-                        <span className="font-normal text-white/30 normal-case">
-                          ({seasonBlock.items.length})
-                        </span>
-                      </h3>
+                      {!group.isMovieGroup ? (
+                        <h3 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold tracking-wider text-white/40 uppercase">
+                          <Folder size={12} className="text-accent/80" />
+                          {seasonBlock.label}
+                          <span className="font-normal text-white/30 normal-case">
+                            ({seasonBlock.items.length})
+                          </span>
+                        </h3>
+                      ) : null}
 
                       <div className="space-y-1.5">
                         {seasonBlock.items.map((item) => (
@@ -481,8 +547,10 @@ export default function DownloadedPage() {
                             selectMode={selectMode}
                             checked={selected.has(item.id)}
                             busy={deleteBusy === item.id}
+                            subBusy={subBusyId === item.id}
                             onToggle={() => toggleItem(item.id)}
                             onPlay={() => player.open(localItemToPlayback(item))}
+                            onAttachSub={(ev) => void onAttachSubtitle(item, ev)}
                             onDelete={() => void onDeleteOne(item)}
                           />
                         ))}
@@ -520,8 +588,10 @@ export default function DownloadedPage() {
                     selectMode={selectMode}
                     checked={selected.has(item.id)}
                     busy={deleteBusy === item.id}
+                    subBusy={subBusyId === item.id}
                     onToggle={() => toggleItem(item.id)}
                     onPlay={() => player.open(localItemToPlayback(item))}
+                    onAttachSub={(ev) => void onAttachSubtitle(item, ev)}
                     onDelete={() => void onDeleteOne(item)}
                   />
                 ))}
@@ -539,19 +609,24 @@ function LibraryFileRow({
   selectMode,
   checked,
   busy,
+  subBusy,
   onToggle,
   onPlay,
+  onAttachSub,
   onDelete,
 }: {
   item: LibraryItem
   selectMode: boolean
   checked: boolean
   busy: boolean
+  subBusy: boolean
   onToggle: () => void
   onPlay: () => void
+  onAttachSub: (ev: ChangeEvent<HTMLInputElement>) => void
   onDelete: () => void
 }) {
-  const code = item.known && item.episode ? formatEpisodeCode(item.season, item.episode) : null
+  const code =
+    item.known && !item.isMovie && item.episode ? formatEpisodeCode(item.season, item.episode) : null
 
   return (
     <div
@@ -641,6 +716,21 @@ function LibraryFileRow({
           <Play size={11} className="fill-current" />
           <span className="hidden sm:inline">Play</span>
         </button>
+
+        <label
+          title={item.hasSubtitle ? 'Replace subtitle (.srt/.vtt/.ass)' : 'Attach subtitle (.srt/.vtt/.ass)'}
+          className={`inline-flex cursor-pointer items-center gap-1 rounded-md bg-white/6 px-2 py-1 text-[11px] font-medium text-white/70 ring-1 ring-white/10 transition hover:bg-white/12 hover:text-white ${
+            subBusy ? 'pointer-events-none opacity-40' : ''
+          }`}
+        >
+          {subBusy ? <Loader2 size={12} className="animate-spin" /> : <Subtitles size={12} />}
+          <input
+            type="file"
+            accept=".vtt,.srt,.ass,.ssa"
+            className="hidden"
+            onChange={onAttachSub}
+          />
+        </label>
 
         <a
           href={api.localDownloadUrl(item.id)}

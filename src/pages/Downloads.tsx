@@ -1,5 +1,5 @@
-import { useMemo, useState, type FormEvent } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   AlertTriangle,
   Check,
@@ -10,22 +10,26 @@ import {
   Download,
   ExternalLink,
   Film,
+  FolderDown,
   Globe,
   Loader2,
   Pause,
   Play,
   Plus,
   RotateCw,
+  Search,
   Square,
   Trash2,
+  Upload,
   X,
 } from 'lucide-react'
-import type { DownloadJob, DownloadStatus } from '../types'
+import type { DownloadJob, DownloadStatus, ProviderSearchResult } from '../types'
 import { api } from '../lib/api'
 import {
   bulkDownloadAction,
   cancelDownload,
   deleteDownload,
+  enqueueBulkDownload,
   enqueueDownload,
   pauseDownload,
   resumeDownload,
@@ -34,10 +38,17 @@ import {
   useLibrary,
 } from '../lib/downloads'
 import { saveSettings, useSettings } from '../lib/settings'
-import { formatBytes, formatQualityLabel, formatSpeed, relativeTime } from '../lib/format'
+import {
+  formatBytes,
+  formatQualityLabel,
+  formatSpeed,
+  inferSeasonFromTitle,
+  relativeTime,
+} from '../lib/format'
 import { DownloadsTabs } from '../components/DownloadsTabs'
 import { useDetail } from '../components/MediaModal'
 import { localItemToPlayback, usePlayer } from '../components/Player'
+import { UploadQueuePanel, UploadVideoModal } from '../components/UploadVideoModal'
 import { useToast } from '../components/Toasts'
 
 type FilterKey = 'all' | 'active' | 'queued' | 'paused' | 'completed' | 'failed'
@@ -113,6 +124,7 @@ export default function DownloadsPage() {
   const openDetail = useDetail()
   const toast = useToast()
 
+  const [searchParams, setSearchParams] = useSearchParams()
   const [filter, setFilter] = useState<FilterKey>('all')
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
   const [deleteLocalToo, setDeleteLocalToo] = useState(false)
@@ -120,6 +132,147 @@ export default function DownloadsPage() {
   const [bulkBusy, setBulkBusy] = useState(false)
   const [concurrencyBusy, setConcurrencyBusy] = useState(false)
   const [showExternal, setShowExternal] = useState(false)
+  const [showSeasonBulk, setShowSeasonBulk] = useState(false)
+  const [showUpload, setShowUpload] = useState(false)
+
+  // Bulk whole-season search & queue state
+  const [seasonSearch, setSeasonSearch] = useState('')
+  const [seasonSearchBusy, setSeasonSearchBusy] = useState(false)
+  const [seasonMatches, setSeasonMatches] = useState<ProviderSearchResult[]>([])
+  const [pickedMatch, setPickedMatch] = useState<ProviderSearchResult | null>(null)
+  const [availableEps, setAvailableEps] = useState<number[]>([])
+  const [epsLoading, setEpsLoading] = useState(false)
+  const [seasonNum, setSeasonNum] = useState(1)
+  const [seasonQuality, setSeasonQuality] = useState('best')
+  const [seasonDub, setSeasonDub] = useState(false)
+  const [seasonMode, setSeasonMode] = useState<'season' | 'range' | 'pick'>('season')
+  const [seasonStart, setSeasonStart] = useState(1)
+  const [seasonEnd, setSeasonEnd] = useState(12)
+  const [pickedEps, setPickedEps] = useState<Set<number>>(() => new Set())
+  const [seasonQueueBusy, setSeasonQueueBusy] = useState(false)
+
+  useEffect(() => {
+    setSeasonQuality(settings.quality || 'best')
+    setSeasonDub(Boolean(settings.dub))
+  }, [settings.quality, settings.dub])
+
+  useEffect(() => {
+    if (searchParams.get('bulk') === '1') {
+      setShowSeasonBulk(true)
+      setShowExternal(false)
+      const next = new URLSearchParams(searchParams)
+      next.delete('bulk')
+      setSearchParams(next, { replace: true })
+    }
+  }, [searchParams, setSearchParams])
+
+  async function selectProviderMatch(query: string, match: ProviderSearchResult) {
+    setPickedMatch(match)
+    const inferred = inferSeasonFromTitle(match.title)
+    setSeasonNum(inferred.season)
+    setAvailableEps([])
+    setPickedEps(new Set())
+    setEpsLoading(true)
+    try {
+      const epRes = await api.resolverEpisodes(query, match.index)
+      setAvailableEps(epRes.episodes)
+      if (epRes.episodes.length > 0) {
+        setSeasonStart(epRes.episodes[0])
+        setSeasonEnd(epRes.episodes[epRes.episodes.length - 1])
+        setPickedEps(new Set(epRes.episodes))
+      }
+    } catch {
+      /* still allow whole-season auto-discovery on submit */
+    } finally {
+      setEpsLoading(false)
+    }
+  }
+
+  async function onSearchSeasonAnime(ev: FormEvent) {
+    ev.preventDefault()
+    const q = seasonSearch.trim()
+    if (!q) return
+    setSeasonSearchBusy(true)
+    setSeasonMatches([])
+    setPickedMatch(null)
+    setAvailableEps([])
+    try {
+      const { results } = await api.resolverSearch(q)
+      setSeasonMatches(results)
+      if (!results.length) {
+        toast(`No anime found for "${q}"`, 'err')
+        return
+      }
+      await selectProviderMatch(q, results[0])
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Search failed', 'err')
+    } finally {
+      setSeasonSearchBusy(false)
+    }
+  }
+
+  async function onSubmitSeasonBulk() {
+    const q = seasonSearch.trim()
+    if (!q || !pickedMatch) return
+    setSeasonQueueBusy(true)
+    try {
+      const res = await enqueueBulkDownload(
+        seasonMode === 'range'
+          ? {
+              mode: 'range',
+              animeTitle: pickedMatch.title,
+              query: q,
+              resultIndex: pickedMatch.index,
+              providerTitle: pickedMatch.title,
+              season: seasonNum,
+              startEpisode: Math.max(1, seasonStart),
+              endEpisode: Math.max(seasonStart, seasonEnd),
+              quality: seasonQuality,
+              dub: seasonDub,
+              format: 'TV',
+            }
+          : seasonMode === 'pick'
+            ? {
+                mode: 'episodes',
+                animeTitle: pickedMatch.title,
+                query: q,
+                resultIndex: pickedMatch.index,
+                providerTitle: pickedMatch.title,
+                season: seasonNum,
+                episodes: [...pickedEps].sort((a, b) => a - b),
+                quality: seasonQuality,
+                dub: seasonDub,
+                format: 'TV',
+              }
+            : {
+                mode: 'season',
+                animeTitle: pickedMatch.title,
+                query: q,
+                resultIndex: pickedMatch.index,
+                providerTitle: pickedMatch.title,
+                season: seasonNum,
+                episodes: availableEps.length > 0 ? availableEps : undefined,
+                discoverFromProvider: availableEps.length === 0,
+                quality: seasonQuality,
+                dub: seasonDub,
+                format: 'TV',
+              },
+      )
+      const parts = [
+        res.queuedCount > 0
+          ? `Queued ${res.queuedCount} episode${res.queuedCount === 1 ? '' : 's'} of ${pickedMatch.title}`
+          : 'Nothing new to queue',
+      ]
+      if (res.skippedDownloaded > 0) parts.push(`${res.skippedDownloaded} already local`)
+      if (res.skippedQueued > 0) parts.push(`${res.skippedQueued} already queued`)
+      toast(parts.join(' · '))
+      if (res.queuedCount > 0) setShowSeasonBulk(false)
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not queue season download', 'err')
+    } finally {
+      setSeasonQueueBusy(false)
+    }
+  }
 
   // External source form state
   const [extTitle, setExtTitle] = useState('')
@@ -329,18 +482,299 @@ export default function DownloadsPage() {
 
           <button
             type="button"
-            onClick={() => setShowExternal((v) => !v)}
+            onClick={() => {
+              setShowSeasonBulk((v) => !v)
+              setShowExternal(false)
+            }}
             className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-              showExternal
-                ? 'bg-accent/20 text-accent ring-1 ring-accent/40'
+              showSeasonBulk
+                ? 'bg-accent/20 text-accent ring-1 ring-accent/45'
                 : 'bg-accent text-black hover:bg-accent-600'
             }`}
           >
+            <FolderDown size={14} />
+            Bulk Download Season
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowUpload(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-white/8 px-3 py-1.5 text-xs font-medium text-white/90 ring-1 ring-white/15 transition hover:bg-white/14"
+          >
+            <Upload size={13} className="text-accent" />
+            Upload Movie
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setShowExternal((v) => !v)
+              setShowSeasonBulk(false)
+            }}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium ring-1 transition ${
+              showExternal
+                ? 'bg-accent/20 text-accent ring-accent/40'
+                : 'bg-white/6 text-white/80 ring-white/12 hover:bg-white/12 hover:text-white'
+            }`}
+          >
             <Plus size={14} />
-            External source
+            External URL
           </button>
         </div>
       </div>
+
+      <UploadVideoModal
+        open={showUpload}
+        initialCategory="movie"
+        onClose={() => setShowUpload(false)}
+        onQueued={(count, cat) =>
+          toast(
+            `Uploading ${count} ${cat === 'movie' ? (count === 1 ? 'movie' : 'movies') : count === 1 ? 'video' : 'videos'} in resumable chunks`,
+          )
+        }
+      />
+
+      <div className="mt-4">
+        <UploadQueuePanel onPlayItem={(item) => player.open(localItemToPlayback(item))} />
+      </div>
+
+      {showSeasonBulk ? (
+        <section className="mt-4 rounded-xl bg-ink-900 p-4 ring-1 ring-accent/35 md:p-5">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <h2 className="flex items-center gap-2 text-xs font-semibold tracking-wider text-white/85 uppercase">
+                <FolderDown size={14} className="text-accent" />
+                Bulk Download Whole Season
+              </h2>
+              <p className="mt-0.5 text-[11px] text-white/45">
+                Search any anime, pick the season match, and download every episode (or a range) automatically into{' '}
+                <span className="font-mono text-white/60">Anime Name / Season 01 / S01E01.mp4</span>.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowSeasonBulk(false)}
+              className="rounded p-1 text-white/40 hover:text-white"
+              aria-label="Close bulk season downloader"
+            >
+              <X size={15} />
+            </button>
+          </div>
+
+          <form onSubmit={(ev) => void onSearchSeasonAnime(ev)} className="mt-3 flex gap-2">
+            <div className="relative min-w-0 flex-1">
+              <Search
+                size={14}
+                className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-white/35"
+              />
+              <input
+                value={seasonSearch}
+                onChange={(ev) => setSeasonSearch(ev.target.value)}
+                placeholder="Type anime title (e.g. Frieren, Solo Leveling, Dandadan)…"
+                className="w-full rounded-lg bg-ink-800 py-2 pr-3 pl-9 text-sm text-white placeholder:text-white/30 ring-1 ring-white/10 outline-none focus:ring-accent/60"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={seasonSearchBusy || !seasonSearch.trim()}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-black transition hover:bg-accent-600 disabled:opacity-40"
+            >
+              {seasonSearchBusy ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+              Find Season
+            </button>
+          </form>
+
+          {seasonMatches.length > 0 && (
+            <div className="mt-3 space-y-3">
+              <div>
+                <span className="mb-1.5 block text-[11px] text-white/45">Select season / entry:</span>
+                <div className="grid max-h-40 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
+                  {seasonMatches.map((m) => {
+                    const active = pickedMatch?.index === m.index
+                    return (
+                      <button
+                        key={m.slug}
+                        type="button"
+                        onClick={() => void selectProviderMatch(seasonSearch.trim(), m)}
+                        className={`flex items-center gap-2 rounded-lg px-3 py-2 text-left text-xs ring-1 transition ${
+                          active
+                            ? 'bg-accent/18 font-medium text-accent ring-accent/50'
+                            : 'bg-ink-850 text-white/75 ring-white/8 hover:bg-ink-800 hover:text-white'
+                        }`}
+                      >
+                        <span className="shrink-0 font-mono text-[10px] opacity-60">#{m.index}</span>
+                        <span className="min-w-0 flex-1 truncate">{m.title}</span>
+                        {active ? <Check size={13} className="shrink-0" /> : null}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {pickedMatch && (
+                <div className="space-y-3 rounded-xl bg-ink-850 p-3.5 ring-1 ring-white/8">
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <label className="block">
+                      <span className="mb-1 block text-[11px] text-white/45">Download mode</span>
+                      <select
+                        value={seasonMode}
+                        onChange={(ev) => setSeasonMode(ev.target.value as 'season' | 'range' | 'pick')}
+                        className="w-full rounded-lg bg-ink-800 px-2.5 py-2 text-xs text-white ring-1 ring-white/10 outline-none focus:ring-accent/60"
+                      >
+                        <option value="season">
+                          Whole Season{availableEps.length ? ` (${availableEps.length} eps)` : ''}
+                        </option>
+                        <option value="range">Episode Range</option>
+                        <option value="pick">Pick Specific Episodes</option>
+                      </select>
+                    </label>
+
+                    <label className="block">
+                      <span className="mb-1 block text-[11px] text-white/45">Save as Season #</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={99}
+                        value={seasonNum}
+                        onChange={(ev) => setSeasonNum(Math.max(1, Math.min(99, Number(ev.target.value) || 1)))}
+                        className="w-full rounded-lg bg-ink-800 px-2.5 py-2 text-xs text-white ring-1 ring-white/10 outline-none focus:ring-accent/60"
+                      />
+                    </label>
+
+                    <label className="block">
+                      <span className="mb-1 block text-[11px] text-white/45">Quality</span>
+                      <select
+                        value={seasonQuality}
+                        onChange={(ev) => setSeasonQuality(ev.target.value)}
+                        className="w-full rounded-lg bg-ink-800 px-2.5 py-2 text-xs text-white ring-1 ring-white/10 outline-none focus:ring-accent/60"
+                      >
+                        {QUALITY_CHOICES.map((q) => (
+                          <option key={q.value} value={q.value}>
+                            {q.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="block">
+                      <span className="mb-1 block text-[11px] text-white/45">Audio</span>
+                      <select
+                        value={seasonDub ? 'dub' : 'sub'}
+                        onChange={(ev) => setSeasonDub(ev.target.value === 'dub')}
+                        className="w-full rounded-lg bg-ink-800 px-2.5 py-2 text-xs text-white ring-1 ring-white/10 outline-none focus:ring-accent/60"
+                      >
+                        <option value="sub">Japanese (Sub)</option>
+                        <option value="dub">English (Dub)</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  {seasonMode === 'range' && (
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="text-white/55">Episodes</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={9999}
+                        value={seasonStart}
+                        onChange={(ev) => setSeasonStart(Math.max(1, Number(ev.target.value) || 1))}
+                        className="w-20 rounded-lg bg-ink-800 px-2.5 py-1.5 text-xs text-white ring-1 ring-white/10 outline-none focus:ring-accent/60"
+                      />
+                      <span className="text-white/40">through</span>
+                      <input
+                        type="number"
+                        min={seasonStart}
+                        max={9999}
+                        value={seasonEnd}
+                        onChange={(ev) => setSeasonEnd(Math.max(seasonStart, Number(ev.target.value) || seasonStart))}
+                        className="w-20 rounded-lg bg-ink-800 px-2.5 py-1.5 text-xs text-white ring-1 ring-white/10 outline-none focus:ring-accent/60"
+                      />
+                    </div>
+                  )}
+
+                  {seasonMode === 'pick' && availableEps.length > 0 && (
+                    <div>
+                      <div className="mb-1.5 flex items-center justify-between text-[11px] text-white/50">
+                        <span>{pickedEps.size} of {availableEps.length} episodes checked</span>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setPickedEps(new Set(availableEps))}
+                            className="hover:text-white"
+                          >
+                            All
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPickedEps(new Set())}
+                            className="hover:text-white"
+                          >
+                            None
+                          </button>
+                        </div>
+                      </div>
+                      <div className="grid max-h-36 grid-cols-6 gap-1 overflow-y-auto sm:grid-cols-10 md:grid-cols-12">
+                        {availableEps.map((ep) => {
+                          const on = pickedEps.has(ep)
+                          return (
+                            <button
+                              key={ep}
+                              type="button"
+                              onClick={() =>
+                                setPickedEps((prev) => {
+                                  const next = new Set(prev)
+                                  if (next.has(ep)) next.delete(ep)
+                                  else next.add(ep)
+                                  return next
+                                })
+                              }
+                              className={`rounded py-1 font-mono text-[11px] ring-1 transition ${
+                                on
+                                  ? 'bg-accent font-semibold text-black ring-accent'
+                                  : 'bg-ink-800 text-white/60 ring-white/10 hover:text-white'
+                              }`}
+                            >
+                              {ep}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                    <span className="text-xs text-white/50">
+                      {epsLoading
+                        ? 'Checking available episodes…'
+                        : availableEps.length > 0
+                          ? `${availableEps.length} episode${availableEps.length === 1 ? '' : 's'} found (EP ${availableEps[0]}–${availableEps[availableEps.length - 1]})`
+                          : 'Will automatically fetch every episode on queue'}
+                    </span>
+
+                    <button
+                      type="button"
+                      disabled={seasonQueueBusy || (seasonMode === 'pick' && pickedEps.size === 0)}
+                      onClick={() => void onSubmitSeasonBulk()}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-black transition hover:bg-accent-600 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {seasonQueueBusy ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <FolderDown size={14} />
+                      )}
+                      {seasonMode === 'season'
+                        ? `Download Whole Season${availableEps.length ? ` (${availableEps.length} eps)` : ''}`
+                        : seasonMode === 'range'
+                          ? `Download EP ${seasonStart}–${seasonEnd}`
+                          : `Download ${pickedEps.size} Episode${pickedEps.size === 1 ? '' : 's'}`}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      ) : null}
 
       {showExternal ? (
         <form
@@ -672,18 +1106,25 @@ export default function DownloadsPage() {
             </p>
             {jobs.length === 0 ? (
               <div className="mt-4 flex flex-wrap justify-center gap-2">
-                <Link
-                  to="/"
-                  className="rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-black transition hover:bg-accent-600"
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSeasonBulk(true)
+                    setShowExternal(false)
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-black transition hover:bg-accent-600"
                 >
-                  Browse anime
-                </Link>
-                <Link
-                  to="/downloaded"
-                  className="rounded-lg bg-white/5 px-4 py-2 text-xs font-medium text-white/75 ring-1 ring-white/10 transition hover:bg-white/10"
+                  <FolderDown size={14} />
+                  Bulk Download Whole Season
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowUpload(true)}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-white/8 px-4 py-2 text-xs font-medium text-white/85 ring-1 ring-white/12 transition hover:bg-white/12"
                 >
-                  Open shared library
-                </Link>
+                  <Upload size={13} className="text-accent" />
+                  Upload Movie / Video
+                </button>
               </div>
             ) : null}
           </div>

@@ -50,6 +50,10 @@ optional environment variables:
 - `LIBRARY_DIR` — path to the shared media library (default: `./library`,
   excluded from Git; existing media is never overwritten or deleted on updates)
 - `MAX_CONCURRENT_DOWNLOADS` — default simultaneous downloads (`1`–`6`, default `2`)
+- `ANIME_MAX_UPLOAD_GB` — maximum single uploaded movie/video size in GB (default `256`;
+  uploads transfer in adaptive resumable chunks starting at 900 KB so they work
+  behind default Nginx `client_max_body_size 1m`, Cloudflare Tunnel, and Caddy
+  with zero proxy reconfiguration)
 - `ALLOWED_SOURCE_HOSTS` — comma-separated approved hostnames/wildcards (e.g.
   `cdn.example.com,*.example.org`) for external MP4/M3U8 downloads
 - `FFMPEG_BIN` — custom path to the `ffmpeg` binary
@@ -73,7 +77,7 @@ optional environment variables:
 | `/api/live/stream` | GET | Episode stream, remuxed for the browser |
 | `/api/live/subtitle` | GET | Episode subtitles as WebVTT |
 | `/api/downloads` | GET/POST | List queue snapshot or enqueue an episode / external URL |
-| `/api/downloads/bulk` | POST | Queue selected episodes, a range, a season, or a series |
+| `/api/downloads/bulk` | POST | Queue selected episodes, a range, a whole season, full series, or multiple shows |
 | `/api/downloads/events` | GET | Server-Sent Events stream for live download & library updates |
 | `/api/downloads/actions` | POST | Bulk pause, resume, cancel, retry, delete, or clear finished |
 | `/api/downloads/:id/pause` | POST | Pause a download |
@@ -83,11 +87,15 @@ optional environment variables:
 | `/api/downloads/:id` | DELETE | Delete a download entry (optional `?deleteFile=1`) |
 | `/api/library` | GET | List local episodes, movies, and standalone MP4 files (opaque IDs) |
 | `/api/library/anime/:mediaId` | GET | List downloaded local files for a specific anime |
-| `/api/library/import` | POST | Import an MP4/video file into `library/Unsorted/` |
+| `/api/library/uploads` | POST | Start or resume a chunked movie / episode / video upload session |
+| `/api/library/uploads/:uploadId` | GET/DELETE | Query uploaded byte offset or cancel a staged upload session |
+| `/api/library/uploads/:uploadId/chunk` | POST | Append a sequential binary chunk (`?offset=` / `X-Upload-Offset`) |
+| `/api/library/uploads/:uploadId/complete` | POST | Validate container and atomically commit uploaded video to `library/` |
+| `/api/library/import` | POST | Single-request video import (`?filename=&category=movie\|episode\|unknown`) |
 | `/api/library/bulk-delete` | POST | Delete multiple local files without removing anime metadata |
 | `/api/library/:id/stream` | GET | Play a local file via HTTP byte ranges (or ffmpeg remux) |
 | `/api/library/:id/download` | GET | Download a local file to a client device |
-| `/api/library/:id/subtitle` | GET | Serve a local sidecar subtitle as WebVTT |
+| `/api/library/:id/subtitle` | GET/POST | Serve or attach (chunked) a local sidecar subtitle (`.vtt`/`.srt`/`.ass`) |
 | `/api/library/:id` | DELETE | Delete one local file without removing anime metadata |
 | `/api/health` | GET | Server status |
 

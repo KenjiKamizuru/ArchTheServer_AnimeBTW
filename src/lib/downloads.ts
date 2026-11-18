@@ -251,10 +251,8 @@ export async function bulkDeleteLibraryFiles(ids: string[]) {
   return res
 }
 
-export async function importLibraryVideo(file: File, onProgress?: (percent: number) => void) {
-  const res = await api.importLibraryVideo(file, onProgress)
-  await refreshLibrary(true)
-  return res.item
+export async function refreshLibraryNow() {
+  return refreshLibrary(true)
 }
 
 function normKey(value: string | null | undefined): string {
