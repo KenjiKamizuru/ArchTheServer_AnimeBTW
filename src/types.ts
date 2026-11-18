@@ -41,8 +41,23 @@ export interface StreamingEpisode {
   site: string
 }
 
+export interface RelatedSeason {
+  id: number
+  relationType: 'PREQUEL' | 'SEQUEL'
+  title: string
+  romaji: string | null
+  format: string | null
+  status: string
+  episodes: number | null
+  airedEpisodes: number
+  season: MediaSeason | null
+  seasonYear: number | null
+  cover: string | null
+}
+
 export interface MediaDetail extends Media {
   streamingEpisodes: StreamingEpisode[]
+  relatedSeasons?: RelatedSeason[]
 }
 
 export interface Bookmark {
@@ -55,6 +70,12 @@ export interface AppSettings {
   quality: string
   dub: boolean
   resultIndex: number
+  libraryDir: string
+  libraryDirLocked: boolean
+  maxConcurrentDownloads: number
+  preferLocalPlayback: boolean
+  allowedExternalHosts: string[]
+  envExternalHostsConfigured: boolean
   updatedAt: number
 }
 
@@ -62,6 +83,13 @@ export interface ProviderSearchResult {
   index: number
   slug: string
   title: string
+}
+
+export interface ProviderEpisodesResult {
+  title: string
+  slug: string
+  index: number
+  episodes: number[]
 }
 
 export interface ProviderMatch {
@@ -81,9 +109,177 @@ export interface ResolverStatus {
 export interface WatchResult {
   resolved: boolean
   videoUrl: string
+  audioUrl: string | null
   height: number
+  hls: boolean
   subtitleUrl: string | null
   referer: string
   title: string
   slug: string
 }
+
+export type DownloadStatus =
+  | 'queued'
+  | 'resolving'
+  | 'downloading'
+  | 'paused'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+
+export interface DownloadJob {
+  id: string
+  sourceType: 'resolver' | 'external'
+  mediaId: number | null
+  animeTitle: string
+  seriesTitle: string
+  season: number
+  episode: number
+  code: string
+  fileName: string
+  folder: string
+  quality: string
+  resolvedHeight: number | null
+  dub: boolean
+  format: string | null
+  cover: string | null
+  status: DownloadStatus
+  progress: number | null
+  downloadedBytes: number
+  totalBytes: number | null
+  durationSec: number | null
+  downloadedSec: number
+  speedBps: number | null
+  canPause: boolean
+  canResume: boolean
+  fileId: string | null
+  error: string | null
+  createdAt: number
+  updatedAt: number
+  startedAt: number | null
+  completedAt: number | null
+}
+
+export interface DownloadsSnapshot {
+  jobs: DownloadJob[]
+  maxConcurrent: number
+  counts: {
+    active: number
+    queued: number
+    paused: number
+    completed: number
+    failed: number
+    total: number
+  }
+}
+
+export interface LibraryItem {
+  id: string
+  fileName: string
+  folder: string
+  container: string
+  mediaId: number | null
+  seriesTitle: string | null
+  animeTitle: string | null
+  season: number | null
+  episode: number | null
+  quality: string | null
+  resolvedHeight: number | null
+  dub: boolean
+  format: string | null
+  isMovie: boolean
+  known: boolean
+  cover: string | null
+  size: number
+  addedAt: number
+  modifiedAt: number
+  hasSubtitle: boolean
+  directPlayable: boolean
+}
+
+export interface LibraryStats {
+  totalFiles: number
+  episodeCount: number
+  movieCount: number
+  unknownCount: number
+  totalBytes: number
+}
+
+export interface LibraryResponse {
+  items: LibraryItem[]
+  stats: LibraryStats
+}
+
+export interface EnqueueDownloadPayload {
+  sourceType?: 'resolver' | 'external'
+  mediaId?: number | null
+  animeTitle: string
+  seriesTitle?: string
+  query?: string
+  resultIndex?: number
+  providerTitle?: string
+  season?: number
+  episode?: number
+  quality?: string
+  dub?: boolean
+  format?: string | null
+  cover?: string | null
+  durationMinutes?: number | null
+  url?: string
+  subtitleUrl?: string
+  referer?: string
+  headers?: Record<string, string>
+}
+
+export interface EnqueueDownloadResult {
+  status: 'queued' | 'already_downloaded' | 'already_queued'
+  job: DownloadJob | null
+  file: LibraryItem | null
+}
+
+export interface BulkSeasonSpec {
+  mediaId?: number | null
+  animeTitle: string
+  query?: string
+  resultIndex?: number
+  providerTitle?: string
+  season: number
+  episodes?: number[]
+  episodeCount?: number
+  discoverFromProvider?: boolean
+  format?: string | null
+  cover?: string | null
+  durationMinutes?: number | null
+}
+
+export interface BulkEnqueuePayload {
+  mode: 'episodes' | 'range' | 'season' | 'series'
+  mediaId?: number | null
+  animeTitle?: string
+  seriesTitle?: string
+  query?: string
+  resultIndex?: number
+  providerTitle?: string
+  season?: number
+  episodes?: number[]
+  startEpisode?: number
+  endEpisode?: number
+  episodeCount?: number
+  discoverFromProvider?: boolean
+  seasons?: BulkSeasonSpec[]
+  quality?: string
+  dub?: boolean
+  format?: string | null
+  cover?: string | null
+  durationMinutes?: number | null
+}
+
+export interface BulkEnqueueResult {
+  queued: DownloadJob[]
+  queuedCount: number
+  skippedDownloaded: number
+  skippedQueued: number
+  totalRequested: number
+}
+
+export type BulkDownloadAction = 'delete' | 'cancel' | 'retry' | 'pause' | 'resume' | 'clear-finished'

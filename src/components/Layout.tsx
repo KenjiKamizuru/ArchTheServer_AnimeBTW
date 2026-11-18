@@ -3,18 +3,31 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-do
 import {
   Bookmark,
   CalendarClock,
+  Download,
+  HardDrive,
   LayoutGrid,
   Play,
   Search,
   Settings2,
   Sparkles,
 } from 'lucide-react'
+import { useDownloads, useLibrary } from '../lib/downloads'
 
-const NAV = [
-  { to: '/', label: 'This Season', short: 'Season', icon: Sparkles, end: true },
-  { to: '/browse', label: 'Browse', short: 'Browse', icon: LayoutGrid },
-  { to: '/schedule', label: 'Airing', short: 'Airing', icon: CalendarClock },
-  { to: '/bookmarks', label: 'Bookmarks', short: 'Saved', icon: Bookmark },
+const DESKTOP_NAV = [
+  { to: '/', label: 'This Season', icon: Sparkles, end: true, badgeKey: null },
+  { to: '/browse', label: 'Browse', icon: LayoutGrid, end: false, badgeKey: null },
+  { to: '/schedule', label: 'Airing', icon: CalendarClock, end: false, badgeKey: null },
+  { to: '/downloads', label: 'Downloads', icon: Download, end: false, badgeKey: 'queue' as const },
+  { to: '/downloaded', label: 'Downloaded', icon: HardDrive, end: false, badgeKey: 'library' as const },
+  { to: '/bookmarks', label: 'Bookmarks', icon: Bookmark, end: false, badgeKey: null },
+]
+
+const MOBILE_NAV = [
+  { to: '/', short: 'Season', icon: Sparkles, end: true, matchLibrary: false },
+  { to: '/browse', short: 'Browse', icon: LayoutGrid, end: false, matchLibrary: false },
+  { to: '/schedule', short: 'Airing', icon: CalendarClock, end: false, matchLibrary: false },
+  { to: '/downloads', short: 'Downloads', icon: Download, end: false, matchLibrary: true },
+  { to: '/bookmarks', short: 'Saved', icon: Bookmark, end: false, matchLibrary: false },
 ]
 
 function Brand() {
@@ -35,6 +48,9 @@ export default function Layout() {
   const navigate = useNavigate()
   const location = useLocation()
   const [term, setTerm] = useState('')
+  const { counts } = useDownloads()
+  const { stats } = useLibrary()
+  const activeQueue = counts.active + counts.queued
 
   useEffect(() => {
     if (location.pathname === '/search') {
@@ -54,23 +70,42 @@ export default function Layout() {
         <Brand />
 
         <nav className="mt-7 space-y-1">
-          {NAV.map(({ to, label, icon: Icon, end }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={end}
-              className={({ isActive }) =>
-                `group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition ${
-                  isActive
-                    ? 'bg-accent/12 font-medium text-accent'
-                    : 'text-white/55 hover:bg-white/5 hover:text-white'
-                }`
-              }
-            >
-              <Icon size={17} className="shrink-0" />
-              <span className="flex-1">{label}</span>
-            </NavLink>
-          ))}
+          {DESKTOP_NAV.map(({ to, label, icon: Icon, end, badgeKey }) => {
+            const count =
+              badgeKey === 'queue'
+                ? activeQueue
+                : badgeKey === 'library'
+                  ? stats.totalFiles
+                  : 0
+            return (
+              <NavLink
+                key={to}
+                to={to}
+                end={end}
+                className={({ isActive }) =>
+                  `group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition ${
+                    isActive
+                      ? 'bg-accent/12 font-medium text-accent'
+                      : 'text-white/55 hover:bg-white/5 hover:text-white'
+                  }`
+                }
+              >
+                <Icon size={17} className="shrink-0" />
+                <span className="flex-1">{label}</span>
+                {count > 0 ? (
+                  <span
+                    className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums ${
+                      badgeKey === 'queue'
+                        ? 'bg-accent/20 text-accent'
+                        : 'bg-white/8 text-white/55'
+                    }`}
+                  >
+                    {count}
+                  </span>
+                ) : null}
+              </NavLink>
+            )
+          })}
         </nav>
 
         <div className="mt-auto space-y-2">
@@ -87,8 +122,9 @@ export default function Layout() {
           </NavLink>
           <div className="rounded-xl bg-ink-850 p-3 ring-1 ring-white/5">
             <p className="text-[11px] leading-relaxed text-white/40">
-              Metadata from AniList &amp; AniDB. Episodes stream from provider sites through{' '}
-              <span className="text-white/60">the built-in resolver</span>.
+              Downloaded episodes play directly from the{' '}
+              <span className="text-white/60">shared local library</span>, with automatic live
+              streaming fallback.
             </p>
           </div>
         </div>
@@ -134,21 +170,31 @@ export default function Layout() {
 
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-ink-900/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">
         <div className="flex items-stretch justify-around">
-          {NAV.map(({ to, short, icon: Icon, end }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={end}
-              className={({ isActive }) =>
-                `relative flex flex-1 flex-col items-center gap-1 py-2.5 text-[10px] transition ${
-                  isActive ? 'text-accent' : 'text-white/45'
-                }`
-              }
-            >
-              <Icon size={18} />
-              {short}
-            </NavLink>
-          ))}
+          {MOBILE_NAV.map(({ to, short, icon: Icon, end, matchLibrary }) => {
+            const extraActive = matchLibrary && location.pathname === '/downloaded'
+            return (
+              <NavLink
+                key={to}
+                to={to}
+                end={end}
+                className={({ isActive }) =>
+                  `relative flex flex-1 flex-col items-center gap-1 py-2.5 text-[10px] transition ${
+                    isActive || extraActive ? 'text-accent' : 'text-white/45'
+                  }`
+                }
+              >
+                <span className="relative">
+                  <Icon size={18} />
+                  {matchLibrary && activeQueue > 0 ? (
+                    <span className="absolute -top-1 -right-2 rounded-full bg-accent px-1 text-[9px] leading-tight font-bold text-black tabular-nums">
+                      {activeQueue}
+                    </span>
+                  ) : null}
+                </span>
+                {short}
+              </NavLink>
+            )
+          })}
         </div>
       </nav>
     </div>
