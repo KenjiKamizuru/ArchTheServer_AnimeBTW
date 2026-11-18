@@ -1,10 +1,68 @@
 // Path-traversal, SSRF, header-sanitization, and container/DRM validation helpers.
 
 import dns from 'node:dns/promises'
+import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+
+let atomicWriteSeq = 0
+
+export const RESERVED_OBJECT_KEYS = new Set([
+  '__proto__',
+  'prototype',
+  'constructor',
+  '__definegetter__',
+  '__definesetter__',
+  '__lookupgetter__',
+  '__lookupsetter__',
+  'hasownproperty',
+  'isprototypeof',
+  'propertyisenumerable',
+  'tolocalestring',
+  'tostring',
+  'valueof',
+])
+
+export function isSafeObjectKey(key) {
+  if (typeof key !== 'string' || !key) return false
+  return !RESERVED_OBJECT_KEYS.has(key.toLowerCase())
+}
+
+/**
+ * Atomically writes a private application data file (`0o600` inside a `0o700`
+ * parent dir) using a unique per-write temp filename so concurrent saves can
+ * never collide or leave truncated JSON on crash.
+ */
+export async function atomicWriteFile(filePath, content, { dirMode = 0o700, fileMode = 0o600 } = {}) {
+  const dir = path.dirname(filePath)
+  await fsp.mkdir(dir, { recursive: true, mode: dirMode })
+  atomicWriteSeq = (atomicWriteSeq + 1) % 1_000_000_000
+  const tmp = `${filePath}.${process.pid}.${atomicWriteSeq}.tmp`
+  try {
+    await fsp.writeFile(tmp, content, { mode: fileMode })
+    await fsp.rename(tmp, filePath)
+  } catch (err) {
+    await fsp.rm(tmp, { force: true }).catch(() => {})
+    throw err
+  }
+}
+
+/**
+ * Strips absolute local filesystem paths from unexpected error messages so API
+ * responses never disclose server directory structure.
+ */
+export function sanitizeErrorMessage(raw, fallback = 'Server error') {
+  const msg = String(raw ?? '').trim()
+  if (!msg) return fallback
+  const scrubbed = msg
+    .replace(/(?:\/[A-Za-z0-9._@-]+){2,}/g, '[path]')
+    .replace(/[A-Za-z]:\\(?:[^\s"'<>|*?\\]+\\?)+/g, '[path]')
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .trim()
+  return scrubbed.slice(0, 400) || fallback
+}
 
 const WINDOWS_RESERVED = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i
 
@@ -34,7 +92,18 @@ const PROTECTED_SYSTEM_PREFIXES = [
   '/root',
   '/run',
   '/var/run',
+  '/var/log',
+  '/var/lib',
+  '/var/spool',
+  '/var/mail',
+  '/private/etc',
+  '/private/var/run',
+  '/private/var/db',
+  '/System',
+  '/Library',
 ]
+
+const PROTECTED_HOME_DIRS = ['.ssh', '.gnupg', '.aws', '.kube', '.config', '.local/share/keyrings']
 
 // Default authorized media domains (built-in provider + common authorized CDNs).
 // Administrators can extend this list via settings or ALLOWED_SOURCE_HOSTS.
@@ -121,16 +190,81 @@ function isSameOrInside(target, container) {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
 }
 
+function isSameOrInsideCaseInsensitive(target, container) {
+  const rel = path.relative(container.toLowerCase(), target.toLowerCase())
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
+}
+
+function assertSafeResolvedLibraryPath(candidate, repoRoot) {
+  if (candidate === path.parse(candidate).root) {
+    throw httpError('Library path cannot be the filesystem root', 400)
+  }
+  if (isSameOrInside(repoRoot, candidate) || isSameOrInsideCaseInsensitive(repoRoot, candidate)) {
+    throw httpError('Library path cannot be the project root or a parent of it', 400)
+  }
+
+  // Block all source-code, build, dependency, git, and app-state directories
+  // (including case variations on macOS/Windows/case-insensitive filesystems).
+  for (const dir of PROTECTED_REPO_DIRS) {
+    const protectedPath = path.join(repoRoot, dir)
+    if (
+      isSameOrInside(candidate, protectedPath) ||
+      isSameOrInside(protectedPath, candidate) ||
+      isSameOrInsideCaseInsensitive(candidate, protectedPath) ||
+      isSameOrInsideCaseInsensitive(protectedPath, candidate)
+    ) {
+      throw httpError(`Library path cannot be inside the project's "${dir}" directory`, 400)
+    }
+  }
+
+  // Block hidden dot-directories directly inside the repository (e.g. .vscode, .env).
+  if (isSameOrInside(candidate, repoRoot)) {
+    const segments = path.relative(repoRoot, candidate).split(path.sep)
+    if (segments.some((seg) => seg.startsWith('.'))) {
+      throw httpError('Library path inside the project cannot contain hidden dot-directories', 400)
+    }
+  }
+
+  // Block sensitive credential directories inside the user's home folder.
+  const home = path.resolve(os.homedir())
+  if (candidate === home) {
+    throw httpError('Library path cannot be the home directory root itself; choose a subfolder', 400)
+  }
+  for (const rel of PROTECTED_HOME_DIRS) {
+    const protectedHome = path.join(home, rel)
+    if (isSameOrInside(candidate, protectedHome) || isSameOrInside(protectedHome, candidate)) {
+      throw httpError(`Library path cannot be inside protected directory "~/${rel}"`, 400)
+    }
+  }
+
+  // Block critical Unix/macOS OS system directories.
+  if (process.platform !== 'win32') {
+    for (const prefix of PROTECTED_SYSTEM_PREFIXES) {
+      if (candidate === prefix || candidate.startsWith(`${prefix}/`)) {
+        throw httpError(`Library path cannot be inside system directory "${prefix}"`, 400)
+      }
+    }
+  }
+}
+
 /**
  * Resolves and validates a configured library directory so downloaded media can
- * never be placed inside source-code, repository metadata, or OS directories.
+ * never be placed inside source-code, repository metadata, credential, or OS
+ * directories — including via symlinked paths.
  */
 export function validateLibraryDir(rawDir, rootDir) {
   const input = String(rawDir ?? '').trim()
   if (!input) throw httpError('Library path cannot be empty', 400)
-  if (input.includes('\0')) throw httpError('Library path contains invalid characters', 400)
+  if (/[\u0000-\u001f\u007f]/.test(input)) throw httpError('Library path contains invalid characters', 400)
 
   const repoRoot = path.resolve(rootDir)
+  let realRepoRoot = repoRoot
+  try {
+    realRepoRoot = fs.realpathSync(repoRoot)
+  } catch {
+    /* keep resolved */
+  }
+
   const expanded =
     input === '~'
       ? os.homedir()
@@ -139,36 +273,41 @@ export function validateLibraryDir(rawDir, rootDir) {
         : input
   const resolved = path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(repoRoot, expanded)
 
-  // Never allow filesystem root, the repo root itself, or an ancestor of the repo.
-  if (resolved === path.parse(resolved).root) {
-    throw httpError('Library path cannot be the filesystem root', 400)
-  }
-  if (isSameOrInside(repoRoot, resolved)) {
-    throw httpError('Library path cannot be the project root or a parent of it', 400)
-  }
+  assertSafeResolvedLibraryPath(resolved, repoRoot)
 
-  // Block all source-code, build, dependency, git, and app-state directories.
-  for (const dir of PROTECTED_REPO_DIRS) {
-    const protectedPath = path.join(repoRoot, dir)
-    if (isSameOrInside(resolved, protectedPath) || isSameOrInside(protectedPath, resolved)) {
-      throw httpError(`Library path cannot be inside the project's "${dir}" directory`, 400)
+  // Reject if the target path itself is a symlink, and resolve the deepest
+  // existing ancestor with realpathSync to prevent symlink-escape attacks.
+  try {
+    const st = fs.lstatSync(resolved)
+    if (st.isSymbolicLink()) {
+      throw httpError('Library path cannot be a symbolic link', 400)
     }
-  }
-
-  // Block hidden dot-directories directly inside the repository (e.g. .vscode, .env).
-  if (isSameOrInside(resolved, repoRoot)) {
-    const firstSegment = path.relative(repoRoot, resolved).split(path.sep)[0]
-    if (firstSegment?.startsWith('.')) {
-      throw httpError('Library path inside the project cannot start with a dot', 400)
+    if (!st.isDirectory()) {
+      throw httpError('Library path must be a directory, not a file', 400)
     }
+  } catch (err) {
+    if (err?.status) throw err
+    if (err?.code && err.code !== 'ENOENT') throw err
   }
 
-  // Block critical Unix OS system directories.
-  if (process.platform !== 'win32') {
-    for (const prefix of PROTECTED_SYSTEM_PREFIXES) {
-      if (resolved === prefix || resolved.startsWith(`${prefix}/`)) {
-        throw httpError(`Library path cannot be inside system directory "${prefix}"`, 400)
+  let probe = resolved
+  const trailing = []
+  while (true) {
+    try {
+      const st = fs.lstatSync(probe)
+      if (st.isSymbolicLink()) {
+        throw httpError('Library path cannot traverse a symbolic link', 400)
       }
+      const realProbe = fs.realpathSync(probe)
+      const canonicalTarget = trailing.length > 0 ? path.join(realProbe, ...trailing.reverse()) : realProbe
+      assertSafeResolvedLibraryPath(canonicalTarget, realRepoRoot)
+      break
+    } catch (err) {
+      if (err?.status) throw err
+      const parent = path.dirname(probe)
+      if (parent === probe) break
+      trailing.push(path.basename(probe))
+      probe = parent
     }
   }
 
@@ -358,8 +497,13 @@ export function isPrivateOrReservedIp(rawIp) {
     if (allZeroPrefix && h[5] === 0xffff) {
       return isPrivateIpv4Octets([h[6] >> 8, h[6] & 0xff, h[7] >> 8, h[7] & 0xff])
     }
-    // NAT64 64:ff9b::/96 and 64:ff9b:1::/48
+    // IPv4-translated SIIT ::ffff:0:w.x.y.z (RFC 2765)
+    if (h[0] === 0 && h[1] === 0 && h[2] === 0 && h[3] === 0 && h[4] === 0xffff && h[5] === 0) {
+      return isPrivateIpv4Octets([h[6] >> 8, h[6] & 0xff, h[7] >> 8, h[7] & 0xff])
+    }
+    // NAT64 64:ff9b::/96 and local-use 64:ff9b:1::/48
     if (h[0] === 0x0064 && h[1] === 0xff9b) {
+      if (h[2] === 0x0001) return true
       return isPrivateIpv4Octets([h[6] >> 8, h[6] & 0xff, h[7] >> 8, h[7] & 0xff])
     }
     // 6to4 2002::/16 embeds IPv4 in h[1], h[2]
@@ -368,8 +512,10 @@ export function isPrivateOrReservedIp(rawIp) {
     }
     // Discard-only 100::/64
     if (h[0] === 0x0100 && h[1] === 0 && h[2] === 0 && h[3] === 0) return true
-    // Documentation 2001:db8::/32 and Teredo 2001:0000::/32
-    if (h[0] === 0x2001 && (h[1] === 0x0db8 || h[1] === 0x0000)) return true
+    // IETF special-purpose 2001::/23 (Teredo, Benchmarking 2001:2::/48, ORCHID) & Documentation 2001:db8::/32
+    if (h[0] === 0x2001 && (h[1] < 0x0200 || h[1] === 0x0db8)) return true
+    // Deprecated 6bone 3ffe::/16 & Documentation 3fff::/20 (RFC 9637)
+    if (h[0] === 0x3ffe || (h[0] === 0x3fff && (h[1] & 0xf000) === 0)) return true
     // Unique local fc00::/7
     if ((h[0] & 0xfe00) === 0xfc00) return true
     // Link-local fe80::/10
@@ -388,15 +534,106 @@ function isBlockedHostname(hostname) {
     host === 'localhost' ||
     host.endsWith('.localhost') ||
     host.endsWith('.local') ||
+    host.endsWith('.localdomain') ||
     host.endsWith('.internal') ||
+    host.endsWith('.intranet') ||
+    host.endsWith('.private') ||
+    host.endsWith('.corp') ||
     host.endsWith('.home.arpa') ||
     host.endsWith('.lan') ||
+    host.endsWith('.svc.cluster.local') ||
+    host === 'kubernetes.default' ||
+    host === 'kubernetes.default.svc' ||
+    host === 'metadata' ||
     host === 'metadata.google.internal' ||
+    host === 'metadata.azure.com' ||
     host === 'instance-data'
   ) {
     return true
   }
   return false
+}
+
+/**
+ * Validates and normalizes an external hyperlink URL (rejects `javascript:`,
+ * `data:`, `file:`, credentials, and private/internal hosts). Returns `null` if unsafe.
+ */
+export function sanitizePublicHttpUrl(rawUrl, { httpsOnly = false, maxLen = 1024 } = {}) {
+  const str = String(rawUrl ?? '').trim()
+  if (!str || str.length > maxLen || /[\u0000-\u001f\u007f]/.test(str)) return null
+  let parsed
+  try {
+    parsed = new URL(str)
+  } catch {
+    return null
+  }
+  if (httpsOnly ? parsed.protocol !== 'https:' : parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    return null
+  }
+  if (parsed.username || parsed.password) return null
+  const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase()
+  if (!host || isBlockedHostname(host)) return null
+  if (net.isIP(host) !== 0 && isPrivateOrReservedIp(host)) return null
+  return parsed.href
+}
+
+/**
+ * Validates a cover/banner/thumbnail URL stored in bookmarks, downloads, or the
+ * library catalog. Accepts only public `https://` URLs or opaque `/api/artwork/` IDs
+ * so stored entries cannot trigger `javascript:` XSS or LAN `http://` CSRF beacons.
+ */
+export function sanitizeCoverUrl(rawUrl, maxLen = 500) {
+  const str = String(rawUrl ?? '').trim()
+  if (!str || str.length > maxLen) return null
+  if (/^\/api\/artwork\/art_[0-9a-f]{20}(?:\?v=\d{1,16})?$/.test(str)) {
+    return str
+  }
+  return sanitizePublicHttpUrl(str, { httpsOnly: true, maxLen })
+}
+
+/**
+ * Reads an HTTP `fetch` Response body into a Buffer while strictly enforcing
+ * `maxBytes` even when `Content-Length` is omitted or spoofed.
+ */
+export async function readResponseBufferLimited(res, maxBytes, label = 'Remote response') {
+  const declared = Number(res.headers?.get?.('content-length') || 0)
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await res.body?.cancel?.().catch(() => {})
+    throw httpError(`${label} exceeds maximum allowed size`, 413)
+  }
+  if (!res.body || typeof res.body.getReader !== 'function') {
+    const ab = await res.arrayBuffer()
+    if (ab.byteLength > maxBytes) {
+      throw httpError(`${label} exceeds maximum allowed size`, 413)
+    }
+    return Buffer.from(ab)
+  }
+  const reader = res.body.getReader()
+  const chunks = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value || value.byteLength === 0) continue
+      total += value.byteLength
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {})
+        throw httpError(`${label} exceeds maximum allowed size`, 413)
+      }
+      chunks.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength))
+    }
+  } catch (err) {
+    await reader.cancel().catch(() => {})
+    throw err
+  }
+  return Buffer.concat(chunks)
+}
+
+/** Stream-reads a UTF-8 response body with a strict hard byte limit. */
+export async function readResponseTextLimited(res, maxBytes, label = 'Remote response') {
+  const buf = await readResponseBufferLimited(res, maxBytes, label)
+  return buf.toString('utf8')
 }
 
 /** Normalizes and validates a list of host allowlist entries (`example.com`, `*.example.com`, or `*`). */
@@ -630,6 +867,7 @@ export async function safeFetch(
   } = {},
 ) {
   let currentUrl = rawUrl
+  let currentHeaders = { ...headers }
   for (let hop = 0; hop <= maxRedirects; hop++) {
     const validated = await validateRemoteUrl(currentUrl, {
       requireApprovedHost,
@@ -638,7 +876,7 @@ export async function safeFetch(
     })
     const res = await fetchImpl(validated.href, {
       method,
-      headers,
+      headers: currentHeaders,
       redirect: 'manual',
       signal,
     })
@@ -656,7 +894,19 @@ export async function safeFetch(
       if (hop === maxRedirects) {
         throw httpError('Too many redirects from remote source', 502)
       }
-      currentUrl = new URL(location, validated.href).href
+      const nextParsed = new URL(location, validated.href)
+      if (nextParsed.origin !== new URL(validated.href).origin) {
+        const filtered = {}
+        for (const [k, v] of Object.entries(currentHeaders)) {
+          const lower = k.toLowerCase()
+          if (lower === 'authorization' || lower === 'cookie' || lower === 'proxy-authorization') {
+            continue
+          }
+          filtered[k] = v
+        }
+        currentHeaders = filtered
+      }
+      currentUrl = nextParsed.href
       continue
     }
     return { response: res, finalUrl: validated.href }
@@ -677,6 +927,9 @@ export async function inspectHlsPlaylist(
   { dnsLookup, extraApprovedHosts = [], requireApprovedHost = false } = {},
 ) {
   const body = String(text ?? '')
+  if (body.length > 10 * 1024 * 1024) {
+    throw httpError('Playlist response exceeds maximum allowed size', 422)
+  }
   const trimmed = body.trimStart()
 
   if (!trimmed) {
@@ -756,21 +1009,16 @@ export async function inspectHlsPlaylist(
       if (keyFormat && keyFormat.toLowerCase() !== 'identity') {
         throw httpError(`DRM-protected HLS stream detected (KEYFORMAT=${keyFormat})`, 422)
       }
-      const keyUri = line.match(/\bURI="([^"]+)"/i)?.[1]
-      if (keyUri) registerUri(keyUri)
-      continue
     }
 
-    if (/^#EXT-X-MAP:/i.test(line)) {
-      const mapUri = line.match(/\bURI="([^"]+)"/i)?.[1]
-      if (mapUri) registerUri(mapUri)
-      continue
-    }
-
-    if (/^#EXT-X-MEDIA:/i.test(line)) {
-      const mediaUri = line.match(/\bURI="([^"]+)"/i)?.[1]
-      if (mediaUri) registerUri(mediaUri)
-      continue
+    // Validate EVERY URI / X-ASSET-URI / X-ASSET-LIST attribute across all #EXT-X-* tags
+    // (KEY, SESSION-KEY, MAP, MEDIA, I-FRAME-STREAM-INF, PART, PRELOAD-HINT, DATERANGE, etc.),
+    // covering both quoted URI="..." and unquoted URI=... syntax.
+    if (/^#EXT-X-/i.test(line)) {
+      for (const m of line.matchAll(/\b(?:X-ASSET-(?:URI|LIST)|URI)=(?:"([^"]*)"|([^,\s]+))/gi)) {
+        const candidateUri = (m[1] ?? m[2] ?? '').trim()
+        if (candidateUri) registerUri(candidateUri)
+      }
     }
 
     if (/^#EXT-X-STREAM-INF:/i.test(line)) {
@@ -800,6 +1048,10 @@ export async function inspectHlsPlaylist(
     }
   }
 
+  if (hostsToVerify.size > 32) {
+    throw httpError('Playlist references too many distinct external hosts', 422)
+  }
+
   // Validate every unique host referenced in playlist URIs against DNS SSRF.
   // Note: segment CDNs commonly live on a separate domain from the playlist host,
   // so we always enforce public-IP SSRF checks on segment/key hosts and check
@@ -824,11 +1076,12 @@ export async function inspectHlsPlaylist(
   }
 }
 
-function scanMp4BufferForDrm(buf, start = 0, end = buf.length, depth = 0) {
-  if (depth > 8) return null
-  const CONTAINERS = new Set(['moov', 'trak', 'mdia', 'minf', 'stbl', 'mvex', 'udta', 'meta', 'edts'])
+function scanMp4BufferForDrm(buf, start = 0, end = buf.length, depth = 0, state = { count: 0 }) {
+  if (depth > 8 || state.count > 50_000) return null
+  const CONTAINERS = new Set(['moov', 'trak', 'mdia', 'minf', 'stbl', 'mvex', 'udta', 'meta', 'edts', 'schi'])
   let pos = start
-  while (pos + 8 <= end) {
+  while (pos + 8 <= end && state.count < 50_000) {
+    state.count += 1
     let size = buf.readUInt32BE(pos)
     const type = buf.toString('latin1', pos + 4, pos + 8)
     let header = 8
@@ -846,13 +1099,14 @@ function scanMp4BufferForDrm(buf, start = 0, end = buf.length, depth = 0) {
     if (type === 'pssh') {
       return 'DRM protection metadata (CENC PSSH) detected in MP4 stream'
     }
-    if (type === 'sinf') {
+    if (type === 'sinf' || type === 'tenc') {
       return 'Encrypted media track (CENC/sinf) detected in MP4 stream'
     }
     if (type === 'stsd' && size >= header + 16) {
       const entryCount = buf.readUInt32BE(pos + header + 4)
       let cur = pos + header + 8
-      for (let i = 0; i < entryCount && cur + 8 <= pos + size; i++) {
+      for (let i = 0; i < entryCount && cur + 8 <= pos + size && state.count < 50_000; i++) {
+        state.count += 1
         const entrySize = buf.readUInt32BE(cur)
         const entryType = buf.toString('latin1', cur + 4, cur + 8)
         if (entrySize < 8 || cur + entrySize > pos + size) break
@@ -863,7 +1117,7 @@ function scanMp4BufferForDrm(buf, start = 0, end = buf.length, depth = 0) {
       }
     } else if (CONTAINERS.has(type)) {
       const childStart = type === 'meta' ? pos + header + 4 : pos + header
-      const found = scanMp4BufferForDrm(buf, childStart, pos + size, depth + 1)
+      const found = scanMp4BufferForDrm(buf, childStart, pos + size, depth + 1, state)
       if (found) return found
     }
 
@@ -1011,9 +1265,14 @@ const ISO_BMFF_FIRST_BOXES = new Set([
   'free',
   'skip',
   'wide',
-  'pnot',
-  'jP  ',
 ])
+
+function isValidTsSyncHeader(buf, offset) {
+  if (offset + 4 > buf.length) return false
+  if (buf[offset] !== 0x47) return false
+  // adaptation_field_control (bits 5..4 of byte 3) is never 0b00 in valid MPEG-TS packets.
+  return ((buf[offset + 3] >> 4) & 0x03) !== 0
+}
 
 function detectVideoContainerFromHeader(head) {
   if (head.length >= 4 && head[0] === 0x1a && head[1] === 0x45 && head[2] === 0xdf && head[3] === 0xa3) {
@@ -1032,11 +1291,23 @@ function detectVideoContainerFromHeader(head) {
   if (head.length >= 4 && head.toString('latin1', 0, 4) === 'OggS') {
     return 'ogg'
   }
-  // 188-byte MPEG-TS or 192-byte BDAV M2TS sync bytes (0x47)
-  if (head[0] === 0x47 && (head.length < 189 || head[188] === 0x47)) {
+  // Require at least two consecutive 188-byte MPEG-TS or 192-byte BDAV M2TS sync
+  // packets (with non-zero adaptation_field_control) so short files starting with
+  // ASCII 'G' (0x47, e.g. GIF89a or "GET /") can never masquerade as MPEG-TS.
+  if (
+    head.length >= 376 &&
+    isValidTsSyncHeader(head, 0) &&
+    isValidTsSyncHeader(head, 188) &&
+    (head.length < 380 || isValidTsSyncHeader(head, 376))
+  ) {
     return 'mpegts'
   }
-  if (head.length >= 197 && head[4] === 0x47 && head[196] === 0x47) {
+  if (
+    head.length >= 384 &&
+    isValidTsSyncHeader(head, 4) &&
+    isValidTsSyncHeader(head, 196) &&
+    (head.length < 392 || isValidTsSyncHeader(head, 388))
+  ) {
     return 'mpegts'
   }
   return null

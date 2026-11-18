@@ -9,6 +9,7 @@ import {
   Folder,
   FolderDown,
   HardDrive,
+  ImagePlus,
   Loader2,
   Play,
   RefreshCw,
@@ -18,8 +19,14 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react'
-import type { LibraryItem, Media, UploadCategory } from '../types'
+import type { ArtworkTargetType, LibraryItem, Media, UploadCategory } from '../types'
 import { api } from '../lib/api'
+import {
+  artworkForLibraryItem,
+  artworkForSeriesGroup,
+  focusObjectClass,
+  useArtwork,
+} from '../lib/artwork'
 import {
   bulkDeleteLibraryFiles,
   deleteLibraryFile,
@@ -28,6 +35,7 @@ import {
 } from '../lib/downloads'
 import { exactDate, formatBytes, formatEpisodeCode, formatQualityLabel } from '../lib/format'
 import { DownloadsTabs } from '../components/DownloadsTabs'
+import { ImdbArtworkModal } from '../components/ImdbArtworkModal'
 import { useDetail } from '../components/MediaModal'
 import { localItemToPlayback, usePlayer } from '../components/Player'
 import { UploadQueuePanel, UploadVideoModal } from '../components/UploadVideoModal'
@@ -47,6 +55,7 @@ interface SeriesGroup {
 
 export default function DownloadedPage() {
   const { items, stats, loading } = useLibrary()
+  const artwork = useArtwork()
   const player = usePlayer()
   const openDetail = useDetail()
   const toast = useToast()
@@ -63,6 +72,15 @@ export default function DownloadedPage() {
   const [uploadCategory, setUploadCategory] = useState<UploadCategory>('movie')
   const [droppedFiles, setDroppedFiles] = useState<File[] | undefined>(undefined)
   const [pageDrag, setPageDrag] = useState(false)
+  const [imdbTarget, setImdbTarget] = useState<{
+    label: string
+    targetType: ArtworkTargetType
+    targetKey: string
+    initialImdbId?: string | null
+    searchHint?: string | null
+    allowApplyTitle?: boolean
+    defaultAsMovie?: boolean
+  } | null>(null)
   const [mediaMap, setMediaMap] = useState<Map<number, Media>>(() => new Map())
 
   useEffect(() => {
@@ -327,6 +345,23 @@ export default function DownloadedPage() {
 
           <button
             type="button"
+            onClick={() =>
+              setImdbTarget({
+                label: 'AnimeVault App (Banner, Icon & Cover)',
+                targetType: 'app',
+                targetKey: 'global',
+                initialImdbId: artwork.app?.imdbId,
+              })
+            }
+            title="Claim a banner, poster, or icon photo from IMDb using a tt0234144 ID"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-amber-400/12 px-2.5 py-1.5 text-xs font-medium text-amber-200 ring-1 ring-amber-400/30 transition hover:bg-amber-400/22"
+          >
+            <ImagePlus size={13} className="text-amber-300" />
+            IMDb Banner / Icon
+          </button>
+
+          <button
+            type="button"
             disabled={rescanBusy}
             onClick={() => void onRescan()}
             title="Scan the shared library directory for newly added files"
@@ -376,6 +411,20 @@ export default function DownloadedPage() {
           )
         }}
       />
+
+      {imdbTarget ? (
+        <ImdbArtworkModal
+          open
+          onClose={() => setImdbTarget(null)}
+          targetLabel={imdbTarget.label}
+          targetType={imdbTarget.targetType}
+          targetKey={imdbTarget.targetKey}
+          initialImdbId={imdbTarget.initialImdbId}
+          searchHint={imdbTarget.searchHint}
+          allowApplyTitle={imdbTarget.allowApplyTitle}
+          defaultAsMovie={imdbTarget.defaultAsMovie}
+        />
+      ) : null}
 
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-1">
@@ -482,47 +531,123 @@ export default function DownloadedPage() {
       ) : (
         <div className="mt-6 space-y-6">
           {seriesGroups.map((group) => {
-            const totalEps = group.seasons.reduce((n, s) => n + s.items.length, 0)
+            const allGroupItems = group.seasons.flatMap((s) => s.items)
+            const totalEps = allGroupItems.length
+            const groupArt = artworkForSeriesGroup(
+              artwork,
+              group.title,
+              group.mediaId,
+              allGroupItems.map((i) => i.id),
+            )
+            const bannerSlot = groupArt?.banner ?? null
+            const posterSrc = groupArt?.poster
+              ? `${groupArt.poster.url}?v=${groupArt.poster.updatedAt}`
+              : group.cover ||
+                (artwork.app?.poster
+                  ? `${artwork.app.poster.url}?v=${artwork.app.poster.updatedAt}`
+                  : null)
+            const iconSlot = groupArt?.icon ?? null
+            const groupImdbId =
+              groupArt?.imdbId || allGroupItems.find((i) => i.imdbId)?.imdbId || null
+
             return (
               <section
                 key={group.key}
                 className="overflow-hidden rounded-xl bg-ink-900 ring-1 ring-white/6"
               >
-                <div className="flex items-center gap-3.5 border-b border-white/6 bg-ink-850/60 px-4 py-3">
-                  <div className="h-14 w-10 shrink-0 overflow-hidden rounded-md bg-ink-800 ring-1 ring-white/10">
-                    {group.cover ? (
-                      <img src={group.cover} alt="" loading="lazy" className="h-full w-full object-cover" />
-                    ) : (
-                      <span className="grid h-full place-items-center text-white/25">
-                        <Film size={15} />
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      {group.mediaId ? (
-                        <button
-                          type="button"
-                          onClick={() => openDetail(group.mediaId!)}
-                          className="truncate text-left text-base font-semibold text-white transition hover:text-accent"
-                        >
-                          {group.title}
-                        </button>
-                      ) : (
-                        <h2 className="truncate text-base font-semibold text-white">{group.title}</h2>
-                      )}
-                      {group.isMovieGroup ? (
-                        <span className="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-medium text-accent">
-                          Movie
-                        </span>
-                      ) : null}
+                <div className="relative overflow-hidden border-b border-white/6 bg-ink-850/60">
+                  {bannerSlot ? (
+                    <div className="relative h-32 w-full sm:h-44">
+                      <img
+                        src={`${bannerSlot.url}?v=${bannerSlot.updatedAt}`}
+                        alt=""
+                        loading="lazy"
+                        className={`h-full w-full object-cover ${focusObjectClass(bannerSlot.focus)}`}
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-ink-900 via-ink-900/55 to-black/15" />
                     </div>
-                    <p className="mt-0.5 text-[11px] text-white/40">
-                      {group.isMovieGroup
-                        ? `${totalEps} movie file${totalEps === 1 ? '' : 's'} · ${formatBytes(group.totalBytes)}`
-                        : `${group.seasons.length} season${group.seasons.length === 1 ? '' : 's'} · ${totalEps} file${totalEps === 1 ? '' : 's'} · ${formatBytes(group.totalBytes)}`}
-                    </p>
+                  ) : null}
+
+                  <div
+                    className={`relative flex flex-wrap items-end gap-3.5 px-4 py-3 ${
+                      bannerSlot ? '-mt-14 pt-0' : 'items-center'
+                    }`}
+                  >
+                    <div
+                      className={`shrink-0 overflow-hidden rounded-lg bg-ink-800 shadow-lg ring-1 ring-white/15 ${
+                        bannerSlot ? 'h-20 w-14' : 'h-14 w-10'
+                      }`}
+                    >
+                      {posterSrc ? (
+                        <img
+                          src={posterSrc}
+                          alt=""
+                          loading="lazy"
+                          className={`h-full w-full object-cover ${focusObjectClass(groupArt?.poster?.focus)}`}
+                        />
+                      ) : (
+                        <span className="grid h-full place-items-center text-white/25">
+                          <Film size={15} />
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {iconSlot ? (
+                          <img
+                            src={`${iconSlot.url}?v=${iconSlot.updatedAt}`}
+                            alt=""
+                            className={`h-6 w-6 shrink-0 rounded-md object-cover ring-1 ring-white/20 ${focusObjectClass(iconSlot.focus)}`}
+                          />
+                        ) : null}
+                        {group.mediaId ? (
+                          <button
+                            type="button"
+                            onClick={() => openDetail(group.mediaId!)}
+                            className="truncate text-left text-base font-semibold text-white transition hover:text-accent"
+                          >
+                            {group.title}
+                          </button>
+                        ) : (
+                          <h2 className="truncate text-base font-semibold text-white">{group.title}</h2>
+                        )}
+                        {group.isMovieGroup ? (
+                          <span className="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-medium text-accent">
+                            Movie
+                          </span>
+                        ) : null}
+                        {groupImdbId ? (
+                          <span className="rounded bg-amber-400/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-amber-300">
+                            {groupImdbId}
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="mt-0.5 text-[11px] text-white/45">
+                        {group.isMovieGroup
+                          ? `${totalEps} movie file${totalEps === 1 ? '' : 's'} · ${formatBytes(group.totalBytes)}`
+                          : `${group.seasons.length} season${group.seasons.length === 1 ? '' : 's'} · ${totalEps} file${totalEps === 1 ? '' : 's'} · ${formatBytes(group.totalBytes)}`}
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setImdbTarget({
+                          label: group.title,
+                          targetType: group.mediaId ? 'media' : 'series',
+                          targetKey: group.mediaId ? String(group.mediaId) : group.title,
+                          initialImdbId: groupImdbId,
+                          searchHint: group.title,
+                          defaultAsMovie: group.isMovieGroup,
+                        })
+                      }
+                      title="Claim banner, poster, or icon photo from IMDb using a tt… number"
+                      className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-black/45 px-2.5 py-1.5 text-[11px] font-medium text-white/85 ring-1 ring-white/15 backdrop-blur-sm transition hover:bg-white/15 hover:text-amber-200"
+                    >
+                      <ImagePlus size={12} className="text-amber-300" />
+                      IMDb Photo
+                    </button>
                   </div>
                 </div>
 
@@ -585,12 +710,28 @@ export default function DownloadedPage() {
                   <LibraryFileRow
                     key={item.id}
                     item={item}
+                    iconUrl={(() => {
+                      const art = artworkForLibraryItem(artwork, item)
+                      const pick = art?.icon ?? art?.poster
+                      return pick ? `${pick.url}?v=${pick.updatedAt}` : null
+                    })()}
                     selectMode={selectMode}
                     checked={selected.has(item.id)}
                     busy={deleteBusy === item.id}
                     subBusy={subBusyId === item.id}
                     onToggle={() => toggleItem(item.id)}
                     onPlay={() => player.open(localItemToPlayback(item))}
+                    onClaimImdb={() =>
+                      setImdbTarget({
+                        label: item.fileName,
+                        targetType: 'file',
+                        targetKey: item.id,
+                        initialImdbId: item.imdbId,
+                        searchHint: item.fileName.replace(/\.[^.]+$/, ''),
+                        allowApplyTitle: true,
+                        defaultAsMovie: true,
+                      })
+                    }
                     onAttachSub={(ev) => void onAttachSubtitle(item, ev)}
                     onDelete={() => void onDeleteOne(item)}
                   />
@@ -606,22 +747,26 @@ export default function DownloadedPage() {
 
 function LibraryFileRow({
   item,
+  iconUrl,
   selectMode,
   checked,
   busy,
   subBusy,
   onToggle,
   onPlay,
+  onClaimImdb,
   onAttachSub,
   onDelete,
 }: {
   item: LibraryItem
+  iconUrl?: string | null
   selectMode: boolean
   checked: boolean
   busy: boolean
   subBusy: boolean
   onToggle: () => void
   onPlay: () => void
+  onClaimImdb?: () => void
   onAttachSub: (ev: ChangeEvent<HTMLInputElement>) => void
   onDelete: () => void
 }) {
@@ -652,6 +797,13 @@ function LibraryFileRow({
         onClick={selectMode ? onToggle : onPlay}
         className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1 text-left"
       >
+        {iconUrl ? (
+          <img
+            src={iconUrl}
+            alt=""
+            className="h-6 w-6 shrink-0 rounded object-cover ring-1 ring-white/15"
+          />
+        ) : null}
         {code ? (
           <span className="shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-emerald-300 tabular-nums">
             {code}
@@ -716,6 +868,17 @@ function LibraryFileRow({
           <Play size={11} className="fill-current" />
           <span className="hidden sm:inline">Play</span>
         </button>
+
+        {onClaimImdb ? (
+          <button
+            type="button"
+            onClick={onClaimImdb}
+            title="Claim banner, poster, or icon from IMDb (tt…)"
+            className="inline-flex items-center gap-1 rounded-md bg-white/6 px-2 py-1 text-[11px] font-medium text-amber-200 ring-1 ring-white/10 transition hover:bg-amber-400/20"
+          >
+            <ImagePlus size={12} className="text-amber-300" />
+          </button>
+        ) : null}
 
         <label
           title={item.hasSubtitle ? 'Replace subtitle (.srt/.vtt/.ass)' : 'Attach subtitle (.srt/.vtt/.ass)'}

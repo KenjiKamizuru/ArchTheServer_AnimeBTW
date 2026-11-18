@@ -1,6 +1,7 @@
 import { Bookmark, BookmarkCheck, Check, FolderDown, HardDrive, Loader2, Play, Star } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { Media } from '../types'
+import { artworkForMedia, focusObjectClass, useArtwork } from '../lib/artwork'
 import { toggleBookmark, useBookmarks } from '../lib/bookmarks'
 import { enqueueBulkDownload, localFilesForMedia, useLibrary } from '../lib/downloads'
 import { useSettings } from '../lib/settings'
@@ -24,6 +25,11 @@ export function MediaCard({
   const bookmarks = useBookmarks()
   const settings = useSettings()
   const libraryStore = useLibrary()
+  const artwork = useArtwork()
+  const mediaArt = artworkForMedia(artwork, media)
+  const coverUrl = mediaArt?.poster
+    ? `${mediaArt.poster.url}?v=${mediaArt.poster.updatedAt}`
+    : media.cover
   const [seasonBusy, setSeasonBusy] = useState(false)
   const localCount = useMemo(
     () => localFilesForMedia(libraryStore.items, media).length,
@@ -93,13 +99,13 @@ export function MediaCard({
           aria-label={selectable ? `Select ${media.title}` : `View ${media.title}`}
           className="absolute inset-0 block h-full w-full"
         >
-          {media.cover ? (
+          {coverUrl ? (
             <img
-              src={media.cover}
+              src={coverUrl}
               alt={media.title}
               loading="lazy"
               decoding="async"
-              className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.05]"
+              className={`h-full w-full object-cover transition duration-500 group-hover:scale-[1.05] ${focusObjectClass(mediaArt?.poster?.focus)}`}
             />
           ) : (
             <span className="grid h-full place-items-center px-2 text-center text-xs text-white/40">
@@ -176,9 +182,16 @@ export function MediaCard({
       <button
         type="button"
         onClick={() => open(media)}
-        className="mt-2 block w-full truncate text-left text-[13px] font-medium text-white/90 transition hover:text-accent"
+        className="mt-2 flex w-full items-center gap-1.5 text-left text-[13px] font-medium text-white/90 transition hover:text-accent"
       >
-        {media.title}
+        {mediaArt?.icon ? (
+          <img
+            src={`${mediaArt.icon.url}?v=${mediaArt.icon.updatedAt}`}
+            alt=""
+            className={`h-4 w-4 shrink-0 rounded object-cover ring-1 ring-white/15 ${focusObjectClass(mediaArt.icon.focus)}`}
+          />
+        ) : null}
+        <span className="truncate">{media.title}</span>
       </button>
       <p className="truncate text-[11px] text-white/40">
         {formatMediaType(media.format)} · {formatSeason(media.season, media.seasonYear)}

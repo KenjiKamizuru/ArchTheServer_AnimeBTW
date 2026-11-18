@@ -5,7 +5,10 @@
 // entry carries its own AniDB / official-site / legal-stream links, which the UI
 // surfaces as metadata references.
 
+import { readResponseTextLimited, sanitizeCoverUrl, sanitizePublicHttpUrl } from './security.mjs'
+
 const ENDPOINT = 'https://graphql.anilist.co'
+const MAX_GQL_BYTES = 6 * 1024 * 1024
 const TTL = 10 * 60 * 1000
 const MAX_ENTRIES = 300
 
@@ -77,12 +80,16 @@ async function gql(query, variables) {
         signal: AbortSignal.timeout(15_000),
       })
       if (res.status === 429 || res.status >= 500) {
+        await res.body?.cancel?.().catch(() => {})
         lastError = new Error(`AniList responded ${res.status}`)
         await sleep(500 * (attempt + 1))
         continue
       }
-      if (!res.ok) throw new Error(`AniList responded ${res.status}`)
-      const json = await res.json()
+      if (!res.ok) {
+        await res.body?.cancel?.().catch(() => {})
+        throw new Error(`AniList responded ${res.status}`)
+      }
+      const json = JSON.parse(await readResponseTextLimited(res, MAX_GQL_BYTES, 'AniList response'))
       if (json.errors?.length) throw new Error(json.errors[0].message)
       if (!json.data) throw new Error('AniList returned no data')
       return json.data
@@ -137,7 +144,12 @@ function airedEpisodes(media) {
 
 function normalize(media) {
   if (!media) return null
-  const links = (media.externalLinks ?? []).filter((l) => l?.url)
+  const links = (media.externalLinks ?? [])
+    .map((l) => {
+      const safeUrl = l?.url ? sanitizePublicHttpUrl(l.url, { httpsOnly: false, maxLen: 512 }) : null
+      return safeUrl && l?.site ? { site: String(l.site).slice(0, 80), url: safeUrl, type: l.type } : null
+    })
+    .filter(Boolean)
   const title = media.title?.english || media.title?.romaji || media.title?.native || `Anime #${media.id}`
   const streams = links
     .filter((l) => l.type === 'STREAMING' || STREAM_SITES.has(l.site))
@@ -147,6 +159,8 @@ function normalize(media) {
   // to AniDB's own search so every entry still resolves on AniDB.
   const directAnidb = links.find((l) => /anidb/i.test(l.site ?? '') || /anidb\.net/i.test(l.url))?.url ?? null
   const anidb = directAnidb ?? `https://anidb.net/search/anime?adb.search=${encodeURIComponent(title)}`
+  const rawColor = typeof media.coverImage?.color === 'string' ? media.coverImage.color.trim() : ''
+  const color = /^#[0-9a-fA-F]{3,8}$/.test(rawColor) ? rawColor : null
 
   return {
     id: media.id,
@@ -154,9 +168,9 @@ function normalize(media) {
     romaji: media.title?.romaji ?? null,
     english: media.title?.english ?? null,
     native: media.title?.native ?? null,
-    cover: media.coverImage?.extraLarge ?? media.coverImage?.large ?? null,
-    banner: media.bannerImage ?? null,
-    color: media.coverImage?.color ?? null,
+    cover: sanitizeCoverUrl(media.coverImage?.extraLarge ?? media.coverImage?.large ?? null),
+    banner: sanitizeCoverUrl(media.bannerImage ?? null),
+    color,
     description: plainText(media.description),
     episodes: media.episodes ?? null,
     airedEpisodes: airedEpisodes(media),
@@ -176,7 +190,7 @@ function normalize(media) {
     streams,
     anidb,
     anidbSearch: !directAnidb,
-    siteUrl: media.siteUrl ?? null,
+    siteUrl: sanitizePublicHttpUrl(media.siteUrl, { httpsOnly: false, maxLen: 512 }),
   }
 }
 
@@ -191,12 +205,16 @@ export function resolveSeason(seasonParam, yearParam) {
   const season = ['WINTER', 'SPRING', 'SUMMER', 'FALL'].includes(String(seasonParam).toUpperCase())
     ? String(seasonParam).toUpperCase()
     : fallback.season
-  const year = Number.isFinite(Number(yearParam)) && Number(yearParam) > 1940 ? Math.floor(Number(yearParam)) : fallback.year
+  const parsedYear = Number(yearParam)
+  const year =
+    Number.isFinite(parsedYear) && parsedYear > 1940 && parsedYear <= fallback.year + 5
+      ? Math.floor(parsedYear)
+      : fallback.year
   return { season, year }
 }
 
 export function resolveSort(sortParam) {
-  return SEASON_SORTS[sortParam] ? sortParam : 'popular'
+  return typeof sortParam === 'string' && Object.hasOwn(SEASON_SORTS, sortParam) ? sortParam : 'popular'
 }
 
 export async function getSeason({ season, year, sort = 'popular', page = 1, perPage = 30 }) {
@@ -324,7 +342,7 @@ export async function getDetail(id) {
           airedEpisodes: airedEpisodes(node),
           season: node.season ?? null,
           seasonYear: node.seasonYear ?? null,
-          cover: node.coverImage?.large ?? null,
+          cover: sanitizeCoverUrl(node.coverImage?.large ?? null),
         }
       })
       .sort(
@@ -336,8 +354,17 @@ export async function getDetail(id) {
     return {
       ...base,
       streamingEpisodes: (data.Media.streamingEpisodes ?? [])
-        .filter((e) => e?.url && e?.site)
-        .map((e) => ({ title: e.title ?? '', thumbnail: e.thumbnail ?? null, url: e.url, site: e.site })),
+        .map((e) => {
+          const safeUrl = e?.url ? sanitizePublicHttpUrl(e.url, { httpsOnly: false, maxLen: 512 }) : null
+          if (!safeUrl || !e?.site) return null
+          return {
+            title: String(e.title ?? '').slice(0, 200),
+            thumbnail: sanitizeCoverUrl(e.thumbnail ?? null),
+            url: safeUrl,
+            site: String(e.site).slice(0, 80),
+          }
+        })
+        .filter(Boolean),
       relatedSeasons,
     }
   })

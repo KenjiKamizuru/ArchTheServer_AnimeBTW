@@ -4,6 +4,7 @@ import {
   Clapperboard,
   FileVideo,
   Film,
+  ImagePlus,
   Pause,
   Play,
   RotateCcw,
@@ -29,6 +30,7 @@ import {
 } from '../lib/uploads'
 import { formatBytes, formatSpeed } from '../lib/format'
 import type { LibraryItem, UploadCategory } from '../types'
+import { ImdbArtworkModal, type DraftImdbSelection } from './ImdbArtworkModal'
 
 interface PendingFile {
   key: string
@@ -36,6 +38,7 @@ interface PendingFile {
   title: string
   episode: number
   subtitleFile: File | null
+  imdbDraft: DraftImdbSelection | null
 }
 
 interface UploadVideoModalProps {
@@ -70,6 +73,7 @@ export function UploadVideoModal({
   const [dub, setDub] = useState(false)
   const [keepBoth, setKeepBoth] = useState(true)
   const [dragOver, setDragOver] = useState(false)
+  const [imdbPickerIndex, setImdbPickerIndex] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -153,6 +157,7 @@ export function UploadVideoModal({
           title: cleanTitleFromFileName(file.name),
           episode: epHint?.episode ?? startEp + idx,
           subtitleFile: findMatchingSub(file.name),
+          imdbDraft: null,
         }
       })
       return [...base, ...built]
@@ -185,6 +190,13 @@ export function UploadVideoModal({
         dub,
         keepBoth,
         subtitleFile: entry.subtitleFile,
+        imdbArtwork: entry.imdbDraft
+          ? {
+              imdbId: entry.imdbDraft.imdbId,
+              imdbTitle: entry.imdbDraft.imdbTitle,
+              slots: entry.imdbDraft.slots,
+            }
+          : null,
       })),
     )
     onQueued?.(queued.length, category)
@@ -446,6 +458,35 @@ export function UploadVideoModal({
                           Remove subtitle
                         </button>
                       )}
+
+                      <button
+                        type="button"
+                        onClick={() => setImdbPickerIndex(idx)}
+                        className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] ring-1 transition ${
+                          entry.imdbDraft
+                            ? 'bg-amber-400/15 font-semibold text-amber-200 ring-amber-400/35 hover:bg-amber-400/25'
+                            : 'bg-white/6 text-white/75 ring-white/10 hover:bg-white/10 hover:text-white'
+                        }`}
+                      >
+                        <ImagePlus size={12} className="text-amber-300" />
+                        {entry.imdbDraft
+                          ? `IMDb ${entry.imdbDraft.imdbId} (${Object.keys(entry.imdbDraft.slots).join(', ')})`
+                          : 'Claim IMDb Banner / Icon (tt…)'}
+                      </button>
+
+                      {entry.imdbDraft ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setPending((prev) =>
+                              prev.map((item, i) => (i === idx ? { ...item, imdbDraft: null } : item)),
+                            )
+                          }
+                          className="text-[11px] text-white/45 hover:text-white"
+                        >
+                          Clear IMDb
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 ))}
@@ -516,6 +557,49 @@ export function UploadVideoModal({
           </button>
         </div>
       </div>
+      {imdbPickerIndex !== null && pending[imdbPickerIndex] ? (
+        <ImdbArtworkModal
+          open
+          onClose={() => setImdbPickerIndex(null)}
+          targetLabel={
+            category === 'episode'
+              ? sharedSeries || pending[imdbPickerIndex].title
+              : pending[imdbPickerIndex].title
+          }
+          targetType="series"
+          targetKey={
+            category === 'episode'
+              ? sharedSeries || pending[imdbPickerIndex].title
+              : pending[imdbPickerIndex].title
+          }
+          searchHint={
+            category === 'episode'
+              ? sharedSeries || pending[imdbPickerIndex].title
+              : pending[imdbPickerIndex].title
+          }
+          initialDraft={pending[imdbPickerIndex].imdbDraft}
+          onSelectDraft={(picked) => {
+            const targetIdx = imdbPickerIndex
+            if (picked.applyTitle && picked.imdbTitle) {
+              if (category === 'episode') setSharedSeries(picked.imdbTitle)
+            }
+            setPending((prev) =>
+              prev.map((item, i) =>
+                i === targetIdx
+                  ? {
+                      ...item,
+                      title:
+                        category === 'movie' && picked.applyTitle && picked.imdbTitle
+                          ? picked.imdbTitle
+                          : item.title,
+                      imdbDraft: picked,
+                    }
+                  : item,
+              ),
+            )
+          }}
+        />
+      ) : null}
     </div>
   )
 }

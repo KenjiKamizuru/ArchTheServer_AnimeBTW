@@ -21,6 +21,11 @@ React frontend.
   `library/<Anime Name>/Season 01/<Anime Name> - S01E01.mp4`, preserves existing
   media across updates, discovers standalone/unknown `.mp4` files, and lets any
   client stream in-browser or download files to their device.
+- **IMDb Artwork Claimer (`tt…`)** — enter any IMDb ID (e.g. `tt0234144` or a
+  full `imdb.com/title/tt…` link, or search IMDb by title) to browse and claim
+  official widescreen banners, posters/covers, stills, and icons for uploaded
+  movies, anime series, unsorted videos, or the app's own banner, icon, and
+  browser favicon — verified and saved locally in `data/artwork/` for offline use.
 - **Bookmarks** — a persisted list you can add to from any card, the detail
   sheet, search results, or the schedule.
 - **Settings** — quality, default search result, sub/dub, shared library path,
@@ -97,6 +102,14 @@ optional environment variables:
 | `/api/library/:id/download` | GET | Download a local file to a client device |
 | `/api/library/:id/subtitle` | GET/POST | Serve or attach (chunked) a local sidecar subtitle (`.vtt`/`.srt`/`.ass`) |
 | `/api/library/:id` | DELETE | Delete one local file without removing anime metadata |
+| `/api/imdb/lookup?id=` | GET | Fetch official IMDb photos (banners, posters, stills, logos) by `tt…` ID or URL |
+| `/api/imdb/search?q=` | GET | Search IMDb titles to find matching `tt…` IDs |
+| `/api/imdb/preview?u=` | GET | Allowlist-verified thumbnail proxy for IMDb gallery previews |
+| `/api/imdb/claim` | POST | Claim & locally cache an IMDb photo as `banner`, `poster`, or `icon` |
+| `/api/imdb/claim-bundle` | POST | Claim multiple slots (`banner` + `poster` + `icon`) in one call |
+| `/api/artwork` | GET/DELETE | List all claimed artwork mappings or reset a slot/target |
+| `/api/artwork/focus` | PATCH | Adjust crop focal point (`top`, `center`, `bottom`) for a claimed slot |
+| `/api/artwork/:artId` | GET | Serve locally cached artwork by opaque `art_…` ID |
 | `/api/health` | GET | Server status |
 
 ## Why not AniDB directly
@@ -120,6 +133,7 @@ server/cache.mjs      TTL/LRU cache for provider requests
 server/playback.mjs   HTTP range serving, ffmpeg remux/download, subtitle helpers
 server/downloads.mjs  persistent download queue & worker (data/downloads.json)
 server/library.mjs    shared media library index, scanner & atomic file moves
+server/imdb.mjs       IMDb photo claimer & local artwork store (data/artwork/)
 server/security.mjs   path-traversal, SSRF, header, and DRM/container guards
 server/settings.mjs   settings, persisted to data/settings.json
 server/store.mjs      bookmarks, persisted to data/bookmarks.json
@@ -136,6 +150,13 @@ excluded via `.gitignore`.
 
 - The server binds to 127.0.0.1 by default, and the cache lives in process
   memory, so single-instance use is intended.
+- Security defaults: same-origin CSRF protection on all mutating `/api/*` routes,
+  CSP + `X-Content-Type-Options: nosniff` + `Referrer-Policy` + `Permissions-Policy`,
+  sliding-window API rate limits, DNS-verified SSRF & redirect protection, FFmpeg
+  protocol whitelisting, symlink/path-traversal checks, and `0o700`/`0o600`
+  permissions on `data/`. Optional env vars: `ANIMEVAULT_API_TOKEN` (requires
+  `Authorization: Bearer <token>` or `X-API-Token` on API calls), `ALLOWED_ORIGINS`
+  (comma-separated extra trusted origins), and `MAX_CONCURRENT_STREAMS` (default `6`).
 - AniList/AniDB responses cache 10 minutes, provider searches and resolutions
   10 minutes, provider status 5 minutes, browser requests 5 minutes. The live
   stream is proxied with ffmpeg continuously — it needs ffmpeg on the server.

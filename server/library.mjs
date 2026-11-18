@@ -15,9 +15,11 @@ import { fileURLToPath } from 'node:url'
 import * as settings from './settings.mjs'
 import * as playback from './playback.mjs'
 import {
+  atomicWriteFile,
   ensureSafeLibraryParentDir,
   inspectUploadedVideoFile,
   resolveInsideLibrary,
+  sanitizeCoverUrl,
   sanitizeFileName,
   sanitizeFileSegment,
   verifyRegularLibraryFile,
@@ -43,13 +45,23 @@ export const MAX_UPLOAD_BYTES =
     ? Math.floor(envMaxUploadGb * 1024 * 1024 * 1024)
     : 256 * 1024 * 1024 * 1024 // 256 GB default
 const UPLOAD_SESSION_TTL_MS = 24 * 60 * 60 * 1000 // 24h resumable window
+const MAX_ACTIVE_UPLOAD_SESSIONS = 50
+const MAX_CONCURRENT_IMPORTS = 4
+const UPLOAD_META_RE = /^upload-up_[0-9a-f]{20}\.meta\.json$/
+const UPLOAD_PART_RE = /^upload-up_[0-9a-f]{20}\.part\.[a-z0-9]{2,5}$/
 const uploadLocks = new Map()
+let activeImportCount = 0
 
 /** relPosix -> metadata record persisted in data/library-index.json */
-let catalog = {}
+let catalog = Object.create(null)
+let catalogWriteChain = Promise.resolve()
 /** Cached scan snapshot */
 let cachedScan = { at: 0, dir: '', items: [], byId: new Map(), byRel: new Map() }
 const changeListeners = new Set()
+
+function getCatalogEntry(relPosix) {
+  return typeof relPosix === 'string' && Object.hasOwn(catalog, relPosix) ? catalog[relPosix] : null
+}
 
 export function onChange(listener) {
   changeListeners.add(listener)
@@ -70,23 +82,34 @@ export function invalidateCache() {
   cachedScan.at = 0
 }
 
-async function persistCatalog() {
-  await fsp.mkdir(DATA_DIR, { recursive: true })
-  const tmp = `${INDEX_FILE}.${process.pid}.tmp`
-  await fsp.writeFile(tmp, JSON.stringify(catalog, null, 2))
-  await fsp.rename(tmp, INDEX_FILE)
+function persistCatalog() {
+  const serialized = JSON.stringify(catalog, null, 2)
+  catalogWriteChain = catalogWriteChain
+    .catch(() => {})
+    .then(() => atomicWriteFile(INDEX_FILE, serialized))
+  return catalogWriteChain
 }
 
 export async function init() {
+  const next = Object.create(null)
   try {
     const raw = await fsp.readFile(INDEX_FILE, 'utf8')
     const parsed = JSON.parse(raw)
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      catalog = parsed
+      for (const [k, v] of Object.entries(parsed)) {
+        if (!k || k === '__proto__' || !v || typeof v !== 'object' || Array.isArray(v)) continue
+        const clean = { ...v }
+        if (clean.cover !== undefined) clean.cover = sanitizeCoverUrl(clean.cover)
+        if (clean.imdbId !== undefined && !(typeof clean.imdbId === 'string' && /^tt\d{7,12}$/.test(clean.imdbId))) {
+          delete clean.imdbId
+        }
+        next[k] = clean
+      }
     }
   } catch {
-    catalog = {}
+    /* first run */
   }
+  catalog = next
   await ensureLibraryDir()
 }
 
@@ -130,11 +153,16 @@ export async function cleanupIncompleteFiles(keepFileNames = new Set()) {
 
   // Preserve active/resumable chunked movie upload sessions from the last 24h.
   for (const entry of entries) {
-    if (!entry.isFile() || !/^upload-up_[0-9a-f]{20}\.meta\.json$/.test(entry.name)) continue
+    if (!entry.isFile() || !UPLOAD_META_RE.test(entry.name)) continue
     const metaPath = path.join(incDir, entry.name)
     try {
       const raw = JSON.parse(await fsp.readFile(metaPath, 'utf8'))
-      if (raw && Number(raw.updatedAt) >= cutoff && typeof raw.partFileName === 'string') {
+      if (
+        raw &&
+        Number(raw.updatedAt) >= cutoff &&
+        typeof raw.partFileName === 'string' &&
+        UPLOAD_PART_RE.test(raw.partFileName)
+      ) {
         protectedNames.add(entry.name)
         protectedNames.add(raw.partFileName)
       }
@@ -335,6 +363,10 @@ export async function commitTempFile(tempAbsPath, targetRelPath, metadata = null
   }
 
   if (metadata && typeof metadata === 'object') {
+    const cleanImdb =
+      typeof metadata.imdbId === 'string' && /^tt\d{7,12}$/.test(metadata.imdbId)
+        ? metadata.imdbId
+        : null
     catalog[relPosix] = {
       relPosix,
       mediaId: Number.isInteger(metadata.mediaId) && metadata.mediaId > 0 ? metadata.mediaId : null,
@@ -346,8 +378,11 @@ export async function commitTempFile(tempAbsPath, targetRelPath, metadata = null
       resolvedHeight: Number.isFinite(metadata.resolvedHeight) && metadata.resolvedHeight > 0 ? metadata.resolvedHeight : null,
       dub: Boolean(metadata.dub),
       format: metadata.format ? String(metadata.format).slice(0, 32) : null,
-      cover: metadata.cover ? String(metadata.cover).slice(0, 500) : null,
-      sourceType: ['external', 'import', 'upload-movie', 'upload-episode'].includes(metadata.sourceType)
+      cover: sanitizeCoverUrl(metadata.cover),
+      ...(cleanImdb ? { imdbId: cleanImdb } : {}),
+      sourceType: ['external', 'import', 'upload-movie', 'upload-episode', 'annotated'].includes(
+        metadata.sourceType,
+      )
         ? metadata.sourceType
         : 'resolver',
       addedAt: Date.now(),
@@ -362,6 +397,40 @@ export async function commitTempFile(tempAbsPath, targetRelPath, metadata = null
     relPosix,
     size: verified.size,
   }
+}
+
+async function moveStagedFileSafely(tempPath, destAbs, { allowReplaceRegularFile = false } = {}) {
+  try {
+    const existing = await fsp.lstat(destAbs)
+    if (existing.isSymbolicLink() || !existing.isFile()) {
+      throw Object.assign(new Error('Refusing to overwrite symlink or non-regular file'), { status: 400 })
+    }
+    if (!allowReplaceRegularFile) {
+      await fsp.rm(tempPath, { force: true }).catch(() => {})
+      return false
+    }
+  } catch (err) {
+    if (err?.code !== 'ENOENT') throw err
+  }
+
+  try {
+    await fsp.rename(tempPath, destAbs)
+  } catch (err) {
+    if (err?.code !== 'EXDEV') throw err
+    const siblingTmp = path.join(
+      path.dirname(destAbs),
+      `.stage-${crypto.randomBytes(6).toString('hex')}.tmp`,
+    )
+    try {
+      await fsp.copyFile(tempPath, siblingTmp, fs.constants.COPYFILE_EXCL)
+      await fsp.rename(siblingTmp, destAbs)
+      await fsp.rm(tempPath, { force: true }).catch(() => {})
+    } catch (copyErr) {
+      await fsp.rm(siblingTmp, { force: true }).catch(() => {})
+      throw copyErr
+    }
+  }
+  return true
 }
 
 /** Atomically writes a sidecar `.vtt` subtitle alongside a library video without overwriting. */
@@ -383,7 +452,7 @@ export async function commitSidecarSubtitle(videoRelPosix, vttText) {
   try {
     await ensureSafeLibraryParentDir(dir, subAbs)
     await fsp.writeFile(tempSub, vttText, 'utf8')
-    await fsp.rename(tempSub, subAbs)
+    await moveStagedFileSafely(tempSub, subAbs, { allowReplaceRegularFile: false })
     invalidateCache()
     return true
   } catch {
@@ -500,6 +569,7 @@ function toPublicItem(entry) {
     isMovie: entry.isMovie,
     known: entry.known,
     cover: entry.cover,
+    imdbId: entry.imdbId ?? null,
     size: entry.size,
     addedAt: entry.addedAt,
     modifiedAt: entry.modifiedAt,
@@ -566,7 +636,7 @@ async function scanInternal({ fresh = false } = {}) {
         continue
       }
 
-      const meta = catalog[relPosix] ?? null
+      const meta = getCatalogEntry(relPosix)
       const inferred = inferFromPath(relPosix)
       const isCatalogedEpisode = Boolean(
         meta && meta.sourceType !== 'import' && (meta.seriesTitle || meta.animeTitle),
@@ -595,6 +665,7 @@ async function scanInternal({ fresh = false } = {}) {
         isMovie,
         known,
         cover: meta?.cover ?? null,
+        imdbId: typeof meta?.imdbId === 'string' ? meta.imdbId : null,
         size: st.size,
         addedAt: meta?.addedAt ?? Math.round(st.mtimeMs),
         modifiedAt: Math.round(st.mtimeMs),
@@ -789,7 +860,7 @@ export async function removeById(id) {
   await fsp.unlink(realPath)
   await pruneEmptyDirsUpward(path.dirname(realPath), libraryDir)
 
-  if (catalog[entry.relPosix]) {
+  if (Object.hasOwn(catalog, entry.relPosix)) {
     delete catalog[entry.relPosix]
     await persistCatalog()
   }
@@ -842,6 +913,8 @@ function buildUploadPlan(rawFileName, options = {}) {
     rawCategory === 'movie' ? 'movie' : rawCategory === 'episode' ? 'episode' : 'unknown'
   const quality = options.quality ? String(options.quality).trim().slice(0, 32) : null
   const dub = Boolean(options.dub)
+  const rawImdb = typeof options.imdbId === 'string' ? options.imdbId.trim() : ''
+  const validImdbId = /^tt\d{7,12}$/.test(rawImdb) ? rawImdb : null
 
   if (category === 'movie') {
     const movieTitle = String(options.title ?? '').trim().slice(0, 160) || cleanStemTitle(safeName) || 'Movie'
@@ -864,6 +937,7 @@ function buildUploadPlan(rawFileName, options = {}) {
         dub,
         format: 'MOVIE',
         sourceType: 'upload-movie',
+        ...(validImdbId ? { imdbId: validImdbId } : {}),
       },
     }
   }
@@ -890,6 +964,7 @@ function buildUploadPlan(rawFileName, options = {}) {
         dub,
         format: 'TV',
         sourceType: 'upload-episode',
+        ...(validImdbId ? { imdbId: validImdbId } : {}),
       },
     }
   }
@@ -937,23 +1012,28 @@ async function readUploadSession(uploadId) {
   } catch {
     throw Object.assign(new Error('Upload session not found or expired'), { status: 404 })
   }
+  if (!meta || typeof meta.partFileName !== 'string' || !UPLOAD_PART_RE.test(meta.partFileName)) {
+    throw Object.assign(new Error('Invalid upload session state'), { status: 404 })
+  }
   const partPath = await allocateTempPath(meta.partFileName)
   let uploadedBytes = 0
   try {
-    const st = await fsp.stat(partPath)
-    if (st.isFile()) uploadedBytes = st.size
-  } catch {
+    const st = await fsp.lstat(partPath)
+    if (st.isSymbolicLink() || !st.isFile()) {
+      throw Object.assign(new Error('Invalid upload staging file'), { status: 400 })
+    }
+    uploadedBytes = st.size
+  } catch (err) {
+    if (err?.status) throw err
     // Recreate empty part file if missing.
-    await fsp.writeFile(partPath, Buffer.alloc(0))
+    await fsp.writeFile(partPath, Buffer.alloc(0), { mode: 0o600 })
     uploadedBytes = 0
   }
   return { meta, metaPath, partPath, uploadedBytes }
 }
 
 async function writeUploadMeta(metaPath, meta) {
-  const tmp = `${metaPath}.tmp`
-  await fsp.writeFile(tmp, JSON.stringify(meta, null, 2))
-  await fsp.rename(tmp, metaPath)
+  await atomicWriteFile(metaPath, JSON.stringify(meta, null, 2))
 }
 
 /**
@@ -992,25 +1072,35 @@ export async function createUploadSession(spec = {}) {
     .digest('hex')
     .slice(0, 24)
 
-  // Resume an in-progress session for the exact same file if one already exists.
+  // Resume an in-progress session for the exact same file if one already exists,
+  // prune expired (>24h) sessions, and cap active concurrent upload sessions.
   const incDir = path.join(dir, INCOMPLETE_DIR)
   const cutoff = Date.now() - UPLOAD_SESSION_TTL_MS
+  let activeSessions = 0
   try {
     const entries = await fsp.readdir(incDir)
     for (const name of entries) {
-      if (!/^upload-up_[0-9a-f]{20}\.meta\.json$/.test(name)) continue
+      if (!UPLOAD_META_RE.test(name)) continue
+      const existingMetaPath = path.join(incDir, name)
       try {
-        const existingMeta = JSON.parse(await fsp.readFile(path.join(incDir, name), 'utf8'))
-        if (
-          existingMeta?.fingerprint === fingerprint &&
-          existingMeta.totalSize === totalSize &&
-          Number(existingMeta.updatedAt) >= cutoff
-        ) {
+        const existingMeta = JSON.parse(await fsp.readFile(existingMetaPath, 'utf8'))
+        const validPart =
+          typeof existingMeta?.partFileName === 'string' && UPLOAD_PART_RE.test(existingMeta.partFileName)
+        if (!validPart || Number(existingMeta.updatedAt) < cutoff) {
+          if (validPart) {
+            const stalePart = await allocateTempPath(existingMeta.partFileName).catch(() => null)
+            if (stalePart) await fsp.rm(stalePart, { force: true }).catch(() => {})
+          }
+          await fsp.rm(existingMetaPath, { force: true }).catch(() => {})
+          continue
+        }
+        activeSessions += 1
+        if (existingMeta.fingerprint === fingerprint && existingMeta.totalSize === totalSize) {
           const partPath = await allocateTempPath(existingMeta.partFileName)
-          const st = await fsp.stat(partPath)
-          if (st.isFile() && st.size <= totalSize) {
+          const st = await fsp.lstat(partPath)
+          if (st.isFile() && !st.isSymbolicLink() && st.size <= totalSize) {
             existingMeta.updatedAt = Date.now()
-            await writeUploadMeta(path.join(incDir, name), existingMeta)
+            await writeUploadMeta(existingMetaPath, existingMeta)
             return {
               uploadId: existingMeta.uploadId,
               chunkSize: UPLOAD_CHUNK_SIZE,
@@ -1032,20 +1122,26 @@ export async function createUploadSession(spec = {}) {
     /* ignore */
   }
 
+  if (activeSessions >= MAX_ACTIVE_UPLOAD_SESSIONS) {
+    throw Object.assign(
+      new Error('Too many concurrent unfinished upload sessions; finish or cancel existing uploads first'),
+      { status: 429 },
+    )
+  }
+
   // Check duplicate target upfront BEFORE uploading gigabytes of data.
   let targetRelPath = plan.relPosix
   const existing = await getExistingByRelPath(targetRelPath)
   if (existing) {
-    if (keepBoth || plan.category === 'movie' || plan.category === 'unknown') {
-      if (!keepBoth) {
-        throw Object.assign(
-          new Error(
-            `"${plan.fileName}" already exists in ${plan.folder}/. Delete the old copy first or choose a different title.`,
-          ),
-          { status: 409, fileId: existing.id },
-        )
-      }
+    if (keepBoth) {
       targetRelPath = await pickNonCollidingRelPath(targetRelPath)
+    } else if (plan.category === 'movie' || plan.category === 'unknown') {
+      throw Object.assign(
+        new Error(
+          `"${plan.fileName}" already exists in ${plan.folder}/. Delete the old copy first or choose a different title.`,
+        ),
+        { status: 409, fileId: existing.id },
+      )
     } else {
       throw Object.assign(
         new Error(`"${plan.fileName}" is already in your library (${plan.folder}/)`),
@@ -1059,7 +1155,7 @@ export async function createUploadSession(spec = {}) {
   const partPath = await allocateTempPath(partFileName)
   const metaPath = await uploadMetaPathFor(uploadId)
 
-  await fsp.writeFile(partPath, Buffer.alloc(0))
+  await fsp.writeFile(partPath, Buffer.alloc(0), { mode: 0o600 })
   const now = Date.now()
   const meta = {
     uploadId,
@@ -1067,6 +1163,7 @@ export async function createUploadSession(spec = {}) {
     partFileName,
     ext: plan.ext,
     category: plan.category,
+    keepBoth,
     targetRelPath,
     totalSize,
     metadata: plan.metadata,
@@ -1209,7 +1306,7 @@ export async function completeUploadSession(uploadId) {
 
     // Never discard a completed upload if another file grabbed the same name mid-upload.
     const finalRelPath =
-      meta.category === 'episode'
+      meta.category === 'episode' && !meta.keepBoth
         ? meta.targetRelPath
         : await pickNonCollidingRelPath(meta.targetRelPath)
 
@@ -1232,6 +1329,36 @@ export async function completeUploadSession(uploadId) {
   })
 }
 
+/** Updates non-destructive catalog metadata (e.g. IMDb ID or display title) for a library file. */
+export async function annotateItem(itemId, { title, imdbId, asMovie } = {}) {
+  const resolved = await resolveById(itemId)
+  if (!resolved) return null
+  const rel = resolved.entry.relPosix
+  const existing = getCatalogEntry(rel)
+  const prev = existing && typeof existing === 'object' ? { ...existing } : {}
+  if (typeof imdbId === 'string' && /^tt\d{7,12}$/.test(imdbId)) {
+    prev.imdbId = imdbId
+  }
+  const cleanTitle = typeof title === 'string' ? title.trim().slice(0, 160) : ''
+  if (cleanTitle) {
+    prev.animeTitle = cleanTitle
+    prev.seriesTitle = cleanTitle
+    if (prev.sourceType === 'import' || !prev.sourceType) {
+      prev.sourceType = asMovie ? 'upload-movie' : 'annotated'
+    }
+    if (asMovie) {
+      prev.format = 'MOVIE'
+    }
+  }
+  prev.addedAt = prev.addedAt ?? resolved.entry.addedAt ?? Date.now()
+  catalog[rel] = prev
+  await persistCatalog()
+  invalidateCache()
+  notifyChange()
+  const next = await resolveById(itemId)
+  return next?.publicItem ?? null
+}
+
 /** Cancels an active chunked upload session and cleans up its staged file. */
 export async function cancelUploadSession(uploadId) {
   const metaPath = await uploadMetaPathFor(uploadId)
@@ -1243,7 +1370,7 @@ export async function cancelUploadSession(uploadId) {
     } catch {
       return { cancelled: false }
     }
-    if (partFileName) {
+    if (typeof partFileName === 'string' && UPLOAD_PART_RE.test(partFileName)) {
       const partPath = await allocateTempPath(partFileName).catch(() => null)
       if (partPath) await fsp.rm(partPath, { force: true }).catch(() => {})
     }
@@ -1285,6 +1412,21 @@ export async function attachSubtitleFile(itemId, rawSubName, contentBuffer, { of
   const { absPath: subAbs } = resolveInsideLibrary(resolved.libraryDir, subRelPosix)
   await ensureSafeLibraryParentDir(resolved.libraryDir, subAbs)
 
+  // After replacing a subtitle, remove older sidecar subtitles with a different
+  // extension (e.g. old `.vtt` when replacing with `.ass`) so playback serves the new file.
+  const removeSupersededSiblings = async () => {
+    for (const ext of playback.SUBTITLE_EXTENSIONS) {
+      if (ext === targetExt) continue
+      try {
+        const { absPath: otherAbs } = resolveInsideLibrary(resolved.libraryDir, `${baseRel}${ext}`)
+        const verified = await verifyRegularLibraryFile(resolved.libraryDir, otherAbs)
+        if (verified) await fsp.unlink(verified.realPath).catch(() => {})
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
   // Single-chunk fast path.
   if (cleanOffset === 0 && final) {
     const rawText = contentBuffer.toString('utf8')
@@ -1292,7 +1434,8 @@ export async function attachSubtitleFile(itemId, rawSubName, contentBuffer, { of
     const tmp = await allocateTempPath(`sub-${crypto.randomBytes(8).toString('hex')}.part${targetExt}`)
     try {
       await fsp.writeFile(tmp, finalText, 'utf8')
-      await fsp.rename(tmp, subAbs)
+      await moveStagedFileSafely(tmp, subAbs, { allowReplaceRegularFile: true })
+      await removeSupersededSiblings()
       invalidateCache()
       notifyChange()
       return { saved: true, uploadedBytes: contentBuffer.length }
@@ -1306,7 +1449,7 @@ export async function attachSubtitleFile(itemId, rawSubName, contentBuffer, { of
   return withUploadLock(`sub_${resolved.entry.id}`, async () => {
     const stagePath = await allocateTempPath(`sub-stage-${resolved.entry.id}.part`)
     if (cleanOffset === 0) {
-      await fsp.writeFile(stagePath, contentBuffer)
+      await fsp.writeFile(stagePath, contentBuffer, { mode: 0o600 })
     } else {
       let curSize = 0
       try {
@@ -1334,7 +1477,8 @@ export async function attachSubtitleFile(itemId, rawSubName, contentBuffer, { of
         const rawText = await fsp.readFile(stagePath, 'utf8')
         await fsp.writeFile(stagePath, playback.normalizeSubtitleToVtt(rawText), 'utf8')
       }
-      await fsp.rename(stagePath, subAbs)
+      await moveStagedFileSafely(stagePath, subAbs, { allowReplaceRegularFile: true })
+      await removeSupersededSiblings()
       invalidateCache()
       notifyChange()
       return { saved: true, uploadedBytes: total }
@@ -1350,6 +1494,31 @@ export async function attachSubtitleFile(itemId, rawSubName, contentBuffer, { of
  * Supports `category: 'movie' | 'episode' | 'unknown'`.
  */
 export async function importVideoStream(
+  readable,
+  rawFileName,
+  { category = 'unknown', title, season, episode, quality, dub, keepBoth = false, maxBytes = MAX_UPLOAD_BYTES } = {},
+) {
+  if (activeImportCount >= MAX_CONCURRENT_IMPORTS) {
+    throw Object.assign(new Error('Too many simultaneous video imports; try again shortly'), { status: 429 })
+  }
+  activeImportCount += 1
+  try {
+    return await importVideoStreamInner(readable, rawFileName, {
+      category,
+      title,
+      season,
+      episode,
+      quality,
+      dub,
+      keepBoth,
+      maxBytes,
+    })
+  } finally {
+    activeImportCount = Math.max(0, activeImportCount - 1)
+  }
+}
+
+async function importVideoStreamInner(
   readable,
   rawFileName,
   { category = 'unknown', title, season, episode, quality, dub, keepBoth = false, maxBytes = MAX_UPLOAD_BYTES } = {},

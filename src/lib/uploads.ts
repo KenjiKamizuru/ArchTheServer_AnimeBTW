@@ -9,8 +9,9 @@
 
 import { useSyncExternalStore } from 'react'
 import { api } from './api'
+import { claimArtworkSlots } from './artwork'
 import { refreshLibraryNow } from './downloads'
-import type { LibraryItem, UploadCategory } from '../types'
+import type { ArtworkSlot, LibraryItem, UploadCategory } from '../types'
 
 export type UploadTaskStatus =
   | 'queued'
@@ -49,6 +50,12 @@ export interface UploadTask {
   createdAt: number
 }
 
+export interface PendingImdbArtwork {
+  imdbId: string
+  imdbTitle: string
+  slots: Partial<Record<ArtworkSlot, string>>
+}
+
 export interface EnqueueUploadInput {
   file: File
   category: UploadCategory
@@ -59,11 +66,13 @@ export interface EnqueueUploadInput {
   dub?: boolean
   keepBoth?: boolean
   subtitleFile?: File | null
+  imdbArtwork?: PendingImdbArtwork | null
 }
 
 interface InternalTask extends UploadTask {
   file: File
   subtitleFile: File | null
+  imdbArtwork: PendingImdbArtwork | null
   xhr: XMLHttpRequest | null
   pauseRequested: boolean
   cancelRequested: boolean
@@ -404,6 +413,7 @@ async function ensureSession(task: InternalTask): Promise<string> {
     quality: task.quality || undefined,
     dub: task.dub,
     keepBoth: task.keepBoth,
+    imdbId: task.imdbArtwork?.imdbId || undefined,
   })
   task.uploadId = created.uploadId
   task.uploadedBytes = created.uploadedBytes
@@ -642,6 +652,26 @@ async function runUploadTask(task: InternalTask) {
       }
     }
 
+    if (task.imdbArtwork && Object.values(task.imdbArtwork.slots).some(Boolean)) {
+      try {
+        const groupTitle = item.seriesTitle || item.animeTitle || task.title
+        await claimArtworkSlots({
+          targetType: task.category === 'unknown' ? 'file' : 'series',
+          targetKey: task.category === 'unknown' ? item.id : groupTitle,
+          slots: task.imdbArtwork.slots,
+          imdbId: task.imdbArtwork.imdbId,
+          imdbTitle: task.imdbArtwork.imdbTitle,
+        })
+      } catch (artErr) {
+        if (!task.error) {
+          task.error =
+            artErr instanceof Error
+              ? `Video saved, but IMDb artwork failed: ${artErr.message}`
+              : 'Video saved, but IMDb artwork claim failed'
+        }
+      }
+    }
+
     task.status = 'completed'
     task.progress = 100
     task.uploadedBytes = task.totalSize
@@ -685,6 +715,7 @@ export function enqueueUploads(inputs: EnqueueUploadInput[]): UploadTask[] {
       uploadId: null,
       file: input.file,
       subtitleFile: input.subtitleFile ?? null,
+      imdbArtwork: input.imdbArtwork ?? null,
       subtitleName: input.subtitleFile?.name ?? null,
       fileName: input.file.name,
       targetFileName: input.file.name,

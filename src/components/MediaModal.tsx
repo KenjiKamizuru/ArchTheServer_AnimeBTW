@@ -19,6 +19,7 @@ import {
   ExternalLink,
   FolderDown,
   HardDrive,
+  ImagePlus,
   Layers,
   Loader2,
   Play,
@@ -40,6 +41,7 @@ import type {
   ProviderSearchResult,
 } from '../types'
 import { api } from '../lib/api'
+import { artworkForMedia, focusObjectClass, useArtwork } from '../lib/artwork'
 import { toggleBookmark, useBookmarks } from '../lib/bookmarks'
 import {
   cancelDownload,
@@ -62,7 +64,9 @@ import {
   formatSpeed,
   inferSeasonFromTitle,
   relativeTime,
+  safeExternalHref,
 } from '../lib/format'
+import { ImdbArtworkModal } from './ImdbArtworkModal'
 import { localItemToPlayback, usePlayer } from './Player'
 import { useToast } from './Toasts'
 
@@ -133,6 +137,7 @@ function DetailSheet({
   const [providerTitle, setProviderTitle] = useState<string | null>(null)
   const [providerEpCount, setProviderEpCount] = useState<number | null>(null)
   const [searchBusy, setSearchBusy] = useState(false)
+  const [imdbOpen, setImdbOpen] = useState(false)
 
   const autoWatched = useRef(false)
   const toast = useToast()
@@ -141,6 +146,15 @@ function DetailSheet({
   const settings = useSettings()
   const downloads = useDownloads()
   const libraryStore = useLibrary()
+  const artwork = useArtwork()
+  const mediaArt = artworkForMedia(artwork, media)
+  const bannerUrl = mediaArt?.banner
+    ? `${mediaArt.banner.url}?v=${mediaArt.banner.updatedAt}`
+    : media?.banner ?? null
+  const posterUrl = mediaArt?.poster
+    ? `${mediaArt.poster.url}?v=${mediaArt.poster.updatedAt}`
+    : media?.cover ?? null
+  const iconSlot = mediaArt?.icon ?? null
   const saved = media ? bookmarks.some((b) => b.mediaId === media.id) : false
 
   useEffect(() => {
@@ -674,10 +688,25 @@ function DetailSheet({
       >
         <div className="animate-slide-up overflow-hidden rounded-2xl bg-ink-900 shadow-2xl ring-1 ring-white/10">
           <div className="relative h-40 w-full overflow-hidden bg-ink-800 md:h-64">
-            {media?.banner ? (
-              <img src={media.banner} alt="" className="h-full w-full object-cover opacity-70" />
+            {bannerUrl ? (
+              <img
+                src={bannerUrl}
+                alt=""
+                className={`h-full w-full object-cover opacity-75 ${focusObjectClass(mediaArt?.banner?.focus)}`}
+              />
             ) : null}
             <div className="absolute inset-0 bg-gradient-to-t from-ink-900 via-ink-900/40 to-transparent" />
+            {media ? (
+              <button
+                type="button"
+                onClick={() => setImdbOpen(true)}
+                title="Claim banner, poster, or icon photo from IMDb using a tt… number"
+                className="absolute top-3 right-14 inline-flex items-center gap-1.5 rounded-full bg-black/65 px-3 py-1.5 text-[11px] font-medium text-white/90 ring-1 ring-white/15 backdrop-blur transition hover:bg-black/85 hover:text-amber-200"
+              >
+                <ImagePlus size={13} className="text-amber-300" />
+                IMDb Banner / Icon
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={onClose}
@@ -692,16 +721,29 @@ function DetailSheet({
             <div className="flex flex-col gap-4 md:flex-row md:gap-6">
               <div className="w-24 shrink-0 md:w-44">
                 <div className="aspect-2/3 overflow-hidden rounded-xl bg-ink-800 shadow-xl ring-1 ring-white/10">
-                  {media?.cover ? (
-                    <img src={media.cover} alt={media.title} className="h-full w-full object-cover" />
+                  {posterUrl ? (
+                    <img
+                      src={posterUrl}
+                      alt={media?.title ?? ''}
+                      className={`h-full w-full object-cover ${focusObjectClass(mediaArt?.poster?.focus)}`}
+                    />
                   ) : null}
                 </div>
               </div>
 
               <div className="min-w-0 flex-1 md:pt-16">
-                <h2 className="text-xl leading-tight font-semibold text-white md:text-3xl">
-                  {media?.title ?? <span className="inline-block h-7 w-2/3 animate-pulse rounded bg-ink-700" />}
-                </h2>
+                <div className="flex items-center gap-2.5">
+                  {iconSlot ? (
+                    <img
+                      src={`${iconSlot.url}?v=${iconSlot.updatedAt}`}
+                      alt=""
+                      className={`h-8 w-8 shrink-0 rounded-lg object-cover ring-1 ring-white/20 md:h-9 md:w-9 ${focusObjectClass(iconSlot.focus)}`}
+                    />
+                  ) : null}
+                  <h2 className="min-w-0 text-xl leading-tight font-semibold text-white md:text-3xl">
+                    {media?.title ?? <span className="inline-block h-7 w-2/3 animate-pulse rounded bg-ink-700" />}
+                  </h2>
+                </div>
                 {media?.romaji && media.romaji !== media.title ? (
                   <p className="mt-1 text-sm text-white/40">{media.romaji}</p>
                 ) : null}
@@ -849,23 +891,35 @@ function DetailSheet({
                     {saved ? 'Bookmarked' : 'Bookmark'}
                   </button>
 
-                  {media?.anidb ? (
+                  {media ? (
+                    <button
+                      type="button"
+                      onClick={() => setImdbOpen(true)}
+                      title="Claim photo for banner, poster, or icon from IMDb (e.g. tt0234144)"
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-amber-400/12 px-3 py-2 text-xs font-medium text-amber-200 ring-1 ring-amber-400/30 transition hover:bg-amber-400/22"
+                    >
+                      <ImagePlus size={14} className="text-amber-300" />
+                      {mediaArt?.imdbId ? `IMDb (${mediaArt.imdbId})` : 'IMDb Photo'}
+                    </button>
+                  ) : null}
+
+                  {safeExternalHref(media?.anidb) ? (
                     <a
-                      href={media.anidb}
+                      href={safeExternalHref(media?.anidb)!}
                       target="_blank"
-                      rel="noreferrer"
-                      title={media.anidbSearch ? 'Search this title on AniDB' : 'Open the AniDB entry'}
+                      rel="noopener noreferrer"
+                      title={media?.anidbSearch ? 'Search this title on AniDB' : 'Open the AniDB entry'}
                       className="inline-flex items-center gap-1.5 rounded-lg bg-white/5 px-3 py-2 text-xs font-medium text-white/70 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-white"
                     >
                       AniDB
                       <ExternalLink size={12} />
                     </a>
                   ) : null}
-                  {media?.siteUrl ? (
+                  {safeExternalHref(media?.siteUrl) ? (
                     <a
-                      href={media.siteUrl}
+                      href={safeExternalHref(media?.siteUrl)!}
                       target="_blank"
-                      rel="noreferrer"
+                      rel="noopener noreferrer"
                       className="inline-flex items-center gap-1.5 rounded-lg bg-white/5 px-3 py-2 text-xs font-medium text-white/70 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-white"
                     >
                       AniList
@@ -907,18 +961,22 @@ function DetailSheet({
                       Watch legally on
                     </h3>
                     <div className="mt-2 flex flex-wrap gap-1.5">
-                      {media.streams.map((stream) => (
-                        <a
-                          key={stream.url}
-                          href={stream.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-1 rounded-md bg-white/5 px-2.5 py-1 text-[11px] text-white/70 ring-1 ring-white/10 transition hover:text-accent"
-                        >
-                          {stream.site}
-                          <ExternalLink size={10} />
-                        </a>
-                      ))}
+                      {media.streams.map((stream) => {
+                        const href = safeExternalHref(stream.url)
+                        if (!href) return null
+                        return (
+                          <a
+                            key={href}
+                            href={href}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 rounded-md bg-white/5 px-2.5 py-1 text-[11px] text-white/70 ring-1 ring-white/10 transition hover:text-accent"
+                          >
+                            {stream.site}
+                            <ExternalLink size={10} />
+                          </a>
+                        )
+                      })}
                     </div>
                   </div>
                 ) : null}
@@ -1538,24 +1596,40 @@ function DetailSheet({
                   Official episode pages
                 </h3>
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  {detail.streamingEpisodes.slice(0, 12).map((ep) => (
-                    <a
-                      key={ep.url}
-                      href={ep.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 rounded-md bg-white/5 px-2.5 py-1 text-[11px] text-white/60 ring-1 ring-white/10 transition hover:text-accent"
-                    >
-                      {ep.site}
-                      <ExternalLink size={10} />
-                    </a>
-                  ))}
+                  {detail.streamingEpisodes.slice(0, 12).map((ep) => {
+                    const href = safeExternalHref(ep.url)
+                    if (!href) return null
+                    return (
+                      <a
+                        key={href}
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 rounded-md bg-white/5 px-2.5 py-1 text-[11px] text-white/60 ring-1 ring-white/10 transition hover:text-accent"
+                      >
+                        {ep.site}
+                        <ExternalLink size={10} />
+                      </a>
+                    )
+                  })}
                 </div>
               </div>
             ) : null}
           </div>
         </div>
       </div>
+      {media && imdbOpen ? (
+        <ImdbArtworkModal
+          open
+          onClose={() => setImdbOpen(false)}
+          targetLabel={media.title}
+          targetType="media"
+          targetKey={String(media.id)}
+          initialImdbId={mediaArt?.imdbId}
+          searchHint={media.title}
+          defaultAsMovie={media.format === 'MOVIE'}
+        />
+      ) : null}
     </div>
   )
 }

@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { normalizeHostPatternList, validateLibraryDir } from './security.mjs'
+import { atomicWriteFile, normalizeHostPatternList, validateLibraryDir } from './security.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const DATA_DIR = path.join(ROOT, 'data')
@@ -39,6 +39,7 @@ const DEFAULTS = {
 
 let state = { ...DEFAULTS }
 let resolvedLibraryPath = path.join(ROOT, 'library')
+let saveChain = Promise.resolve()
 
 function computeResolvedLibraryDir(configuredDir) {
   const fromEnv = rawEnvLibraryDir()
@@ -171,10 +172,11 @@ export async function save(patch = {}) {
   state = { ...next, updatedAt: Date.now() }
   resolvedLibraryPath = nextResolved
 
-  await fsp.mkdir(DATA_DIR, { recursive: true })
-  const tmp = `${FILE}.${process.pid}.tmp`
-  await fsp.writeFile(tmp, JSON.stringify(state, null, 2))
-  await fsp.rename(tmp, FILE)
+  const serialized = JSON.stringify(state, null, 2)
+  saveChain = saveChain
+    .catch(() => {})
+    .then(() => atomicWriteFile(FILE, serialized))
+  await saveChain
   return get()
 }
 
