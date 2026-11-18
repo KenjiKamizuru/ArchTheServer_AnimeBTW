@@ -18,6 +18,60 @@ export function formatMediaType(format: string | null): string {
   return map[format] ?? format.replace(/_/g, ' ')
 }
 
+export function formatBytes(bytes: number | null | undefined): string {
+  if (bytes == null || !Number.isFinite(bytes) || bytes < 0) return '—'
+  if (bytes === 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let value = bytes
+  let idx = 0
+  while (value >= 1024 && idx < units.length - 1) {
+    value /= 1024
+    idx += 1
+  }
+  const decimals = idx >= 3 ? 2 : idx >= 2 ? 1 : 0
+  return `${value.toFixed(decimals)} ${units[idx]}`
+}
+
+export function formatSpeed(bps: number | null | undefined): string | null {
+  if (bps == null || !Number.isFinite(bps) || bps <= 0) return null
+  return `${formatBytes(bps)}/s`
+}
+
+export function formatEpisodeCode(season: number | null | undefined, episode: number | null | undefined): string {
+  if (episode == null) return ''
+  const s = String(Math.max(1, Math.floor(season ?? 1))).padStart(2, '0')
+  const e = String(Math.max(1, Math.floor(episode))).padStart(2, '0')
+  return `S${s}E${e}`
+}
+
+export function formatQualityLabel(quality: string | null | undefined, resolvedHeight?: number | null): string {
+  if (resolvedHeight && resolvedHeight > 0) return `${resolvedHeight}p`
+  if (!quality) return 'Auto'
+  if (/^\d+$/.test(quality)) return `${quality}p`
+  if (/^\d+p$/i.test(quality)) return quality.toLowerCase()
+  if (quality === 'best') return 'Best'
+  if (quality === 'worst') return 'Lowest'
+  return quality
+}
+
+const SEASON_TITLE_RES = [
+  /^(.*?)[\s:–—-]+season\s+(\d{1,2})\s*$/i,
+  /^(.*?)[\s:–—-]+(\d{1,2})(?:st|nd|rd|th)\s+season\s*$/i,
+  /^(.*?)[\s:–—-]+s(\d{1,2})\s*$/i,
+]
+
+export function inferSeasonFromTitle(title: string | null | undefined): { seriesTitle: string; season: number } {
+  const clean = String(title ?? '').trim()
+  for (const re of SEASON_TITLE_RES) {
+    const match = clean.match(re)
+    if (match && match[1]?.trim()) {
+      const n = Number(match[2])
+      if (n >= 1 && n <= 99) return { seriesTitle: match[1].trim(), season: n }
+    }
+  }
+  return { seriesTitle: clean, season: 1 }
+}
+
 export function relativeTime(timestamp: number): string {
   const diff = timestamp - Date.now()
   const abs = Math.abs(diff)

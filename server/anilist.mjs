@@ -280,17 +280,65 @@ export async function getDetail(id) {
           ${MEDIA_FIELDS}
           trailer { id site }
           streamingEpisodes { title thumbnail url site }
-          relations { edges { relationType node { id type } } }
+          relations {
+            edges {
+              relationType
+              node {
+                id
+                type
+                format
+                status
+                episodes
+                season
+                seasonYear
+                title { romaji english native }
+                coverImage { large }
+                nextAiringEpisode { episode airingAt }
+              }
+            }
+          }
         }
       }`,
       { id: numeric },
     )
     const base = normalize(data.Media)
+    const seasonOrder = { WINTER: 0, SPRING: 1, SUMMER: 2, FALL: 3 }
+    const relatedSeasons = (data.Media.relations?.edges ?? [])
+      .filter(
+        (edge) =>
+          edge?.node?.type === 'ANIME' &&
+          (edge.relationType === 'PREQUEL' || edge.relationType === 'SEQUEL') &&
+          edge.node.status !== 'NOT_YET_RELEASED',
+      )
+      .map((edge) => {
+        const node = edge.node
+        const title = node.title?.english || node.title?.romaji || node.title?.native || `Anime #${node.id}`
+        return {
+          id: node.id,
+          relationType: edge.relationType,
+          title,
+          romaji: node.title?.romaji ?? null,
+          format: node.format ?? null,
+          status: node.status ?? 'UNKNOWN',
+          episodes: node.episodes ?? null,
+          airedEpisodes: airedEpisodes(node),
+          season: node.season ?? null,
+          seasonYear: node.seasonYear ?? null,
+          cover: node.coverImage?.large ?? null,
+        }
+      })
+      .sort(
+        (a, b) =>
+          (a.seasonYear ?? 9999) - (b.seasonYear ?? 9999) ||
+          (seasonOrder[a.season] ?? 9) - (seasonOrder[b.season] ?? 9) ||
+          a.id - b.id,
+      )
     return {
       ...base,
       streamingEpisodes: (data.Media.streamingEpisodes ?? [])
         .filter((e) => e?.url && e?.site)
         .map((e) => ({ title: e.title ?? '', thumbnail: e.thumbnail ?? null, url: e.url, site: e.site })),
+      relatedSeasons,
     }
   })
 }

@@ -6,6 +6,12 @@ let state: AppSettings = {
   quality: 'best',
   dub: false,
   resultIndex: 1,
+  libraryDir: 'library',
+  libraryDirLocked: false,
+  maxConcurrentDownloads: 2,
+  preferLocalPlayback: true,
+  allowedExternalHosts: [],
+  envExternalHostsConfigured: false,
   updatedAt: 0,
 }
 let started = false

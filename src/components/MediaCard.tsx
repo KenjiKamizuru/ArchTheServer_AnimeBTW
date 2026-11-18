@@ -1,6 +1,8 @@
-import { Bookmark, BookmarkCheck, Play, Star } from 'lucide-react'
+import { Bookmark, BookmarkCheck, HardDrive, Play, Star } from 'lucide-react'
+import { useMemo } from 'react'
 import type { Media } from '../types'
 import { toggleBookmark, useBookmarks } from '../lib/bookmarks'
+import { localFilesForMedia, useLibrary } from '../lib/downloads'
 import { formatMediaType, formatSeason } from '../lib/format'
 import { useDetail } from './MediaModal'
 import { useToast } from './Toasts'
@@ -9,6 +11,11 @@ export function MediaCard({ media }: { media: Media }) {
   const open = useDetail()
   const toast = useToast()
   const bookmarks = useBookmarks()
+  const libraryStore = useLibrary()
+  const localCount = useMemo(
+    () => localFilesForMedia(libraryStore.items, media).length,
+    [libraryStore.items, media],
+  )
   const saved = bookmarks.some((b) => b.mediaId === media.id)
   const latest = media.nextEpisode ? Math.max(0, media.nextEpisode.episode - 1) : media.airedEpisodes
 
@@ -56,6 +63,16 @@ export function MediaCard({ media }: { media: Media }) {
         {latest > 0 ? (
           <span className="pointer-events-none absolute top-1.5 right-1.5 rounded-md bg-black/70 px-1.5 py-0.5 text-[11px] font-medium text-white/80 backdrop-blur-sm">
             EP {latest}
+          </span>
+        ) : null}
+
+        {localCount > 0 ? (
+          <span
+            title={`${localCount} episode${localCount === 1 ? '' : 's'} saved in local library`}
+            className="pointer-events-none absolute bottom-2 left-1.5 inline-flex items-center gap-1 rounded-md bg-emerald-950/85 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300 ring-1 ring-emerald-500/30 backdrop-blur-sm transition group-hover:opacity-0"
+          >
+            <HardDrive size={10} />
+            {localCount} local
           </span>
         ) : null}
 
