@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import express from 'express'
 import path from 'node:path'
-import { gzipSync } from 'node:zlib'
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from 'node:zlib'
 import { existsSync, lstatSync, createReadStream } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import * as anilist from './anilist.mjs'
@@ -179,8 +179,17 @@ app.use((req, res, next) => {
 
 // Compress JSON API responses >= 512 bytes for gzip-capable clients.
 // Streaming routes (video, subtitle proxy, artwork) write directly and are untouched.
+const BROTLI_JSON_OPTIONS = {
+  params: {
+    [zlibConstants.BROTLI_PARAM_QUALITY]: 5,
+    [zlibConstants.BROTLI_PARAM_LGWIN]: 20,
+  },
+}
 app.use((req, res, next) => {
-  if (!/\bgzip\b/.test(String(req.headers['accept-encoding'] ?? ''))) return next()
+  const acceptEncoding = String(req.headers['accept-encoding'] ?? '')
+  const wantsBrotli = /\bbr\b/.test(acceptEncoding)
+  const wantsGzip = /\bgzip\b/.test(acceptEncoding)
+  if (!wantsBrotli && !wantsGzip) return next()
   const origJson = res.json.bind(res)
   res.json = (payload) => {
     const serialized = JSON.stringify(payload === undefined ? null : payload)
@@ -188,12 +197,33 @@ app.use((req, res, next) => {
       res.set('Vary', 'Accept-Encoding')
       return origJson(payload)
     }
-    const gz = gzipSync(Buffer.from(serialized, 'utf8'), { level: 6 })
-    res.set('Content-Encoding', 'gzip')
+    const raw = Buffer.from(serialized, 'utf8')
+    let body = null
+    let encoding = null
+    if (wantsBrotli) {
+      try {
+        body = brotliCompressSync(raw, {
+          ...BROTLI_JSON_OPTIONS,
+          params: { ...BROTLI_JSON_OPTIONS.params, [zlibConstants.BROTLI_PARAM_SIZE_HINT]: raw.length },
+        })
+        encoding = 'br'
+      } catch {
+        /* fall through to gzip */
+      }
+    }
+    if (!body && wantsGzip) {
+      body = gzipSync(raw, { level: 6 })
+      encoding = 'gzip'
+    }
+    if (!body) {
+      res.set('Vary', 'Accept-Encoding')
+      return origJson(payload)
+    }
+    res.set('Content-Encoding', encoding)
     res.set('Content-Type', 'application/json; charset=utf-8')
     res.set('Vary', 'Accept-Encoding')
-    res.setHeader('Content-Length', String(gz.length))
-    res.end(gz)
+    res.setHeader('Content-Length', String(body.length))
+    res.end(body)
     return res
   }
   next()
@@ -987,35 +1017,41 @@ if (isProd) {
   const dist = path.join(ROOT, 'dist')
   const assetsDir = path.join(dist, 'assets')
   const MIME = { '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' }
-  // Hashed asset names never change, so serve pre-gzipped twins and cache forever.
+  /** Picks the smallest precompressed twin the client actually accepts. */
+  const precompressedVariants = (baseName, acceptEncoding) => {
+    const accepts = String(acceptEncoding ?? '').toLowerCase()
+    const variants = []
+    if (/\bbr\b/.test(accepts)) variants.push({ file: `${baseName}.br`, enc: 'br' })
+    if (/\bgzip\b/.test(accepts)) variants.push({ file: `${baseName}.gz`, enc: 'gzip' })
+    return variants
+  }
+  // Hashed asset names never change, so serve precompressed twins and cache forever.
   app.use((req, res, next) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') return next()
-    if (req.path.endsWith('.gz')) {
+    // Never expose compression twins as directly addressable files.
+    if (req.path.endsWith('.gz') || req.path.endsWith('.br')) {
       res.status(404).end()
       return
     }
     const ext = path.extname(req.path)
-    if (
-      (ext === '.js' || ext === '.css') &&
-      req.path.startsWith('/assets/') &&
-      /\bgzip\b/.test(String(req.headers['accept-encoding'] ?? ''))
-    ) {
+    if ((ext === '.js' || ext === '.css') && req.path.startsWith('/assets/')) {
       const baseName = path.basename(req.path)
-      const gz = path.join(assetsDir, `${baseName}.gz`)
-      if (path.dirname(gz) === assetsDir && existsSync(gz)) {
+      for (const variant of precompressedVariants(baseName, req.headers['accept-encoding'])) {
+        const target = path.join(assetsDir, variant.file)
+        if (path.dirname(target) !== assetsDir || !existsSync(target)) continue
         try {
-          const st = lstatSync(gz)
+          const st = lstatSync(target)
           if (st.isFile() && !st.isSymbolicLink()) {
             res.setHeader('Content-Type', MIME[ext])
-            res.setHeader('Content-Encoding', 'gzip')
+            res.setHeader('Content-Encoding', variant.enc)
             res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
             res.setHeader('Vary', 'Accept-Encoding')
             res.setHeader('Content-Length', String(st.size))
-            pipeFileSafely(req, res, gz)
+            pipeFileSafely(req, res, target)
             return
           }
         } catch {
-          /* fall through to static */
+          /* try the next variant / fall through to static */
         }
       }
     }

@@ -63,6 +63,7 @@ import {
   formatSeason,
   formatSpeed,
   inferSeasonFromTitle,
+  pickSharedSeriesTitle,
   relativeTime,
   safeExternalHref,
 } from '../lib/format'
@@ -564,7 +565,10 @@ function DetailSheet({
             a.id - b.id,
         )
 
-        const sharedSeries = inferSeasonFromTitle(all[0].title).seriesTitle
+        // Derive the shared series base from every known title so a franchise that
+        // names seasons inconsistently ("… S2", "… II", "… Final Season) still
+        // lands in one folder tree. Then number seasons by release order.
+        const sharedSeries = pickSharedSeriesTitle(all.map((entry) => entry.title)) || inferSeasonFromTitle(all[0].title).seriesTitle
         const seasons: BulkSeasonSpec[] = all.map((entry, idx) => ({
           mediaId: entry.id,
           animeTitle: entry.title,

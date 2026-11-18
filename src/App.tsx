@@ -1,24 +1,36 @@
-import { lazy, Suspense } from 'react'
+import { Suspense } from 'react'
 import type { ReactNode } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import Layout from './components/Layout'
 import { DetailProvider } from './components/MediaModal'
 import { PlayerProvider } from './components/Player'
 import { ToastProvider } from './components/Toasts'
-import Home from './pages/Home'
-import Browse from './pages/Browse'
+import {
+  BookmarksPage,
+  BrowsePage,
+  DownloadedPage,
+  DownloadsPage,
+  HomePage,
+  SchedulePage,
+  SearchPage,
+  SettingsPage,
+} from './lib/routePrefetch'
 
-// Pages behind navigation load as their own chunks, keeping the first paint
-// bundle small.
-const Schedule = lazy(() => import('./pages/Schedule'))
-const Search = lazy(() => import('./pages/Search'))
-const DownloadsPage = lazy(() => import('./pages/Downloads'))
-const DownloadedPage = lazy(() => import('./pages/Downloaded'))
-const Bookmarks = lazy(() => import('./pages/Bookmarks'))
-const SettingsPage = lazy(() => import('./pages/Settings'))
-
+// Every page is its own chunk; hover/focus/idle prefetching (see
+// `lib/routePrefetch.ts`) keeps navigation instant without growing the
+// first-paint bundle.
 function LazyPage({ children }: { children: ReactNode }) {
-  return <Suspense fallback={<div className="grid min-h-64 place-items-center text-sm text-white/40">Loading…</div>}>{children}</Suspense>
+  return (
+    <Suspense
+      fallback={
+        <div className="grid min-h-64 place-items-center text-sm text-white/40" role="status" aria-live="polite">
+          Loading…
+        </div>
+      }
+    >
+      {children}
+    </Suspense>
+  )
 }
 
 export default function App() {
@@ -28,13 +40,13 @@ export default function App() {
         <DetailProvider>
           <Routes>
             <Route element={<Layout />}>
-              <Route index element={<Home />} />
-              <Route path="browse" element={<Browse />} />
-              <Route path="schedule" element={<LazyPage><Schedule /></LazyPage>} />
-              <Route path="search" element={<LazyPage><Search /></LazyPage>} />
+              <Route index element={<LazyPage><HomePage /></LazyPage>} />
+              <Route path="browse" element={<LazyPage><BrowsePage /></LazyPage>} />
+              <Route path="schedule" element={<LazyPage><SchedulePage /></LazyPage>} />
+              <Route path="search" element={<LazyPage><SearchPage /></LazyPage>} />
               <Route path="downloads" element={<LazyPage><DownloadsPage /></LazyPage>} />
               <Route path="downloaded" element={<LazyPage><DownloadedPage /></LazyPage>} />
-              <Route path="bookmarks" element={<LazyPage><Bookmarks /></LazyPage>} />
+              <Route path="bookmarks" element={<LazyPage><BookmarksPage /></LazyPage>} />
               <Route path="settings" element={<LazyPage><SettingsPage /></LazyPage>} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>

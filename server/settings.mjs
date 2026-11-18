@@ -10,7 +10,7 @@ const FILE = path.join(DATA_DIR, 'settings.json')
 
 export const QUALITIES = ['best', '1080', '720', '480', '360', 'worst']
 export const MIN_CONCURRENT_DOWNLOADS = 1
-export const MAX_CONCURRENT_DOWNLOADS = 6
+export const MAX_CONCURRENT_DOWNLOADS = 12
 
 function clampInt(value, lo, hi, fallback) {
   const n = Number(value)
