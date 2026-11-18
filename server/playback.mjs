@@ -11,7 +11,28 @@
 import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
+import { readResponseTextLimited, safeFetch, sanitizeErrorMessage } from './security.mjs'
+
+const MAX_SUBTITLE_FETCH_BYTES = 16 * 1024 * 1024
+const ASS_CONVERT_TIMEOUT_MS = 15_000
+const rawMaxStreams = Number(process.env.MAX_CONCURRENT_STREAMS)
+const MAX_CONCURRENT_REMUX =
+  Number.isInteger(rawMaxStreams) && rawMaxStreams >= 1 && rawMaxStreams <= 32 ? rawMaxStreams : 6
+let activeRemuxCount = 0
+
+function toFfmpegLocalPath(p) {
+  return `file:${path.resolve(String(p))}`
+}
+
+function assertSafeRemoteMediaTarget(target) {
+  const str = String(target ?? '').trim()
+  if (!/^https?:\/\//i.test(str) || /[\u0000-\u001f\u007f]/.test(str)) {
+    throw Object.assign(new Error('Refusing unsafe remote media URL'), { status: 400 })
+  }
+  return str
+}
 
 export const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
@@ -74,29 +95,81 @@ export function getFfmpegCapabilities(ffmpeg) {
   } catch {
     /* fall back to conservative flags */
   }
-  try {
-    const res = spawnSync(ffmpeg, ['-hide_banner', '-h', 'long'], {
-      encoding: 'utf8',
-      timeout: 5_000,
-      maxBuffer: 4 * 1024 * 1024,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    })
-    longHelp = res.stdout || ''
-  } catch {
-    /* fall back to -re */
+  // `-h long` omits protocol/demuxer AVOptions such as `-protocol_whitelist`
+  // (verified on FFmpeg 4.1: absent from `long`, present in `full`). Probe `full`
+  // first so security-critical flags are actually detected and applied, falling
+  // back to `long` on builds where `full` is unavailable.
+  for (const mode of ['full', 'long']) {
+    try {
+      const res = spawnSync(ffmpeg, ['-hide_banner', '-h', mode], {
+        encoding: 'utf8',
+        timeout: 5_000,
+        maxBuffer: 32 * 1024 * 1024,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      })
+      longHelp = res.stdout || ''
+      if (longHelp) break
+    } catch {
+      /* try the next help mode */
+    }
   }
+
+  // help text is unreliable across builds/forks (`-h long` and even `-h full`
+  // can omit AVOptions on some static builds), so confirm behaviourally: feed a
+  // playlist pointing at a `file:` URI and require ffmpeg to refuse it. This is
+  // the security-critical guarantee, so it must never be inferred optimistically.
+  const protocolWhitelist = probeProtocolWhitelist(ffmpeg)
 
   const caps = {
     extensionPicky: hlsHelp.includes('-extension_picky'),
     allowedExtensions: hlsHelp.includes('-allowed_extensions'),
     allowedSegmentExtensions: hlsHelp.includes('-allowed_segment_extensions'),
     readrateBurst: longHelp.includes('-readrate_initial_burst'),
-    protocolWhitelist: longHelp.includes('-protocol_whitelist'),
+    protocolWhitelist,
     httpReconnect: longHelp.includes('-reconnect_delay_max'),
     statsPeriod: longHelp.includes('-stats_period'),
   }
   capabilityCache.set(ffmpeg, caps)
   return caps
+}
+
+/**
+ * Returns true only when ffmpeg rejects a `file:` HLS segment URI while
+ * `-protocol_whitelist` excludes `file`. A build that silently ignores the
+ * option (or accepts local paths) reports false so callers can fail closed.
+ */
+function probeProtocolWhitelist(ffmpeg) {
+  const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ffprobe-wl-'))
+  const probeFile = path.join(probeDir, 'probe.m3u8')
+  const outFile = path.join(probeDir, 'out.mp4')
+  try {
+    fs.writeFileSync(
+      probeFile,
+      '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXTINF:1.0,\nfile:///etc/passwd\n#EXT-X-ENDLIST\n',
+    )
+    const res = spawnSync(
+      ffmpeg,
+      [
+        '-y', '-hide_banner', '-loglevel', 'error', '-nostdin',
+        '-protocol_whitelist', 'http,https,tcp,tls,crypto',
+        '-f', 'hls', '-allowed_extensions', 'ALL',
+        '-i', probeFile,
+        '-c', 'copy', '-f', 'mp4', outFile,
+      ],
+      { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'] },
+    )
+    if (res.error) return false
+    if (res.status === 0) return false // accepted a local-file segment: unsafe
+    return /not on whitelist|Protocol 'file' not/i.test(String(res.stderr ?? ''))
+  } catch {
+    return false
+  } finally {
+    try {
+      fs.rmSync(probeDir, { recursive: true, force: true })
+    } catch {
+      /* best effort */
+    }
+  }
 }
 
 export function getMime(filePath) {
@@ -144,6 +217,8 @@ export function sendFileWithRange(req, res, filePath, { downloadName, attachment
 
   res.setHeader('Accept-Ranges', 'bytes')
   res.setHeader('Content-Type', getMime(filePath))
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox")
   res.setHeader('Cache-Control', 'private, max-age=0, must-revalidate')
   res.setHeader('Last-Modified', stat.mtime.toUTCString())
   res.setHeader('Content-Disposition', contentDispositionHeader(attachment ? 'attachment' : 'inline', name))
@@ -167,21 +242,33 @@ export function sendFileWithRange(req, res, filePath, { downloadName, attachment
 
   const range = req.headers.range
   if (range && typeof range === 'string' && range.startsWith('bytes=') && fileSize > 0) {
-    // Only honor single byte ranges; return full representation otherwise.
+    // Strictly validate single RFC 9110 byte range (`start-end`, `start-`, `-suffix`).
     const spec = range.slice(6).trim()
     if (!spec.includes(',')) {
-      const [startRaw, endRaw] = spec.split('-')
+      const m = spec.match(/^(\d{0,16})-(\d{0,16})$/)
+      if (!m || (!m[1] && !m[2])) {
+        res.status(416).setHeader('Content-Range', `bytes */${fileSize}`).end()
+        return
+      }
+      const [, startRaw, endRaw] = m
       let start
       let end
       if (!startRaw) {
-        const suffix = Number.parseInt(endRaw, 10)
-        start = Number.isNaN(suffix) || suffix <= 0 ? NaN : Math.max(0, fileSize - suffix)
+        const suffix = Number(endRaw)
+        start = !Number.isSafeInteger(suffix) || suffix <= 0 ? NaN : Math.max(0, fileSize - suffix)
         end = fileSize - 1
       } else {
-        start = Number.parseInt(startRaw, 10)
-        end = endRaw ? Math.min(Number.parseInt(endRaw, 10), fileSize - 1) : fileSize - 1
+        start = Number(startRaw)
+        const parsedEnd = endRaw ? Number(endRaw) : fileSize - 1
+        end = Number.isSafeInteger(parsedEnd) ? Math.min(parsedEnd, fileSize - 1) : NaN
       }
-      if (Number.isNaN(start) || Number.isNaN(end) || start > end || start < 0 || start >= fileSize) {
+      if (
+        !Number.isSafeInteger(start) ||
+        !Number.isSafeInteger(end) ||
+        start > end ||
+        start < 0 ||
+        start >= fileSize
+      ) {
         res.status(416).setHeader('Content-Range', `bytes */${fileSize}`).end()
         return
       }
@@ -229,17 +316,37 @@ function assToVtt(filePath) {
       resolve(null)
       return
     }
-    const child = spawn(
-      ffmpeg,
-      ['-hide_banner', '-loglevel', 'error', '-nostdin', '-i', filePath, '-f', 'webvtt', 'pipe:1'],
-      { stdio: ['ignore', 'pipe', 'ignore'] },
-    )
+    const caps = getFfmpegCapabilities(ffmpeg)
+    const args = ['-hide_banner', '-loglevel', 'error', '-nostdin']
+    if (caps.protocolWhitelist) args.push('-protocol_whitelist', 'file,pipe')
+    args.push('-i', toFfmpegLocalPath(filePath), '-f', 'webvtt', 'pipe:1')
+
+    const child = spawn(ffmpeg, args, { stdio: ['ignore', 'pipe', 'ignore'] })
     let out = ''
+    let overflowed = false
+    const timer = setTimeout(() => {
+      overflowed = true
+      kill(child)
+    }, ASS_CONVERT_TIMEOUT_MS)
+    timer.unref?.()
+
     child.stdout?.on('data', (chunk) => {
-      if (out.length < 8_000_000) out += chunk.toString('utf8')
+      if (overflowed) return
+      if (out.length + chunk.length > 8_000_000) {
+        overflowed = true
+        kill(child)
+        return
+      }
+      out += chunk.toString('utf8')
     })
-    child.once('error', () => resolve(null))
-    child.once('close', (code) => resolve(code === 0 && out.trim() ? out : null))
+    child.once('error', () => {
+      clearTimeout(timer)
+      resolve(null)
+    })
+    child.once('close', (code) => {
+      clearTimeout(timer)
+      resolve(!overflowed && code === 0 && out.trim() ? out : null)
+    })
   })
 }
 
@@ -255,6 +362,11 @@ export async function sendSubtitleFile(res, filePath) {
         return
       }
     } else {
+      const st = await fsp.lstat(filePath)
+      if (!st.isFile() || st.isSymbolicLink() || st.size > MAX_SUBTITLE_FETCH_BYTES) {
+        res.status(404).json({ error: 'Subtitle not found' })
+        return
+      }
       const raw = await fsp.readFile(filePath, 'utf8')
       text = ext === '.srt' ? normalizeSubtitleToVtt(raw) : raw
     }
@@ -264,26 +376,30 @@ export async function sendSubtitleFile(res, filePath) {
   }
 
   res.setHeader('Content-Type', 'text/vtt; charset=utf-8')
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox")
   res.setHeader('Cache-Control', 'no-store')
   res.send(text)
 }
 
-/** Fetches a remote subtitle URL and converts it to WebVTT text. */
+/** Fetches a remote subtitle URL (with SSRF checks & byte cap) and converts it to WebVTT. */
 export async function fetchSubtitleVtt(url, { referer, headers = {}, signal, fetchFn } = {}) {
   const mergedHeaders = {
     'User-Agent': headers['User-Agent'] || USER_AGENT,
     ...(referer ? { Referer: referer } : {}),
     ...headers,
   }
+  const effectiveSignal = signal ?? AbortSignal.timeout(15_000)
   const upstream = fetchFn
-    ? await fetchFn(url, { headers: mergedHeaders, signal })
-    : await fetch(url, { headers: mergedHeaders, signal })
+    ? await fetchFn(url, { headers: mergedHeaders, signal: effectiveSignal })
+    : (await safeFetch(url, { headers: mergedHeaders, signal: effectiveSignal })).response
   if (!upstream.ok) {
+    await upstream.body?.cancel?.().catch(() => {})
     const err = new Error('Subtitle not found')
     err.status = upstream.status === 404 ? 404 : 502
     throw err
   }
-  const raw = await upstream.text()
+  const raw = await readResponseTextLimited(upstream, MAX_SUBTITLE_FETCH_BYTES, 'Subtitle file')
   if (/^\s*<!doctype\s+html|^\s*<html/i.test(raw)) {
     throw Object.assign(new Error('Invalid subtitle document'), { status: 502 })
   }
@@ -295,11 +411,13 @@ export async function proxySubtitle(res, url, referer) {
   try {
     const text = await fetchSubtitleVtt(url, { referer })
     res.setHeader('Content-Type', 'text/vtt; charset=utf-8')
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox")
     res.setHeader('Cache-Control', 'no-store')
     res.send(text)
   } catch (err) {
-    const status = err?.status === 404 ? 404 : 502
-    res.status(status).json({ error: err?.message || 'Could not fetch the subtitle' })
+    const status = err?.status === 403 ? 403 : err?.status === 404 ? 404 : 502
+    res.status(status).json({ error: sanitizeErrorMessage(err?.message, 'Could not fetch the subtitle') })
   }
 }
 
@@ -308,7 +426,11 @@ function lastError(stderr) {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-  return lines.at(-1)?.slice(0, 300) || null
+  const raw = lines.at(-1)
+  if (!raw) return null
+  // Scrub signed upstream URLs and local filesystem paths from FFmpeg diagnostics.
+  const withoutUrls = raw.replace(/https?:\/\/\S+/gi, '[remote-stream]').replace(/file:\S+/gi, '[local-file]')
+  return sanitizeErrorMessage(withoutUrls, 'Media processing failed').slice(0, 300)
 }
 
 function kill(child, wasStopped = false) {
@@ -355,6 +477,7 @@ function appendRemoteInputArgs(
   target,
   { referer, headers, isHls, realtime, restrictProtocols, caps },
 ) {
+  const safeTarget = assertSafeRemoteMediaTarget(target)
   if (realtime) {
     // Deliver an initial burst at full speed so `delay_moov` emits the first
     // fragment immediately and the browser builds a healthy audio buffer, then
@@ -365,8 +488,17 @@ function appendRemoteInputArgs(
       args.push('-re')
     }
   }
-  if (restrictProtocols && caps.protocolWhitelist) {
-    args.push('-protocol_whitelist', 'file,http,https,tcp,tls,crypto')
+  // Explicitly omit `file` so remote playlists/redirects can never read local
+  // disk. If this ffmpeg build cannot enforce the whitelist, refuse the remote
+  // stream entirely rather than falling back to unrestricted protocol access.
+  if (restrictProtocols) {
+    if (!caps.protocolWhitelist) {
+      throw Object.assign(
+        new Error('This ffmpeg build cannot restrict remote protocols; remote playback is disabled'),
+        { status: 503 },
+      )
+    }
+    args.push('-protocol_whitelist', 'http,https,tcp,tls,crypto')
   }
   if (!realtime && caps.httpReconnect && !isHls) {
     args.push('-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5')
@@ -396,7 +528,7 @@ function appendRemoteInputArgs(
     if (caps.allowedExtensions) args.push('-allowed_extensions', 'ALL')
     if (caps.allowedSegmentExtensions) args.push('-allowed_segment_extensions', 'ALL')
   }
-  args.push('-i', target)
+  args.push('-i', safeTarget)
 }
 
 function appendMappingAndCodecArgs(
@@ -445,11 +577,14 @@ function buildRemuxArgs({
       headers,
       isHls: hls,
       realtime,
-      restrictProtocols: false,
+      restrictProtocols: true,
       caps,
     })
   } else {
-    args.push('-i', filePath)
+    if (caps.protocolWhitelist) {
+      args.push('-protocol_whitelist', 'file,pipe,crypto')
+    }
+    args.push('-i', toFfmpegLocalPath(filePath))
   }
 
   if (audioUrl) {
@@ -458,7 +593,7 @@ function buildRemuxArgs({
       headers,
       isHls: hls || /\.m3u8(?:$|\?)/i.test(audioUrl),
       realtime,
-      restrictProtocols: false,
+      restrictProtocols: true,
       caps,
     })
   }
@@ -508,7 +643,19 @@ export function remux(
     return
   }
 
+  if (activeRemuxCount >= MAX_CONCURRENT_REMUX) {
+    res.status(429).json({ error: 'Too many simultaneous active streams; close another stream and retry' })
+    return
+  }
+
   const caps = getFfmpegCapabilities(ffmpeg)
+  activeRemuxCount += 1
+  let slotReleased = false
+  const releaseSlot = () => {
+    if (slotReleased) return
+    slotReleased = true
+    activeRemuxCount = Math.max(0, activeRemuxCount - 1)
+  }
   let child = null
   let started = false
   let settled = false
@@ -526,6 +673,7 @@ export function remux(
 
   const onClientClose = () => {
     clientClosed = true
+    releaseSlot()
     detachListeners()
     kill(child)
   }
@@ -533,6 +681,7 @@ export function remux(
   const finish = (status, body) => {
     if (settled) return
     settled = true
+    releaseSlot()
     detachListeners()
     if (res.writableEnded || res.destroyed) return
     if (!started) {
@@ -548,23 +697,29 @@ export function remux(
 
   const run = ({ transcodeAudio = false, transcodeVideo = false, dropAudioUrl = false } = {}) => {
     const activeAudioUrl = dropAudioUrl ? null : audioUrl
-    const args = buildRemuxArgs({
-      filePath,
-      url,
-      audioUrl: activeAudioUrl,
-      referer,
-      headers,
-      hls,
-      realtime,
-      transcodeAudio,
-      transcodeVideo,
-      caps,
-    })
+    let args
+    try {
+      args = buildRemuxArgs({
+        filePath,
+        url,
+        audioUrl: activeAudioUrl,
+        referer,
+        headers,
+        hls,
+        realtime,
+        transcodeAudio,
+        transcodeVideo,
+        caps,
+      })
+    } catch (err) {
+      finish(err?.status || 400, { error: sanitizeErrorMessage(err?.message, 'Invalid stream source') })
+      return
+    }
     let proc
     try {
       proc = spawn(ffmpeg, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     } catch (err) {
-      finish(500, { error: err?.message || 'Could not start ffmpeg' })
+      finish(500, { error: sanitizeErrorMessage(err?.message, 'Could not start ffmpeg') })
       return
     }
     child = proc
@@ -576,6 +731,8 @@ export function remux(
         started = true
         res.status(200)
         res.setHeader('Content-Type', 'video/mp4')
+        res.setHeader('X-Content-Type-Options', 'nosniff')
+        res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox")
         res.setHeader('Cache-Control', 'no-store')
         res.setHeader('Accept-Ranges', 'none')
       }
@@ -589,7 +746,7 @@ export function remux(
     })
 
     proc.once('error', (err) => {
-      finish(500, { error: err?.message || 'Could not start ffmpeg' })
+      finish(500, { error: sanitizeErrorMessage(err?.message, 'Could not start ffmpeg') })
     })
 
     proc.once('close', (code) => {
@@ -664,7 +821,9 @@ function buildFileDownloadArgs({
 
   // Standard fast-start MP4 places `moov` at the beginning of the file so local
   // HTTP range playback starts and seeks instantaneously in every browser.
-  args.push('-movflags', '+faststart', '-f', 'mp4', outputPath)
+  // Note: `-protocol_whitelist` is a per-input AVOption (does not restrict the
+  // muxer output file, which still uses `file:` to block protocol confusion).
+  args.push('-movflags', '+faststart', '-f', 'mp4', toFfmpegLocalPath(outputPath))
   return args
 }
 
@@ -746,16 +905,24 @@ export function downloadStreamToFile({
     const run = ({ transcodeAudio = false, dropAudioUrl = false } = {}) => {
       if (settled || signal?.aborted) return
       const activeAudioUrl = dropAudioUrl ? null : audioUrl
-      const args = buildFileDownloadArgs({
-        url,
-        audioUrl: activeAudioUrl,
-        referer,
-        headers,
-        hls,
-        outputPath,
-        transcodeAudio,
-        caps,
-      })
+      let args
+      try {
+        args = buildFileDownloadArgs({
+          url,
+          audioUrl: activeAudioUrl,
+          referer,
+          headers,
+          hls,
+          outputPath,
+          transcodeAudio,
+          caps,
+        })
+      } catch (err) {
+        settled = true
+        cleanup()
+        reject(err)
+        return
+      }
 
       let proc
       try {
@@ -893,30 +1060,25 @@ export function remuxFastStart(inputPath, outputPath, { signal } = {}) {
       resolve(false)
       return
     }
-    const child = spawn(
-      ffmpeg,
-      [
-        '-y',
-        '-hide_banner',
-        '-loglevel',
-        'error',
-        '-nostdin',
-        '-i',
-        inputPath,
-        '-map',
-        '0:v:0?',
-        '-map',
-        '0:a:0?',
-        '-c',
-        'copy',
-        '-movflags',
-        '+faststart',
-        '-f',
-        'mp4',
-        outputPath,
-      ],
-      { stdio: ['ignore', 'ignore', 'pipe'] },
+    const caps = getFfmpegCapabilities(ffmpeg)
+    const args = ['-y', '-hide_banner', '-loglevel', 'error', '-nostdin']
+    if (caps.protocolWhitelist) args.push('-protocol_whitelist', 'file,pipe,crypto')
+    args.push(
+      '-i',
+      toFfmpegLocalPath(inputPath),
+      '-map',
+      '0:v:0?',
+      '-map',
+      '0:a:0?',
+      '-c',
+      'copy',
+      '-movflags',
+      '+faststart',
+      '-f',
+      'mp4',
+      toFfmpegLocalPath(outputPath),
     )
+    const child = spawn(ffmpeg, args, { stdio: ['ignore', 'ignore', 'pipe'] })
     let stderr = ''
     const onAbort = () => kill(child)
     signal?.addEventListener('abort', onAbort, { once: true })

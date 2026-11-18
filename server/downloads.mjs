@@ -19,10 +19,14 @@ import * as resolver from './resolver.mjs'
 import * as playback from './playback.mjs'
 import * as library from './library.mjs'
 import {
+  atomicWriteFile,
   inspectHlsPlaylist,
   inspectMp4File,
   inspectMp4PrefixBytes,
+  readResponseTextLimited,
   safeFetch,
+  sanitizeCoverUrl,
+  sanitizeErrorMessage,
   sanitizeExternalHeaders,
   validateRemoteUrl,
 } from './security.mjs'
@@ -32,7 +36,10 @@ const DATA_DIR = path.join(ROOT, 'data')
 const JOBS_FILE = path.join(DATA_DIR, 'downloads.json')
 
 const MAX_BULK_EPISODES = 500
+const MAX_HISTORY_JOBS = 1_000
 const MAX_SUSPENDED_FFMPEG = 3
+const JOB_ID_RE = /^dl_[a-z0-9]{1,20}_[0-9a-f]{10}$/
+const JOB_PART_RE = /^dl_[a-z0-9]{1,20}_[0-9a-f]{10}\.(?:fast\.)?part\.mp4$/
 const PROGRESS_PERSIST_MS = 1_500
 const SSE_THROTTLE_MS = 300
 
@@ -86,12 +93,7 @@ function persistNow() {
   const payload = serializeJobs()
   persistChain = persistChain
     .catch(() => {})
-    .then(async () => {
-      await fsp.mkdir(DATA_DIR, { recursive: true })
-      const tmp = `${JOBS_FILE}.${process.pid}.tmp`
-      await fsp.writeFile(tmp, payload)
-      await fsp.rename(tmp, JOBS_FILE)
-    })
+    .then(() => atomicWriteFile(JOBS_FILE, payload))
     .catch((err) => {
       console.error('[downloads] failed to persist jobs:', err?.message || err)
     })
@@ -138,14 +140,12 @@ function emitThrottled() {
 }
 
 function canPauseJob(job) {
-  if (job.status === 'queued') return true
+  if (job.status === 'queued' || job.status === 'resolving') return true
   if (job.status === 'downloading') {
     const rt = runtime.get(job.id)
     if (!rt) return false
-    if (rt.kind === 'direct') return true
-    if (rt.kind === 'ffmpeg') return Boolean(rt.control?.canPause) || true
+    return rt.kind === 'direct' || rt.kind === 'ffmpeg'
   }
-  if (job.status === 'resolving') return true
   return false
 }
 
@@ -221,7 +221,22 @@ export async function init() {
     const raw = await fsp.readFile(JOBS_FILE, 'utf8')
     const parsed = JSON.parse(raw)
     if (Array.isArray(parsed)) {
-      jobs = parsed.filter((j) => j && typeof j === 'object' && j.id && j.targetRelPath)
+      jobs = parsed.filter(
+        (j) =>
+          j &&
+          typeof j === 'object' &&
+          typeof j.id === 'string' &&
+          JOB_ID_RE.test(j.id) &&
+          typeof j.targetRelPath === 'string' &&
+          j.targetRelPath.length > 0,
+      )
+      for (const j of jobs) {
+        j.cover = sanitizeCoverUrl(j.cover)
+        if (typeof j._partFileName !== 'string' || !JOB_PART_RE.test(j._partFileName)) {
+          j._partFileName = null
+          j._directResume = false
+        }
+      }
     }
   } catch {
     jobs = []
@@ -524,7 +539,7 @@ async function prepareJobRecord(spec, config) {
     resolvedHeight: null,
     dub,
     format: spec.format ? String(spec.format).slice(0, 32) : null,
-    cover: spec.cover ? String(spec.cover).slice(0, 500) : null,
+    cover: sanitizeCoverUrl(spec.cover),
     query,
     resultIndex,
     externalUrl,
@@ -558,10 +573,25 @@ function insertJobReplacingFinished(job) {
     (existing) =>
       !(
         existing.targetRelPath === job.targetRelPath &&
-        (existing.status === 'failed' || existing.status === 'cancelled' || (existing.status === 'completed' && !existing.fileId))
+        (existing.status === 'failed' ||
+          existing.status === 'cancelled' ||
+          (existing.status === 'completed' && !existing.fileId))
       ),
   )
   jobs.push(job)
+
+  // Bound terminal job history so data/downloads.json cannot grow without limit.
+  const terminalCount = jobs.reduce((acc, j) => acc + (ACTIVE_STATUSES.has(j.status) ? 0 : 1), 0)
+  if (terminalCount > MAX_HISTORY_JOBS) {
+    let toDrop = terminalCount - MAX_HISTORY_JOBS
+    jobs = jobs.filter((j) => {
+      if (toDrop > 0 && !ACTIVE_STATUSES.has(j.status)) {
+        toDrop -= 1
+        return false
+      }
+      return true
+    })
+  }
 }
 
 /** Enqueues a single episode or authorized external source for download. */
@@ -847,14 +877,10 @@ async function fetchTextSafe(url, { headers, signal, requireApprovedHost, extraA
     fetchImpl: networkOverrides.fetchImpl,
   })
   if (!response.ok) {
+    await response.body?.cancel?.().catch(() => {})
     throw httpError(`Remote source responded with HTTP ${response.status}`, 502)
   }
-  const contentLength = Number(response.headers.get('content-length') || 0)
-  if (contentLength > 10 * 1024 * 1024) {
-    await response.body?.cancel().catch(() => {})
-    throw httpError('Playlist response is unexpectedly large', 422)
-  }
-  const text = await response.text()
+  const text = await readResponseTextLimited(response, 10 * 1024 * 1024, 'Playlist response')
   return { text, finalUrl, contentType: String(response.headers.get('content-type') || '') }
 }
 
@@ -1085,6 +1111,11 @@ async function runDirectMp4Download(job, rt, { url, referer, headers, requireApp
       if (Number.isFinite(cl) && cl >= 0) expectedTotal = resumeOffset + cl
     }
 
+    if (expectedTotal != null && expectedTotal > library.MAX_UPLOAD_BYTES) {
+      await response.body?.cancel().catch(() => {})
+      throw httpError('Remote video exceeds maximum allowed file size', 413)
+    }
+
     job._partFileName = partFileName
     job._directResume = true
     job._etag = response.headers.get('etag') || job._etag || null
@@ -1138,6 +1169,10 @@ async function runDirectMp4Download(job, rt, { url, referer, headers, requireApp
           }
         }
 
+        if (resumeOffset + chunk.length > library.MAX_UPLOAD_BYTES || job.downloadedBytes + chunk.length > library.MAX_UPLOAD_BYTES) {
+          await reader.cancel().catch(() => {})
+          throw httpError('Remote video exceeds maximum allowed file size', 413)
+        }
         if (!out.write(chunk)) {
           await new Promise((resolve, reject) => {
             const onDrain = () => {
@@ -1502,7 +1537,7 @@ async function executeJob(job) {
       if (tempPath) await fsp.rm(tempPath, { force: true }).catch(() => {})
       job.status = 'failed'
       job.speedBps = null
-      job.error = String(err?.message || 'Download failed').slice(0, 400)
+      job.error = sanitizeErrorMessage(err?.message, 'Download failed').slice(0, 400)
       job.updatedAt = Date.now()
     }
   } finally {

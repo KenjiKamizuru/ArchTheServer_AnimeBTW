@@ -4,18 +4,33 @@ export function formatSeason(season: string | null, year: number | null): string
   return year ? `${label} ${year}` : label
 }
 
+const MEDIA_TYPE_LABELS: Record<string, string> = {
+  TV: 'TV',
+  TV_SHORT: 'Short',
+  MOVIE: 'Movie',
+  SPECIAL: 'Special',
+  OVA: 'OVA',
+  ONA: 'ONA',
+  MUSIC: 'Music',
+}
+
 export function formatMediaType(format: string | null): string {
   if (!format) return 'Anime'
-  const map: Record<string, string> = {
-    TV: 'TV',
-    TV_SHORT: 'Short',
-    MOVIE: 'Movie',
-    SPECIAL: 'Special',
-    OVA: 'OVA',
-    ONA: 'ONA',
-    MUSIC: 'Music',
+  return Object.prototype.hasOwnProperty.call(MEDIA_TYPE_LABELS, format)
+    ? MEDIA_TYPE_LABELS[format]
+    : format.replace(/_/g, ' ')
+}
+
+/** Ensures an external `<a href>` uses `https:` or `http:` (blocks `javascript:` / `data:`). */
+export function safeExternalHref(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  try {
+    const parsed = new URL(raw.trim())
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null
+    return parsed.href
+  } catch {
+    return null
   }
-  return map[format] ?? format.replace(/_/g, ' ')
 }
 
 export function formatBytes(bytes: number | null | undefined): string {

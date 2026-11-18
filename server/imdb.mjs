@@ -11,7 +11,13 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as cache from './cache.mjs'
-import { validateRemoteUrl } from './security.mjs'
+import {
+  atomicWriteFile,
+  readResponseBufferLimited as readBodyBufferLimited,
+  readResponseTextLimited,
+  safeFetch,
+  validateRemoteUrl,
+} from './security.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const DATA_DIR = path.join(ROOT, 'data')
@@ -20,6 +26,8 @@ const MANIFEST_FILE = path.join(DATA_DIR, 'artwork.json')
 
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024 // 15 MB per image
 const MAX_PREVIEW_BYTES = 8 * 1024 * 1024 // 8 MB per gallery preview
+const MAX_META_BYTES = 8 * 1024 * 1024 // 8 MB per IMDb metadata response
+const MAX_BUCKET_ENTRIES = 5_000
 const FETCH_TIMEOUT_MS = 10_000
 
 const BROWSER_UA =
@@ -42,15 +50,29 @@ const VALID_FOCUSES = new Set(['top', 'center', 'bottom'])
 const TITLE_CACHE_TTL_MS = 15 * 60_000
 const SEARCH_CACHE_TTL_MS = 10 * 60_000
 
-let manifest = {
-  app: {},
-  media: {},
-  series: {},
-  file: {},
+function emptyManifest() {
+  return {
+    app: Object.create(null),
+    media: Object.create(null),
+    series: Object.create(null),
+    file: Object.create(null),
+  }
 }
 
+let manifest = emptyManifest()
+
 let writeChain = Promise.resolve()
+const targetLocks = new Map()
 const changeListeners = new Set()
+
+function withTargetLock(lockKey, fn) {
+  const prev = targetLocks.get(lockKey) ?? Promise.resolve()
+  const next = prev.catch(() => {}).then(fn)
+  targetLocks.set(lockKey, next)
+  return next.finally(() => {
+    if (targetLocks.get(lockKey) === next) targetLocks.delete(lockKey)
+  })
+}
 
 export function onChange(fn) {
   changeListeners.add(fn)
@@ -96,7 +118,7 @@ function normalizeTargetKey(targetType, rawKey) {
     return clean
   }
   const key = normalizeSeriesKey(rawKey)
-  if (!key) throw httpError('A series or movie title key is required', 400)
+  if (!key || key === '__proto__') throw httpError('A series or movie title key is required', 400)
   return key
 }
 
@@ -237,36 +259,33 @@ async function fetchWithTimeout(url, init = {}, timeoutMs = FETCH_TIMEOUT_MS) {
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   timer.unref?.()
   try {
-    return await fetch(url, { ...init, signal: controller.signal })
+    return await fetch(url, { redirect: 'error', ...init, signal: controller.signal })
+  } catch {
+    // Network-level failure (DNS, TLS, reset, timeout) is an upstream gateway error,
+    // never a 500 with internal stack context.
+    throw httpError('IMDb is unreachable right now', 502)
   } finally {
     clearTimeout(timer)
   }
 }
 
+async function safeMetaFetch(url, headers, timeoutMs = FETCH_TIMEOUT_MS) {
+  const { response } = await safeFetch(url, {
+    headers,
+    signal: AbortSignal.timeout(timeoutMs),
+    maxRedirects: 3,
+    requireApprovedHost: false,
+  })
+  return response
+}
+
+async function readJsonLimited(res, maxBytes = MAX_META_BYTES) {
+  const text = await readResponseTextLimited(res, maxBytes, 'IMDb metadata response')
+  return JSON.parse(text)
+}
+
 async function readResponseBufferLimited(res, maxBytes) {
-  const declared = Number(res.headers.get('content-length') || 0)
-  if (declared > maxBytes) {
-    throw httpError('Image exceeds maximum allowed size (15 MB)', 413)
-  }
-  if (!res.body) {
-    throw httpError('Empty image response from IMDb', 502)
-  }
-  const reader = res.body.getReader()
-  const chunks = []
-  let total = 0
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    if (value) {
-      total += value.byteLength
-      if (total > maxBytes) {
-        await reader.cancel().catch(() => {})
-        throw httpError('Image exceeds maximum allowed size (15 MB)', 413)
-      }
-      chunks.push(Buffer.from(value))
-    }
-  }
-  return Buffer.concat(chunks)
+  return readBodyBufferLimited(res, maxBytes, 'Image')
 }
 
 /**
@@ -304,12 +323,14 @@ export async function fetchVerifiedImdbImage(rawUrl, { maxBytes = MAX_IMAGE_BYTE
 
     if (res.status >= 300 && res.status < 400) {
       const loc = res.headers.get('location')
+      await res.body?.cancel?.().catch(() => {})
       if (!loc) throw httpError('IMDb image redirect missing location', 502)
       current = new URL(loc, parsed).toString()
       continue
     }
 
     if (!res.ok) {
+      await res.body?.cancel?.().catch(() => {})
       throw httpError(`IMDb image returned HTTP ${res.status}`, res.status === 404 ? 404 : 502)
     }
 
@@ -402,8 +423,11 @@ async function runImdbGraphql(query, imdbId) {
     },
     FETCH_TIMEOUT_MS,
   )
-  if (!res.ok) throw new Error(`GraphQL HTTP ${res.status}`)
-  const payload = await res.json()
+  if (!res.ok) {
+    await res.body?.cancel?.().catch(() => {})
+    throw new Error(`GraphQL HTTP ${res.status}`)
+  }
+  const payload = await readJsonLimited(res)
   return payload?.data?.title ?? null
 }
 
@@ -495,8 +519,11 @@ async function collectFromSuggestionCdn(imdbId) {
     },
     8_000,
   )
-  if (!res.ok) return null
-  const json = await res.json()
+  if (!res.ok) {
+    await res.body?.cancel?.().catch(() => {})
+    return null
+  }
+  const json = await readJsonLimited(res)
   const list = Array.isArray(json?.d) ? json.d : []
   const hit = list.find((entry) => String(entry?.id ?? '').toLowerCase() === imdbId)
   if (!hit) return null
@@ -549,20 +576,21 @@ function decodeHtmlEntities(str) {
 }
 
 async function collectFromTitleHtml(imdbId) {
-  const res = await fetchWithTimeout(
+  const res = await safeMetaFetch(
     `https://www.imdb.com/title/${encodeURIComponent(imdbId)}/`,
     {
-      headers: {
-        'User-Agent': BROWSER_UA,
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-      },
+      'User-Agent': BROWSER_UA,
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
     },
     FETCH_TIMEOUT_MS,
   )
   // IMDb returns 202 when an empty JS challenge shell is served; ignore non-200 cleanly.
-  if (res.status !== 200) return null
-  const html = await res.text()
+  if (res.status !== 200) {
+    await res.body?.cancel?.().catch(() => {})
+    return null
+  }
+  const html = await readResponseTextLimited(res, MAX_META_BYTES, 'IMDb title page')
   if (!html) return null
 
   const images = []
@@ -713,13 +741,16 @@ async function collectFromTitleHtml(imdbId) {
 
 async function collectFromCinemeta(imdbId) {
   const tryKind = async (kind) => {
-    const res = await fetchWithTimeout(
+    const res = await safeMetaFetch(
       `https://v3-cinemeta.strem.io/meta/${kind}/${encodeURIComponent(imdbId)}.json`,
-      { headers: { 'User-Agent': BROWSER_UA, Accept: 'application/json' } },
+      { 'User-Agent': BROWSER_UA, Accept: 'application/json' },
       7_000,
     )
-    if (!res.ok) return null
-    const json = await res.json()
+    if (!res.ok) {
+      await res.body?.cancel?.().catch(() => {})
+      return null
+    }
+    const json = await readJsonLimited(res)
     return json?.meta?.name ? json.meta : null
   }
 
@@ -977,9 +1008,10 @@ export async function searchTitles(rawQuery) {
     8_000,
   )
   if (!res.ok) {
+    await res.body?.cancel?.().catch(() => {})
     throw httpError(`IMDb search returned HTTP ${res.status}`, 502)
   }
-  const json = await res.json()
+  const json = await readJsonLimited(res)
   const rows = Array.isArray(json?.d) ? json.d : []
   const results = []
   for (const row of rows) {
@@ -1004,9 +1036,12 @@ export async function searchTitles(rawQuery) {
 // ── Persistent Local Artwork Store ───────────────────────────────────────────
 
 function sanitizeManifestBucket(raw) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
-  const out = {}
+  const out = Object.create(null)
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out
+  let count = 0
   for (const [key, entry] of Object.entries(raw)) {
+    if (count >= MAX_BUCKET_ENTRIES) break
+    if (!key || key.length > 140 || key === '__proto__') continue
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
     const cleanEntry = {}
     if (typeof entry.imdbId === 'string' && /^tt\d{7,12}$/.test(entry.imdbId)) {
@@ -1016,7 +1051,7 @@ function sanitizeManifestBucket(raw) {
       cleanEntry.imdbTitle = entry.imdbTitle.trim().slice(0, 180)
     }
     for (const slot of VALID_SLOTS) {
-      const s = entry[slot]
+      const s = Object.hasOwn(entry, slot) ? entry[slot] : null
       if (!s || typeof s !== 'object') continue
       if (
         typeof s.artId === 'string' &&
@@ -1024,26 +1059,38 @@ function sanitizeManifestBucket(raw) {
         typeof s.ext === 'string' &&
         /^\.(?:jpg|png|webp|gif)$/.test(s.ext)
       ) {
+        const safeMime =
+          s.ext === '.png'
+            ? 'image/png'
+            : s.ext === '.webp'
+              ? 'image/webp'
+              : s.ext === '.gif'
+                ? 'image/gif'
+                : 'image/jpeg'
         cleanEntry[slot] = {
           artId: s.artId,
           ext: s.ext,
-          mime: String(s.mime || 'image/jpeg'),
+          mime: safeMime,
           focus: VALID_FOCUSES.has(s.focus) ? s.focus : 'center',
-          imdbId: typeof s.imdbId === 'string' ? s.imdbId : cleanEntry.imdbId ?? null,
-          sourceKey: typeof s.sourceKey === 'string' ? s.sourceKey : null,
+          imdbId:
+            typeof s.imdbId === 'string' && /^tt\d{7,12}$/.test(s.imdbId)
+              ? s.imdbId
+              : cleanEntry.imdbId ?? null,
+          sourceKey: typeof s.sourceKey === 'string' ? s.sourceKey.slice(0, 200) : null,
           updatedAt: Number(s.updatedAt) || Date.now(),
         }
       }
     }
     if (cleanEntry.banner || cleanEntry.poster || cleanEntry.icon) {
       out[key] = cleanEntry
+      count += 1
     }
   }
   return out
 }
 
 export async function init() {
-  await fsp.mkdir(ARTWORK_DIR, { recursive: true })
+  await fsp.mkdir(ARTWORK_DIR, { recursive: true, mode: 0o700 })
   try {
     const raw = JSON.parse(await fsp.readFile(MANIFEST_FILE, 'utf8'))
     manifest = {
@@ -1053,19 +1100,15 @@ export async function init() {
       file: sanitizeManifestBucket(raw?.file),
     }
   } catch {
-    manifest = { app: {}, media: {}, series: {}, file: {} }
+    manifest = emptyManifest()
   }
 }
 
 function persistManifest() {
-  const snapshot = JSON.stringify(manifest, null, 2)
+  const serialized = JSON.stringify(manifest, null, 2)
   writeChain = writeChain
-    .then(async () => {
-      await fsp.mkdir(DATA_DIR, { recursive: true })
-      const tmp = `${MANIFEST_FILE}.tmp`
-      await fsp.writeFile(tmp, snapshot)
-      await fsp.rename(tmp, MANIFEST_FILE)
-    })
+    .catch(() => {})
+    .then(() => atomicWriteFile(MANIFEST_FILE, serialized))
     .catch((err) => {
       console.error('[imdb] failed to persist artwork manifest:', err?.message || err)
     })
@@ -1126,15 +1169,16 @@ function toPublicRecord(entry) {
 /** Public snapshot of all claimed artwork (opaque URLs only — zero filesystem paths). */
 export function snapshot() {
   const buildBucket = (bucket) => {
-    const out = {}
+    const out = Object.create(null)
     for (const [k, v] of Object.entries(bucket || {})) {
+      if (k === '__proto__') continue
       const pub = toPublicRecord(v)
       if (pub) out[k] = pub
     }
     return out
   }
   return {
-    app: toPublicRecord(manifest.app?.global) ?? null,
+    app: toPublicRecord(manifest.app && Object.hasOwn(manifest.app, 'global') ? manifest.app.global : null) ?? null,
     media: buildBucket(manifest.media),
     series: buildBucket(manifest.series),
     file: buildBucket(manifest.file),
@@ -1159,16 +1203,21 @@ export async function resolveArtworkFile(artId) {
     }
     if (foundMeta) break
   }
-  if (!foundMeta) return null
+  if (!foundMeta || !/^\.(?:jpg|png|webp|gif)$/.test(foundMeta.ext)) return null
 
   const absPath = path.join(ARTWORK_DIR, `${foundMeta.artId}${foundMeta.ext}`)
   const rel = path.relative(ARTWORK_DIR, absPath)
   if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null
 
   try {
+    const dirSt = await fsp.lstat(ARTWORK_DIR)
+    if (!dirSt.isDirectory() || dirSt.isSymbolicLink()) return null
     const st = await fsp.lstat(absPath)
     if (!st.isFile() || st.isSymbolicLink()) return null
-    return { absPath, mime: foundMeta.mime, size: st.size, artId: clean }
+    const [realDir, realFile] = await Promise.all([fsp.realpath(ARTWORK_DIR), fsp.realpath(absPath)])
+    const realRel = path.relative(realDir, realFile)
+    if (!realRel || realRel.startsWith('..') || path.isAbsolute(realRel)) return null
+    return { absPath: realFile, mime: foundMeta.mime, size: st.size, artId: clean }
   } catch {
     return null
   }
@@ -1200,13 +1249,17 @@ async function downloadForSlot(rawImageUrl, slot, opts = {}) {
 }
 
 async function saveArtworkBuffer({ buffer, ext, mime }) {
-  await fsp.mkdir(ARTWORK_DIR, { recursive: true })
   const artId = `art_${crypto.randomBytes(10).toString('hex')}`
   const finalPath = path.join(ARTWORK_DIR, `${artId}${ext}`)
-  const tmpPath = `${finalPath}.tmp`
-  await fsp.writeFile(tmpPath, buffer)
-  await fsp.rename(tmpPath, finalPath)
+  await atomicWriteFile(finalPath, buffer)
   return { artId, ext, mime }
+}
+
+function enforceBucketLimit(bucket, targetKey) {
+  if (Object.hasOwn(bucket, targetKey)) return
+  if (Object.keys(bucket).length >= MAX_BUCKET_ENTRIES) {
+    throw httpError('Maximum claimed artwork entries limit reached', 429)
+  }
 }
 
 /**
@@ -1232,37 +1285,41 @@ export async function claimArtwork(payload = {}, internalOpts = {}) {
   const imdbId = payload.imdbId ? parseImdbId(payload.imdbId) : null
   const imdbTitle = payload.imdbTitle ? String(payload.imdbTitle).trim().slice(0, 180) : null
 
+  enforceBucketLimit(manifest[targetType], targetKey)
   const downloaded = await downloadForSlot(imageUrl, slot, internalOpts)
-  const stored = await saveArtworkBuffer(downloaded)
 
-  const bucket = manifest[targetType]
-  const current = bucket[targetKey] ? { ...bucket[targetKey] } : {}
-  const previousSlot = current[slot] ?? null
+  return withTargetLock(`${targetType}:${targetKey}`, async () => {
+    const bucket = manifest[targetType]
+    enforceBucketLimit(bucket, targetKey)
+    const stored = await saveArtworkBuffer(downloaded)
+    const current = Object.hasOwn(bucket, targetKey) ? { ...bucket[targetKey] } : {}
+    const previousSlot = current[slot] ?? null
 
-  if (imdbId) current.imdbId = imdbId
-  if (imdbTitle) current.imdbTitle = imdbTitle
-  current[slot] = {
-    artId: stored.artId,
-    ext: stored.ext,
-    mime: stored.mime,
-    focus,
-    imdbId: imdbId ?? current.imdbId ?? null,
-    sourceKey: canonicalImageKey(imageUrl),
-    updatedAt: Date.now(),
-  }
-  bucket[targetKey] = current
+    if (imdbId) current.imdbId = imdbId
+    if (imdbTitle) current.imdbTitle = imdbTitle
+    current[slot] = {
+      artId: stored.artId,
+      ext: stored.ext,
+      mime: stored.mime,
+      focus,
+      imdbId: imdbId ?? current.imdbId ?? null,
+      sourceKey: canonicalImageKey(imageUrl),
+      updatedAt: Date.now(),
+    }
+    bucket[targetKey] = current
 
-  await persistManifest()
-  if (previousSlot) await cleanupUnreferencedArt([previousSlot])
-  notifyChange()
+    await persistManifest()
+    if (previousSlot) await cleanupUnreferencedArt([previousSlot])
+    notifyChange()
 
-  return {
-    targetType,
-    targetKey,
-    slot,
-    record: toPublicRecord(current),
-    snapshot: snapshot(),
-  }
+    return {
+      targetType,
+      targetKey,
+      slot,
+      record: toPublicRecord(current),
+      snapshot: snapshot(),
+    }
+  })
 }
 
 /**
@@ -1274,7 +1331,7 @@ export async function claimArtworkBundle(payload = {}, internalOpts = {}) {
   const targetKey = normalizeTargetKey(targetType, payload.targetKey)
   const rawSlots = payload.slots && typeof payload.slots === 'object' ? payload.slots : {}
   const entries = [...VALID_SLOTS]
-    .map((slot) => [slot, typeof rawSlots[slot] === 'string' ? rawSlots[slot].trim() : ''])
+    .map((slot) => [slot, Object.hasOwn(rawSlots, slot) && typeof rawSlots[slot] === 'string' ? rawSlots[slot].trim() : ''])
     .filter(([, url]) => Boolean(url))
 
   if (entries.length === 0) {
@@ -1285,47 +1342,60 @@ export async function claimArtworkBundle(payload = {}, internalOpts = {}) {
   const imdbTitle = payload.imdbTitle ? String(payload.imdbTitle).trim().slice(0, 180) : null
   const rawFocus = payload.focus && typeof payload.focus === 'object' ? payload.focus : {}
 
-  const downloaded = await Promise.all(
+  enforceBucketLimit(manifest[targetType], targetKey)
+  const fetched = await Promise.all(
     entries.map(async ([slot, url]) => {
       const img = await downloadForSlot(url, slot, internalOpts)
-      const stored = await saveArtworkBuffer(img)
       const defaultFocus = slot === 'banner' ? 'top' : 'center'
-      const focus = VALID_FOCUSES.has(rawFocus[slot]) ? rawFocus[slot] : defaultFocus
-      return { slot, url, stored, focus }
+      const focusVal = Object.hasOwn(rawFocus, slot) ? rawFocus[slot] : undefined
+      const focus = VALID_FOCUSES.has(focusVal) ? focusVal : defaultFocus
+      return { slot, url, img, focus }
     }),
   )
 
-  const bucket = manifest[targetType]
-  const current = bucket[targetKey] ? { ...bucket[targetKey] } : {}
-  const replaced = []
+  return withTargetLock(`${targetType}:${targetKey}`, async () => {
+    const bucket = manifest[targetType]
+    enforceBucketLimit(bucket, targetKey)
+    const downloaded = await Promise.all(
+      fetched.map(async ({ slot, url, img, focus }) => ({
+        slot,
+        url,
+        stored: await saveArtworkBuffer(img),
+        focus,
+      })),
+    )
 
-  if (imdbId) current.imdbId = imdbId
-  if (imdbTitle) current.imdbTitle = imdbTitle
+    const current = Object.hasOwn(bucket, targetKey) ? { ...bucket[targetKey] } : {}
+    const replaced = []
 
-  for (const { slot, url, stored, focus } of downloaded) {
-    if (current[slot]) replaced.push(current[slot])
-    current[slot] = {
-      artId: stored.artId,
-      ext: stored.ext,
-      mime: stored.mime,
-      focus,
-      imdbId: imdbId ?? current.imdbId ?? null,
-      sourceKey: canonicalImageKey(url),
-      updatedAt: Date.now(),
+    if (imdbId) current.imdbId = imdbId
+    if (imdbTitle) current.imdbTitle = imdbTitle
+
+    for (const { slot, url, stored, focus } of downloaded) {
+      if (current[slot]) replaced.push(current[slot])
+      current[slot] = {
+        artId: stored.artId,
+        ext: stored.ext,
+        mime: stored.mime,
+        focus,
+        imdbId: imdbId ?? current.imdbId ?? null,
+        sourceKey: canonicalImageKey(url),
+        updatedAt: Date.now(),
+      }
     }
-  }
-  bucket[targetKey] = current
+    bucket[targetKey] = current
 
-  await persistManifest()
-  await cleanupUnreferencedArt(replaced)
-  notifyChange()
+    await persistManifest()
+    await cleanupUnreferencedArt(replaced)
+    notifyChange()
 
-  return {
-    targetType,
-    targetKey,
-    record: toPublicRecord(current),
-    snapshot: snapshot(),
-  }
+    return {
+      targetType,
+      targetKey,
+      record: toPublicRecord(current),
+      snapshot: snapshot(),
+    }
+  })
 }
 
 /** Updates focal point (`top` | `center` | `bottom`) of an already-claimed artwork slot. */
@@ -1337,17 +1407,20 @@ export async function updateArtworkFocus(payload = {}) {
   if (!VALID_SLOTS.has(slot)) throw httpError('Invalid artwork slot', 400)
   if (!VALID_FOCUSES.has(focus)) throw httpError('Focus must be "top", "center", or "bottom"', 400)
 
-  const current = manifest[targetType]?.[targetKey]
-  if (!current?.[slot]) throw httpError('No claimed photo in that slot', 404)
+  return withTargetLock(`${targetType}:${targetKey}`, async () => {
+    const bucket = manifest[targetType]
+    const current = bucket && Object.hasOwn(bucket, targetKey) ? bucket[targetKey] : null
+    if (!current?.[slot]) throw httpError('No claimed photo in that slot', 404)
 
-  current[slot] = { ...current[slot], focus, updatedAt: Date.now() }
-  await persistManifest()
-  notifyChange()
+    current[slot] = { ...current[slot], focus, updatedAt: Date.now() }
+    await persistManifest()
+    notifyChange()
 
-  return {
-    record: toPublicRecord(current),
-    snapshot: snapshot(),
-  }
+    return {
+      record: toPublicRecord(current),
+      snapshot: snapshot(),
+    }
+  })
 }
 
 /** Removes one claimed slot (or all slots when `slot` is omitted) for a target. */
@@ -1357,37 +1430,39 @@ export async function clearArtwork(payload = {}) {
   const slot = payload.slot ? String(payload.slot).trim() : null
   if (slot && !VALID_SLOTS.has(slot)) throw httpError('Invalid artwork slot', 400)
 
-  const bucket = manifest[targetType]
-  const current = bucket?.[targetKey]
-  if (!current) {
-    return { removed: false, snapshot: snapshot() }
-  }
-
-  const removed = []
-  if (slot) {
-    if (current[slot]) {
-      removed.push(current[slot])
-      delete current[slot]
+  return withTargetLock(`${targetType}:${targetKey}`, async () => {
+    const bucket = manifest[targetType]
+    const current = bucket && Object.hasOwn(bucket, targetKey) ? bucket[targetKey] : null
+    if (!current) {
+      return { removed: false, snapshot: snapshot() }
     }
-    if (!current.banner && !current.poster && !current.icon) {
+
+    const removed = []
+    if (slot) {
+      if (current[slot]) {
+        removed.push(current[slot])
+        delete current[slot]
+      }
+      if (!current.banner && !current.poster && !current.icon) {
+        delete bucket[targetKey]
+      }
+    } else {
+      for (const s of VALID_SLOTS) {
+        if (current[s]) removed.push(current[s])
+      }
       delete bucket[targetKey]
     }
-  } else {
-    for (const s of VALID_SLOTS) {
-      if (current[s]) removed.push(current[s])
+
+    await persistManifest()
+    await cleanupUnreferencedArt(removed)
+    notifyChange()
+
+    return {
+      removed: removed.length > 0,
+      record: Object.hasOwn(bucket, targetKey) ? toPublicRecord(bucket[targetKey]) : null,
+      snapshot: snapshot(),
     }
-    delete bucket[targetKey]
-  }
-
-  await persistManifest()
-  await cleanupUnreferencedArt(removed)
-  notifyChange()
-
-  return {
-    removed: removed.length > 0,
-    record: toPublicRecord(bucket[targetKey]) ?? null,
-    snapshot: snapshot(),
-  }
+  })
 }
 
 /** Streams a verified gallery preview thumbnail from an approved IMDb image CDN. */

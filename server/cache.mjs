@@ -17,6 +17,7 @@ export function get(key) {
 }
 
 export function set(key, value, ttlMs) {
+  cache.delete(key)
   if (cache.size >= MAX_ENTRIES) {
     const oldest = cache.keys().next().value
     cache.delete(oldest)

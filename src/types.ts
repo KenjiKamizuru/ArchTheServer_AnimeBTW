@@ -108,12 +108,9 @@ export interface ResolverStatus {
 
 export interface WatchResult {
   resolved: boolean
-  videoUrl: string
-  audioUrl: string | null
   height: number
   hls: boolean
-  subtitleUrl: string | null
-  referer: string
+  hasSubtitle?: boolean
   title: string
   slug: string
 }
@@ -316,6 +313,7 @@ export interface UploadSessionSpec {
   quality?: string
   dub?: boolean
   keepBoth?: boolean
+  imdbId?: string
 }
 
 export interface UploadSessionInfo {

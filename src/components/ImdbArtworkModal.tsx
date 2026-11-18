@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import {
   Check,
   ExternalLink,
@@ -34,6 +34,7 @@ import {
   useArtwork,
 } from '../lib/artwork'
 import { refreshLibraryNow } from '../lib/downloads'
+import { safeExternalHref } from '../lib/format'
 import { useToast } from './Toasts'
 
 export interface DraftImdbSelection {
@@ -113,6 +114,7 @@ export function ImdbArtworkModal({
   const [galleryFilter, setGalleryFilter] = useState<GalleryFilter>('all')
   const [claimBusy, setClaimBusy] = useState<string | null>(null)
   const [applyTitle, setApplyTitle] = useState(false)
+  const requestSeqRef = useRef(0)
 
   // Draft selections (when invoked from UploadVideoModal before upload completes)
   const [draftSlots, setDraftSlots] = useState<Partial<Record<ArtworkSlot, string>>>({})
@@ -155,6 +157,9 @@ export function ImdbArtworkModal({
       setInput('')
       setResult(null)
     }
+    return () => {
+      requestSeqRef.current += 1
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, targetType, targetKey, initialImdbId])
 
@@ -170,36 +175,42 @@ export function ImdbArtworkModal({
   if (!open) return null
 
   async function fetchByImdbId(idOrUrl: string) {
+    const seq = ++requestSeqRef.current
     setLookupBusy(true)
     setError(null)
     setSearchResults([])
     try {
       const data = await api.imdbLookup(idOrUrl)
+      if (seq !== requestSeqRef.current) return
       setResult(data)
       setInput(data.imdbId)
     } catch (err) {
+      if (seq !== requestSeqRef.current) return
       setResult(null)
       setError(err instanceof Error ? err.message : 'Could not fetch photos from IMDb')
     } finally {
-      setLookupBusy(false)
+      if (seq === requestSeqRef.current) setLookupBusy(false)
     }
   }
 
   async function runTitleSearch(q: string) {
     const clean = q.trim()
     if (!clean) return
+    const seq = ++requestSeqRef.current
     setLookupBusy(true)
     setError(null)
     try {
       const { results } = await api.imdbSearch(clean)
+      if (seq !== requestSeqRef.current) return
       setSearchResults(results)
       if (results.length === 0) {
         setError(`No IMDb titles found for "${clean}". Try an IMDb ID like tt0234144.`)
       }
     } catch (err) {
+      if (seq !== requestSeqRef.current) return
       setError(err instanceof Error ? err.message : 'IMDb search failed')
     } finally {
-      setLookupBusy(false)
+      if (seq === requestSeqRef.current) setLookupBusy(false)
     }
   }
 
@@ -630,15 +641,17 @@ export function ImdbArtworkModal({
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <h3 className="text-sm font-semibold text-white sm:text-base">{result.title}</h3>
-                    <a
-                      href={result.imdbUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 rounded bg-amber-400/15 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-amber-300 ring-1 ring-amber-400/30 transition hover:bg-amber-400/25"
-                    >
-                      {result.imdbId}
-                      <ExternalLink size={10} />
-                    </a>
+                    {safeExternalHref(result.imdbUrl) ? (
+                      <a
+                        href={safeExternalHref(result.imdbUrl)!}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 rounded bg-amber-400/15 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-amber-300 ring-1 ring-amber-400/30 transition hover:bg-amber-400/25"
+                      >
+                        {result.imdbId}
+                        <ExternalLink size={10} />
+                      </a>
+                    ) : null}
                     {result.rating ? (
                       <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-300">
                         <Star size={11} className="fill-amber-300" />

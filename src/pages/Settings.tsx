@@ -430,7 +430,7 @@ export default function SettingsPage() {
             <a
               href="https://github.com/pystardust/ani-cli"
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-accent transition hover:underline"
             >
               Provider protocol reference (ani-cli)
@@ -439,7 +439,7 @@ export default function SettingsPage() {
             <a
               href="https://anidb.net/"
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-accent transition hover:underline"
             >
               AniDB

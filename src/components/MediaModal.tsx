@@ -64,6 +64,7 @@ import {
   formatSpeed,
   inferSeasonFromTitle,
   relativeTime,
+  safeExternalHref,
 } from '../lib/format'
 import { ImdbArtworkModal } from './ImdbArtworkModal'
 import { localItemToPlayback, usePlayer } from './Player'
@@ -902,23 +903,23 @@ function DetailSheet({
                     </button>
                   ) : null}
 
-                  {media?.anidb ? (
+                  {safeExternalHref(media?.anidb) ? (
                     <a
-                      href={media.anidb}
+                      href={safeExternalHref(media?.anidb)!}
                       target="_blank"
-                      rel="noreferrer"
-                      title={media.anidbSearch ? 'Search this title on AniDB' : 'Open the AniDB entry'}
+                      rel="noopener noreferrer"
+                      title={media?.anidbSearch ? 'Search this title on AniDB' : 'Open the AniDB entry'}
                       className="inline-flex items-center gap-1.5 rounded-lg bg-white/5 px-3 py-2 text-xs font-medium text-white/70 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-white"
                     >
                       AniDB
                       <ExternalLink size={12} />
                     </a>
                   ) : null}
-                  {media?.siteUrl ? (
+                  {safeExternalHref(media?.siteUrl) ? (
                     <a
-                      href={media.siteUrl}
+                      href={safeExternalHref(media?.siteUrl)!}
                       target="_blank"
-                      rel="noreferrer"
+                      rel="noopener noreferrer"
                       className="inline-flex items-center gap-1.5 rounded-lg bg-white/5 px-3 py-2 text-xs font-medium text-white/70 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-white"
                     >
                       AniList
@@ -960,18 +961,22 @@ function DetailSheet({
                       Watch legally on
                     </h3>
                     <div className="mt-2 flex flex-wrap gap-1.5">
-                      {media.streams.map((stream) => (
-                        <a
-                          key={stream.url}
-                          href={stream.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-1 rounded-md bg-white/5 px-2.5 py-1 text-[11px] text-white/70 ring-1 ring-white/10 transition hover:text-accent"
-                        >
-                          {stream.site}
-                          <ExternalLink size={10} />
-                        </a>
-                      ))}
+                      {media.streams.map((stream) => {
+                        const href = safeExternalHref(stream.url)
+                        if (!href) return null
+                        return (
+                          <a
+                            key={href}
+                            href={href}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 rounded-md bg-white/5 px-2.5 py-1 text-[11px] text-white/70 ring-1 ring-white/10 transition hover:text-accent"
+                          >
+                            {stream.site}
+                            <ExternalLink size={10} />
+                          </a>
+                        )
+                      })}
                     </div>
                   </div>
                 ) : null}
@@ -1591,18 +1596,22 @@ function DetailSheet({
                   Official episode pages
                 </h3>
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  {detail.streamingEpisodes.slice(0, 12).map((ep) => (
-                    <a
-                      key={ep.url}
-                      href={ep.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 rounded-md bg-white/5 px-2.5 py-1 text-[11px] text-white/60 ring-1 ring-white/10 transition hover:text-accent"
-                    >
-                      {ep.site}
-                      <ExternalLink size={10} />
-                    </a>
-                  ))}
+                  {detail.streamingEpisodes.slice(0, 12).map((ep) => {
+                    const href = safeExternalHref(ep.url)
+                    if (!href) return null
+                    return (
+                      <a
+                        key={href}
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 rounded-md bg-white/5 px-2.5 py-1 text-[11px] text-white/60 ring-1 ring-white/10 transition hover:text-accent"
+                      >
+                        {ep.site}
+                        <ExternalLink size={10} />
+                      </a>
+                    )
+                  })}
                 </div>
               </div>
             ) : null}

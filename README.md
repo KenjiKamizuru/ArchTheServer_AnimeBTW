@@ -133,6 +133,7 @@ server/cache.mjs      TTL/LRU cache for provider requests
 server/playback.mjs   HTTP range serving, ffmpeg remux/download, subtitle helpers
 server/downloads.mjs  persistent download queue & worker (data/downloads.json)
 server/library.mjs    shared media library index, scanner & atomic file moves
+server/imdb.mjs       IMDb photo claimer & local artwork store (data/artwork/)
 server/security.mjs   path-traversal, SSRF, header, and DRM/container guards
 server/settings.mjs   settings, persisted to data/settings.json
 server/store.mjs      bookmarks, persisted to data/bookmarks.json
@@ -149,6 +150,13 @@ excluded via `.gitignore`.
 
 - The server binds to 127.0.0.1 by default, and the cache lives in process
   memory, so single-instance use is intended.
+- Security defaults: same-origin CSRF protection on all mutating `/api/*` routes,
+  CSP + `X-Content-Type-Options: nosniff` + `Referrer-Policy` + `Permissions-Policy`,
+  sliding-window API rate limits, DNS-verified SSRF & redirect protection, FFmpeg
+  protocol whitelisting, symlink/path-traversal checks, and `0o700`/`0o600`
+  permissions on `data/`. Optional env vars: `ANIMEVAULT_API_TOKEN` (requires
+  `Authorization: Bearer <token>` or `X-API-Token` on API calls), `ALLOWED_ORIGINS`
+  (comma-separated extra trusted origins), and `MAX_CONCURRENT_STREAMS` (default `6`).
 - AniList/AniDB responses cache 10 minutes, provider searches and resolutions
   10 minutes, provider status 5 minutes, browser requests 5 minutes. The live
   stream is proxied with ffmpeg continuously — it needs ffmpeg on the server.

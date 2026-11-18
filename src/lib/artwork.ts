@@ -24,7 +24,13 @@ let state: ArtworkSnapshot = {
 
 let loaded = false
 let fetching = false
+let mutationVersion = 0
 const listeners = new Set<() => void>()
+
+function ownGet<T>(map: Record<string, T> | undefined | null, key: string): T | null {
+  if (!map || !key) return null
+  return Object.prototype.hasOwnProperty.call(map, key) ? map[key] ?? null : null
+}
 
 function emit() {
   for (const fn of listeners) fn()
@@ -32,6 +38,7 @@ function emit() {
 
 export function applyArtworkSnapshot(next: ArtworkSnapshot) {
   if (!next || typeof next !== 'object') return
+  mutationVersion += 1
   state = {
     app: next.app ?? null,
     media: next.media ?? {},
@@ -45,9 +52,13 @@ export function applyArtworkSnapshot(next: ArtworkSnapshot) {
 export async function refreshArtwork() {
   if (fetching) return state
   fetching = true
+  const versionAtStart = mutationVersion
   try {
     const next = await api.artwork()
-    applyArtworkSnapshot(next)
+    // Never overwrite a newer claim/delete/SSE snapshot with an older GET response.
+    if (mutationVersion === versionAtStart) {
+      applyArtworkSnapshot(next)
+    }
   } catch {
     /* keep existing state offline */
   } finally {
@@ -130,9 +141,9 @@ export function artworkForTarget(
   targetKey: string,
 ): ClaimedArtworkRecord | null {
   if (targetType === 'app') return snap.app
-  if (targetType === 'media') return snap.media[String(targetKey)] ?? null
-  if (targetType === 'file') return snap.file[targetKey] ?? null
-  return snap.series[normalizeSeriesArtworkKey(targetKey)] ?? null
+  if (targetType === 'media') return ownGet(snap.media, String(targetKey))
+  if (targetType === 'file') return ownGet(snap.file, targetKey)
+  return ownGet(snap.series, normalizeSeriesArtworkKey(targetKey))
 }
 
 /** Resolves combined claimed artwork for an AniList `Media` entry (by media ID, then series title). */
@@ -141,10 +152,10 @@ export function artworkForMedia(
   media: Pick<Media, 'id' | 'title'> | null | undefined,
 ): ClaimedArtworkRecord | null {
   if (!media) return null
-  const byId = snap.media[String(media.id)]
+  const byId = ownGet(snap.media, String(media.id))
   const sKey = normalizeSeriesArtworkKey(media.title)
   const baseKey = normalizeSeriesArtworkKey(inferSeasonFromTitle(media.title).seriesTitle)
-  return mergeRecords(byId, snap.series[sKey], snap.series[baseKey])
+  return mergeRecords(byId, ownGet(snap.series, sKey), ownGet(snap.series, baseKey))
 }
 
 /** Resolves claimed artwork for a Shared Library series/movie group. */
@@ -155,9 +166,9 @@ export function artworkForSeriesGroup(
   fileIds?: string[],
 ): ClaimedArtworkRecord | null {
   const sKey = normalizeSeriesArtworkKey(title)
-  const bySeries = snap.series[sKey]
-  const byMedia = mediaId ? snap.media[String(mediaId)] : null
-  const byFirstFile = fileIds?.map((id) => snap.file[id]).find(Boolean) ?? null
+  const bySeries = ownGet(snap.series, sKey)
+  const byMedia = mediaId ? ownGet(snap.media, String(mediaId)) : null
+  const byFirstFile = fileIds?.map((id) => ownGet(snap.file, id)).find(Boolean) ?? null
   return mergeRecords(bySeries, byMedia, byFirstFile)
 }
 
@@ -166,10 +177,10 @@ export function artworkForLibraryItem(
   snap: ArtworkSnapshot,
   item: LibraryItem,
 ): ClaimedArtworkRecord | null {
-  const byFile = snap.file[item.id]
+  const byFile = ownGet(snap.file, item.id)
   const sKey = normalizeSeriesArtworkKey(item.seriesTitle || item.animeTitle || '')
-  const bySeries = sKey ? snap.series[sKey] : null
-  const byMedia = item.mediaId ? snap.media[String(item.mediaId)] : null
+  const bySeries = sKey ? ownGet(snap.series, sKey) : null
+  const byMedia = item.mediaId ? ownGet(snap.media, String(item.mediaId)) : null
   return mergeRecords(byFile, bySeries, byMedia)
 }
 

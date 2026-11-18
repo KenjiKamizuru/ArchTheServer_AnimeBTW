@@ -413,6 +413,7 @@ async function ensureSession(task: InternalTask): Promise<string> {
     quality: task.quality || undefined,
     dub: task.dub,
     keepBoth: task.keepBoth,
+    imdbId: task.imdbArtwork?.imdbId || undefined,
   })
   task.uploadId = created.uploadId
   task.uploadedBytes = created.uploadedBytes

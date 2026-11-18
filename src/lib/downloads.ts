@@ -41,6 +41,7 @@ let eventSource: EventSource | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let libraryFetchPending = false
+let libraryFetchSeq = 0
 let queueLoaded = false
 
 function emitQueue() {
@@ -67,6 +68,7 @@ export async function refreshDownloads() {
 
 export async function refreshLibrary(fresh = false) {
   if (libraryFetchPending && !fresh) return libraryState
+  const seq = ++libraryFetchSeq
   libraryFetchPending = true
   if (!libraryState.loaded) {
     libraryState = { ...libraryState, loading: true }
@@ -74,13 +76,19 @@ export async function refreshLibrary(fresh = false) {
   }
   try {
     const data = await api.library(fresh)
-    libraryState = { ...data, loading: false, loaded: true }
-    emitLibrary()
+    if (seq === libraryFetchSeq) {
+      libraryState = { ...data, loading: false, loaded: true }
+      emitLibrary()
+    }
   } catch {
-    libraryState = { ...libraryState, loading: false }
-    emitLibrary()
+    if (seq === libraryFetchSeq) {
+      libraryState = { ...libraryState, loading: false }
+      emitLibrary()
+    }
   } finally {
-    libraryFetchPending = false
+    if (seq === libraryFetchSeq) {
+      libraryFetchPending = false
+    }
   }
   return libraryState
 }
