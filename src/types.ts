@@ -190,6 +190,7 @@ export interface LibraryItem {
   isMovie: boolean
   known: boolean
   cover: string | null
+  imdbId?: string | null
   size: number
   addedAt: number
   modifiedAt: number
@@ -327,4 +328,69 @@ export interface UploadSessionInfo {
   folder: string
   category: UploadCategory
   resumed?: boolean
+}
+
+export type ArtworkSlot = 'banner' | 'poster' | 'icon'
+export type ArtworkTargetType = 'app' | 'media' | 'series' | 'file'
+export type ArtworkFocus = 'top' | 'center' | 'bottom'
+
+export interface ClaimedArtworkSlot {
+  artId: string
+  url: string
+  focus: ArtworkFocus
+  imdbId: string | null
+  updatedAt: number
+}
+
+export interface ClaimedArtworkRecord {
+  imdbId: string | null
+  imdbTitle: string | null
+  banner: ClaimedArtworkSlot | null
+  poster: ClaimedArtworkSlot | null
+  icon: ClaimedArtworkSlot | null
+}
+
+export interface ArtworkSnapshot {
+  app: ClaimedArtworkRecord | null
+  media: Record<string, ClaimedArtworkRecord>
+  series: Record<string, ClaimedArtworkRecord>
+  file: Record<string, ClaimedArtworkRecord>
+}
+
+export interface ImdbImageItem {
+  id: string
+  url: string
+  previewUrl: string
+  width: number | null
+  height: number | null
+  kind: 'poster' | 'backdrop' | 'still' | 'video' | 'logo' | 'gallery'
+  isPrimary: boolean
+  caption: string | null
+  suggestedSlot: ArtworkSlot
+}
+
+export interface ImdbTitleResult {
+  imdbId: string
+  imdbUrl: string
+  title: string
+  originalTitle: string | null
+  type: string | null
+  year: number | null
+  rating: number | null
+  plot: string | null
+  recommended: {
+    banner: string | null
+    poster: string | null
+    icon: string | null
+  }
+  images: ImdbImageItem[]
+}
+
+export interface ImdbSearchItem {
+  imdbId: string
+  title: string
+  year: number | null
+  type: string | null
+  stars: string | null
+  previewUrl: string | null
 }

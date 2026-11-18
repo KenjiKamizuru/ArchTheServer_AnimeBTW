@@ -1,13 +1,25 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Bookmark, BookmarkCheck, CalendarClock, FolderDown, Loader2, Play, Star, Upload } from 'lucide-react'
+import {
+  Bookmark,
+  BookmarkCheck,
+  CalendarClock,
+  FolderDown,
+  ImagePlus,
+  Loader2,
+  Play,
+  Star,
+  Upload,
+} from 'lucide-react'
 import type { Media } from '../types'
 import { api } from '../lib/api'
+import { artworkForMedia, focusObjectClass, useArtwork } from '../lib/artwork'
 import { useAsync } from '../lib/hooks'
 import { toggleBookmark, useBookmarks } from '../lib/bookmarks'
 import { enqueueBulkDownload } from '../lib/downloads'
 import { useSettings } from '../lib/settings'
 import { formatMediaType, formatSeason, inferSeasonFromTitle, relativeTime } from '../lib/format'
+import { ImdbArtworkModal } from '../components/ImdbArtworkModal'
 import { CardSkeletons } from '../components/MediaCard'
 import { MediaRow } from '../components/MediaRow'
 import { useDetail } from '../components/MediaModal'
@@ -113,8 +125,20 @@ function Hero({ media }: { media: Media }) {
   const open = useDetail()
   const toast = useToast()
   const settings = useSettings()
+  const artwork = useArtwork()
+  const mediaArt = artworkForMedia(artwork, media)
+  const heroBanner = mediaArt?.banner
+    ? `${mediaArt.banner.url}?v=${mediaArt.banner.updatedAt}`
+    : artwork.app?.banner
+      ? `${artwork.app.banner.url}?v=${artwork.app.banner.updatedAt}`
+      : media.banner
+  const heroBannerFocus = mediaArt?.banner?.focus ?? artwork.app?.banner?.focus ?? 'center'
+  const heroPoster = mediaArt?.poster
+    ? `${mediaArt.poster.url}?v=${mediaArt.poster.updatedAt}`
+    : media.cover
   const bookmarks = useBookmarks()
   const [seasonBusy, setSeasonBusy] = useState(false)
+  const [imdbOpen, setImdbOpen] = useState(false)
   const saved = bookmarks.some((b) => b.mediaId === media.id)
 
   async function onBookmark() {
@@ -161,11 +185,11 @@ function Hero({ media }: { media: Media }) {
 
   return (
     <section className="relative overflow-hidden rounded-2xl bg-ink-900 ring-1 ring-white/10">
-      {media.banner ? (
+      {heroBanner ? (
         <img
-          src={media.banner}
+          src={heroBanner}
           alt=""
-          className="absolute inset-0 h-full w-full object-cover object-center opacity-55"
+          className={`absolute inset-0 h-full w-full object-cover opacity-55 ${focusObjectClass(heroBannerFocus)}`}
         />
       ) : null}
       <div className="absolute inset-0 bg-gradient-to-t from-ink-950 via-ink-950/75 to-ink-950/10" />
@@ -174,8 +198,12 @@ function Hero({ media }: { media: Media }) {
       <div className="relative flex flex-col gap-5 p-5 pt-32 md:flex-row md:items-end md:p-9 md:pt-40">
         <div className="hidden w-36 shrink-0 sm:block md:w-44">
           <div className="aspect-2/3 overflow-hidden rounded-xl bg-ink-800 shadow-2xl ring-1 ring-white/10">
-            {media.cover ? (
-              <img src={media.cover} alt={media.title} className="h-full w-full object-cover" />
+            {heroPoster ? (
+              <img
+                src={heroPoster}
+                alt={media.title}
+                className={`h-full w-full object-cover ${focusObjectClass(mediaArt?.poster?.focus)}`}
+              />
             ) : null}
           </div>
         </div>
@@ -248,9 +276,30 @@ function Hero({ media }: { media: Media }) {
               {saved ? <BookmarkCheck size={15} /> : <Bookmark size={15} />}
               {saved ? 'Saved' : 'Bookmark'}
             </button>
+            <button
+              type="button"
+              onClick={() => setImdbOpen(true)}
+              title="Claim banner, poster, or app icon from IMDb (e.g. tt0234144)"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-black/35 px-3 py-2.5 text-sm font-medium text-amber-200 ring-1 ring-amber-400/30 backdrop-blur transition hover:bg-amber-400/18"
+            >
+              <ImagePlus size={15} className="text-amber-300" />
+              IMDb Photo
+            </button>
           </div>
         </div>
       </div>
+
+      {imdbOpen ? (
+        <ImdbArtworkModal
+          open
+          onClose={() => setImdbOpen(false)}
+          targetLabel={media.title}
+          targetType="media"
+          targetKey={String(media.id)}
+          initialImdbId={mediaArt?.imdbId}
+          searchHint={media.title}
+        />
+      ) : null}
     </section>
   )
 }

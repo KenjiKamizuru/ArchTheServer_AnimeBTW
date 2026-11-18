@@ -500,6 +500,7 @@ function toPublicItem(entry) {
     isMovie: entry.isMovie,
     known: entry.known,
     cover: entry.cover,
+    imdbId: entry.imdbId ?? null,
     size: entry.size,
     addedAt: entry.addedAt,
     modifiedAt: entry.modifiedAt,
@@ -595,6 +596,7 @@ async function scanInternal({ fresh = false } = {}) {
         isMovie,
         known,
         cover: meta?.cover ?? null,
+        imdbId: typeof meta?.imdbId === 'string' ? meta.imdbId : null,
         size: st.size,
         addedAt: meta?.addedAt ?? Math.round(st.mtimeMs),
         modifiedAt: Math.round(st.mtimeMs),
@@ -864,6 +866,7 @@ function buildUploadPlan(rawFileName, options = {}) {
         dub,
         format: 'MOVIE',
         sourceType: 'upload-movie',
+        ...(options.imdbId ? { imdbId: String(options.imdbId).trim() } : {}),
       },
     }
   }
@@ -890,6 +893,7 @@ function buildUploadPlan(rawFileName, options = {}) {
         dub,
         format: 'TV',
         sourceType: 'upload-episode',
+        ...(options.imdbId ? { imdbId: String(options.imdbId).trim() } : {}),
       },
     }
   }
@@ -1230,6 +1234,35 @@ export async function completeUploadSession(uploadId) {
       throw err
     }
   })
+}
+
+/** Updates non-destructive catalog metadata (e.g. IMDb ID or display title) for a library file. */
+export async function annotateItem(itemId, { title, imdbId, asMovie } = {}) {
+  const resolved = await resolveById(itemId)
+  if (!resolved) return null
+  const rel = resolved.entry.relPosix
+  const prev = catalog[rel] && typeof catalog[rel] === 'object' ? { ...catalog[rel] } : {}
+  if (typeof imdbId === 'string' && /^tt\d{7,12}$/.test(imdbId)) {
+    prev.imdbId = imdbId
+  }
+  const cleanTitle = typeof title === 'string' ? title.trim().slice(0, 160) : ''
+  if (cleanTitle) {
+    prev.animeTitle = cleanTitle
+    prev.seriesTitle = cleanTitle
+    if (prev.sourceType === 'import' || !prev.sourceType) {
+      prev.sourceType = asMovie ? 'upload-movie' : 'annotated'
+    }
+    if (asMovie) {
+      prev.format = 'MOVIE'
+    }
+  }
+  prev.addedAt = prev.addedAt ?? resolved.entry.addedAt ?? Date.now()
+  catalog[rel] = prev
+  await persistCatalog()
+  invalidateCache()
+  notifyChange()
+  const next = await resolveById(itemId)
+  return next?.publicItem ?? null
 }
 
 /** Cancels an active chunked upload session and cleans up its staged file. */

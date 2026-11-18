@@ -4,16 +4,20 @@ import {
   Check,
   ExternalLink,
   HardDrive,
+  ImagePlus,
   Info,
   Loader2,
   Lock,
   RefreshCw,
   Save,
+  Trash2,
   Zap,
 } from 'lucide-react'
 import { api } from '../lib/api'
+import { focusObjectClass, removeArtwork, useArtwork } from '../lib/artwork'
 import { refreshDownloads, refreshLibrary } from '../lib/downloads'
 import { saveSettings, useSettings } from '../lib/settings'
+import { ImdbArtworkModal } from '../components/ImdbArtworkModal'
 import { useToast } from '../components/Toasts'
 import type { AppSettings, ResolverStatus } from '../types'
 
@@ -42,9 +46,12 @@ type Draft = ReturnType<typeof editable>
 
 export default function SettingsPage() {
   const settings = useSettings()
+  const artwork = useArtwork()
+  const appArt = artwork.app
   const toast = useToast()
   const [draft, setDraft] = useState<Draft>(() => editable(settings))
   const [busy, setBusy] = useState(false)
+  const [imdbOpen, setImdbOpen] = useState(false)
   const [status, setStatus] = useState<ResolverStatus | null>(null)
   const [statusBusy, setStatusBusy] = useState(false)
   const touchedRef = useRef(false)
@@ -127,6 +134,106 @@ export default function SettingsPage() {
           {dirty ? 'Save changes' : 'Saved'}
         </button>
       </div>
+
+      <ImdbArtworkModal
+        open={imdbOpen}
+        onClose={() => setImdbOpen(false)}
+        targetLabel="AnimeVault App (Banner, Icon & Favicon)"
+        targetType="app"
+        targetKey="global"
+        initialImdbId={appArt?.imdbId}
+      />
+
+      <section className="mt-6 rounded-xl bg-ink-900 p-4 ring-1 ring-white/5 md:p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="flex items-center gap-2 text-[11px] font-semibold tracking-wider text-white/40 uppercase">
+              <ImagePlus size={13} className="text-accent" />
+              App Banner, Icon &amp; IMDb Artwork
+            </h2>
+            <p className="mt-1 text-xs text-white/45">
+              Claim any official poster, backdrop, still, or logo from IMDb using its{' '}
+              <span className="font-mono text-amber-300">tt0234144</span> ID for your server banner, app icon, favicon, or any movie/anime.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {appArt ? (
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await removeArtwork({ targetType: 'app', targetKey: 'global' })
+                    toast('Reset custom app banner & icon')
+                  } catch (err) {
+                    toast(err instanceof Error ? err.message : 'Could not reset artwork', 'err')
+                  }
+                }}
+                className="inline-flex items-center gap-1 rounded-lg bg-white/5 px-2.5 py-1.5 text-[11px] text-white/60 ring-1 ring-white/10 transition hover:bg-red-500/15 hover:text-red-200"
+              >
+                <Trash2 size={12} />
+                Reset
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setImdbOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-black transition hover:bg-accent-600"
+            >
+              <ImagePlus size={13} />
+              Claim from IMDb (tt…)
+            </button>
+          </div>
+        </div>
+
+        {appArt ? (
+          <div className="mt-3.5 grid gap-3 sm:grid-cols-[1fr_auto_auto]">
+            <div className="relative h-24 overflow-hidden rounded-xl bg-ink-850 ring-1 ring-white/10">
+              {appArt.banner ? (
+                <img
+                  src={`${appArt.banner.url}?v=${appArt.banner.updatedAt}`}
+                  alt="Claimed app banner"
+                  className={`h-full w-full object-cover ${focusObjectClass(appArt.banner.focus)}`}
+                />
+              ) : (
+                <div className="grid h-full place-items-center text-[11px] text-white/30">No app banner set</div>
+              )}
+              <span className="absolute bottom-1.5 left-2 rounded bg-black/75 px-1.5 py-0.5 text-[10px] font-medium text-white/85">
+                Banner{appArt.imdbId ? ` · ${appArt.imdbId}` : ''}
+              </span>
+            </div>
+
+            <div className="flex flex-col items-center justify-center rounded-xl bg-ink-850 px-4 py-2 ring-1 ring-white/10">
+              {appArt.icon ? (
+                <img
+                  src={`${appArt.icon.url}?v=${appArt.icon.updatedAt}`}
+                  alt="Claimed app icon"
+                  className={`h-12 w-12 rounded-xl object-cover ring-1 ring-white/15 ${focusObjectClass(appArt.icon.focus)}`}
+                />
+              ) : (
+                <div className="grid h-12 w-12 place-items-center rounded-xl bg-ink-800 text-[10px] text-white/30">
+                  None
+                </div>
+              )}
+              <span className="mt-1 text-[10px] text-white/45">Icon</span>
+            </div>
+
+            <div className="flex flex-col items-center justify-center rounded-xl bg-ink-850 px-4 py-2 ring-1 ring-white/10">
+              {appArt.poster ? (
+                <img
+                  src={`${appArt.poster.url}?v=${appArt.poster.updatedAt}`}
+                  alt="Claimed fallback poster"
+                  className={`h-12 w-9 rounded object-cover ring-1 ring-white/15 ${focusObjectClass(appArt.poster.focus)}`}
+                />
+              ) : (
+                <div className="grid h-12 w-9 place-items-center rounded bg-ink-800 text-[10px] text-white/30">
+                  —
+                </div>
+              )}
+              <span className="mt-1 text-[10px] text-white/45">Cover</span>
+            </div>
+          </div>
+        ) : null}
+      </section>
 
       <section className="mt-6 rounded-xl bg-ink-900 p-4 ring-1 ring-white/5 md:p-5">
         <div className="flex flex-wrap items-center justify-between gap-2">

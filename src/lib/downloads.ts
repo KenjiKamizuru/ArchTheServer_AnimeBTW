@@ -3,6 +3,7 @@
 
 import { useSyncExternalStore } from 'react'
 import type {
+  ArtworkSnapshot,
   BulkDownloadAction,
   BulkEnqueuePayload,
   DownloadsSnapshot,
@@ -12,6 +13,7 @@ import type {
   Media,
 } from '../types'
 import { api } from './api'
+import { applyArtworkSnapshot } from './artwork'
 import { inferSeasonFromTitle } from './format'
 
 interface LibraryStoreState extends LibraryResponse {
@@ -128,6 +130,15 @@ function connectStream() {
 
     es.addEventListener('library', () => {
       void refreshLibrary(true)
+    })
+
+    es.addEventListener('artwork', (event) => {
+      try {
+        const next = JSON.parse((event as MessageEvent).data) as ArtworkSnapshot
+        applyArtworkSnapshot(next)
+      } catch {
+        /* ignore malformed event */
+      }
     })
 
     es.onerror = () => {

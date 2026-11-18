@@ -10,6 +10,7 @@ import * as resolver from './resolver.mjs'
 import * as playback from './playback.mjs'
 import * as library from './library.mjs'
 import * as downloads from './downloads.mjs'
+import * as imdb from './imdb.mjs'
 import { verifyRegularLibraryFile } from './security.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -18,7 +19,7 @@ const PORT = Number.isInteger(requestedPort) && requestedPort > 0 ? requestedPor
 const HOST = process.env.HOST || '127.0.0.1'
 const isProd = process.env.NODE_ENV === 'production'
 
-await Promise.all([store.init(), settings.init(), resolver.init()])
+await Promise.all([store.init(), settings.init(), resolver.init(), imdb.init()])
 await library.init()
 await downloads.init()
 
@@ -336,6 +337,9 @@ app.get('/api/downloads/events', (req, res) => {
     if (event === 'jobs') sendEvent('jobs', payload)
     else if (event === 'library') sendEvent('library', { at: Date.now() })
   })
+  const unsubscribeArtwork = imdb.onChange(() => {
+    sendEvent('artwork', imdb.snapshot())
+  })
 
   const heartbeat = setInterval(() => {
     if (res.writableEnded || res.destroyed) return
@@ -346,6 +350,7 @@ app.get('/api/downloads/events', (req, res) => {
   const cleanup = () => {
     clearInterval(heartbeat)
     unsubscribe()
+    unsubscribeArtwork()
   }
   req.on('close', cleanup)
   res.on('close', cleanup)
@@ -612,6 +617,117 @@ app.delete(
     }
     await downloads.unlinkDeletedFileIds([result.id])
     res.json({ removed: true, id: result.id })
+  }),
+)
+
+// ── IMDb Photo Lookup & Persistent Local Artwork (Banner / Poster / Icon) ───
+
+app.get('/api/artwork', (req, res) => {
+  res.json(imdb.snapshot())
+})
+
+app.get(
+  '/api/artwork/:artId',
+  wrap(async (req, res) => {
+    const resolved = await imdb.resolveArtworkFile(req.params.artId)
+    if (!resolved) {
+      res.status(404).json({ error: 'Artwork not found' })
+      return
+    }
+    res.setHeader('Content-Type', resolved.mime)
+    res.setHeader('Content-Length', String(resolved.size))
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox")
+    createReadStream(resolved.absPath).pipe(res)
+  }),
+)
+
+app.get(
+  '/api/imdb/search',
+  wrap(async (req, res) => {
+    const q = String(req.query.q ?? '').slice(0, 100)
+    res.json(await imdb.searchTitles(q))
+  }),
+)
+
+app.get(
+  '/api/imdb/lookup',
+  wrap(async (req, res) => {
+    const raw = String(req.query.id ?? '').slice(0, 300)
+    res.json(await imdb.lookupTitle(raw))
+  }),
+)
+
+app.get(
+  '/api/imdb/title/:imdbId',
+  wrap(async (req, res) => {
+    const data = await imdb.lookupTitle(req.params.imdbId)
+    res.json(data)
+  }),
+)
+
+app.get(
+  '/api/imdb/preview',
+  wrap(async (req, res) => {
+    const rawUrl = String(req.query.u ?? '').trim()
+    if (!rawUrl) {
+      res.status(400).json({ error: 'Missing preview URL' })
+      return
+    }
+    const { buffer, mime } = await imdb.fetchPreviewThumbnail(rawUrl)
+    res.setHeader('Content-Type', mime)
+    res.setHeader('Content-Length', String(buffer.length))
+    res.setHeader('Cache-Control', 'public, max-age=3600')
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox")
+    res.end(buffer)
+  }),
+)
+
+app.post(
+  '/api/imdb/claim',
+  wrap(async (req, res) => {
+    const body = req.body ?? {}
+    const result = await imdb.claimArtwork(body)
+    if (body.targetType === 'file' && body.targetKey) {
+      await library.annotateItem(String(body.targetKey), {
+        imdbId: result.record?.imdbId ?? undefined,
+        title: body.applyTitle ? body.imdbTitle : undefined,
+        asMovie: Boolean(body.asMovie),
+      })
+    }
+    res.status(201).json(result)
+  }),
+)
+
+app.post(
+  '/api/imdb/claim-bundle',
+  wrap(async (req, res) => {
+    const body = req.body ?? {}
+    const result = await imdb.claimArtworkBundle(body)
+    if (body.targetType === 'file' && body.targetKey) {
+      await library.annotateItem(String(body.targetKey), {
+        imdbId: result.record?.imdbId ?? undefined,
+        title: body.applyTitle ? body.imdbTitle : undefined,
+        asMovie: Boolean(body.asMovie),
+      })
+    }
+    res.status(201).json(result)
+  }),
+)
+
+app.patch(
+  '/api/artwork/focus',
+  wrap(async (req, res) => {
+    res.json(await imdb.updateArtworkFocus(req.body ?? {}))
+  }),
+)
+
+app.delete(
+  '/api/artwork',
+  wrap(async (req, res) => {
+    res.json(await imdb.clearArtwork(req.body ?? {}))
   }),
 )
 

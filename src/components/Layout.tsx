@@ -5,12 +5,14 @@ import {
   CalendarClock,
   Download,
   HardDrive,
+  ImagePlus,
   LayoutGrid,
   Play,
   Search,
   Settings2,
   Sparkles,
 } from 'lucide-react'
+import { artworkForTarget, focusObjectClass, useArtwork } from '../lib/artwork'
 import { useDownloads, useLibrary } from '../lib/downloads'
 import { useUploads } from '../lib/uploads'
 
@@ -32,11 +34,21 @@ const MOBILE_NAV = [
 ]
 
 function Brand() {
+  const artwork = useArtwork()
+  const appIcon = artwork.app?.icon ?? null
   return (
     <Link to="/" className="flex items-center gap-2.5 px-2">
-      <span className="grid h-9 w-9 place-items-center rounded-xl bg-accent text-black shadow-lg shadow-accent/20">
-        <Play size={17} className="translate-x-px fill-black" />
-      </span>
+      {appIcon ? (
+        <img
+          src={`${appIcon.url}?v=${appIcon.updatedAt}`}
+          alt="App icon"
+          className={`h-9 w-9 shrink-0 rounded-xl object-cover shadow-lg ring-1 ring-white/15 ${focusObjectClass(appIcon.focus)}`}
+        />
+      ) : (
+        <span className="grid h-9 w-9 place-items-center rounded-xl bg-accent text-black shadow-lg shadow-accent/20">
+          <Play size={17} className="translate-x-px fill-black" />
+        </span>
+      )}
       <span className="leading-tight">
         <span className="block text-[15px] font-semibold tracking-tight text-white">AnimeVault</span>
         <span className="block text-[10px] tracking-wider text-white/35 uppercase">watch anime</span>
@@ -49,10 +61,29 @@ export default function Layout() {
   const navigate = useNavigate()
   const location = useLocation()
   const [term, setTerm] = useState('')
+  const artwork = useArtwork()
+  const appArt = artworkForTarget(artwork, 'app', 'global')
   const { counts } = useDownloads()
   const { stats } = useLibrary()
   const { activeCount: activeUploads } = useUploads()
   const activeQueue = counts.active + counts.queued + activeUploads
+
+  // Keep browser tab favicon in sync whenever an IMDb App Icon is claimed or reset.
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    let link = document.querySelector<HTMLLinkElement>('link[rel="icon"][data-app-icon="1"]')
+    if (appArt?.icon) {
+      if (!link) {
+        link = document.createElement('link')
+        link.rel = 'icon'
+        link.dataset.appIcon = '1'
+        document.head.appendChild(link)
+      }
+      link.href = `${appArt.icon.url}?v=${appArt.icon.updatedAt}`
+    } else if (link) {
+      link.remove()
+    }
+  }, [appArt?.icon?.url, appArt?.icon?.updatedAt])
 
   useEffect(() => {
     if (location.pathname === '/search') {
@@ -71,7 +102,30 @@ export default function Layout() {
       <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-white/5 bg-ink-900/70 px-3 py-5 md:flex">
         <Brand />
 
-        <nav className="mt-7 space-y-1">
+        {appArt?.banner ? (
+          <Link
+            to="/settings"
+            title={
+              appArt.imdbTitle
+                ? `Banner from ${appArt.imdbTitle} (${appArt.imdbId}) — click to customize`
+                : 'Customize app banner & icon'
+            }
+            className="group relative mt-4 block h-20 overflow-hidden rounded-xl bg-ink-850 ring-1 ring-white/10 transition hover:ring-accent/50"
+          >
+            <img
+              src={`${appArt.banner.url}?v=${appArt.banner.updatedAt}`}
+              alt=""
+              className={`h-full w-full object-cover transition duration-300 group-hover:scale-105 ${focusObjectClass(appArt.banner.focus)}`}
+            />
+            <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-transparent to-transparent" />
+            <span className="absolute right-2 bottom-1.5 inline-flex items-center gap-1 rounded bg-black/70 px-1.5 py-0.5 text-[9px] font-medium text-white/80 opacity-0 backdrop-blur-sm transition group-hover:opacity-100">
+              <ImagePlus size={10} className="text-accent" />
+              Edit
+            </span>
+          </Link>
+        ) : null}
+
+        <nav className={`${appArt?.banner ? 'mt-4' : 'mt-7'} space-y-1`}>
           {DESKTOP_NAV.map(({ to, label, icon: Icon, end, badgeKey }) => {
             const count =
               badgeKey === 'queue'

@@ -1,13 +1,20 @@
 import type {
   AppSettings,
+  ArtworkFocus,
+  ArtworkSlot,
+  ArtworkSnapshot,
+  ArtworkTargetType,
   Bookmark,
   BulkDownloadAction,
   BulkEnqueuePayload,
   BulkEnqueueResult,
+  ClaimedArtworkRecord,
   DownloadJob,
   DownloadsSnapshot,
   EnqueueDownloadPayload,
   EnqueueDownloadResult,
+  ImdbSearchItem,
+  ImdbTitleResult,
   LibraryItem,
   LibraryResponse,
   Media,
@@ -315,5 +322,85 @@ export const api = {
     if (params.quality) qs.set('quality', params.quality)
     if (params.dub !== undefined) qs.set('dub', params.dub ? '1' : '0')
     return `/api/live/subtitle?${qs.toString()}`
+  },
+
+  // ── IMDb Photo Lookup & Artwork Claiming (Banner / Poster / Icon) ─────────
+
+  artwork() {
+    return get<ArtworkSnapshot>('/api/artwork', false)
+  },
+
+  imdbLookup(idOrUrl: string) {
+    return get<ImdbTitleResult>(`/api/imdb/lookup?id=${encodeURIComponent(idOrUrl)}`, false)
+  },
+
+  imdbSearch(q: string) {
+    return get<{ query: string; results: ImdbSearchItem[] }>(
+      `/api/imdb/search?q=${encodeURIComponent(q)}`,
+      false,
+    )
+  },
+
+  claimImdbPhoto(payload: {
+    targetType: ArtworkTargetType
+    targetKey: string
+    slot: ArtworkSlot
+    imageUrl: string
+    imdbId?: string
+    imdbTitle?: string
+    focus?: ArtworkFocus
+    applyTitle?: boolean
+    asMovie?: boolean
+  }) {
+    return send<{
+      targetType: ArtworkTargetType
+      targetKey: string
+      slot: ArtworkSlot
+      record: ClaimedArtworkRecord | null
+      snapshot: ArtworkSnapshot
+    }>('/api/imdb/claim', 'POST', payload)
+  },
+
+  claimImdbBundle(payload: {
+    targetType: ArtworkTargetType
+    targetKey: string
+    slots: Partial<Record<ArtworkSlot, string>>
+    focus?: Partial<Record<ArtworkSlot, ArtworkFocus>>
+    imdbId?: string
+    imdbTitle?: string
+    applyTitle?: boolean
+    asMovie?: boolean
+  }) {
+    return send<{
+      targetType: ArtworkTargetType
+      targetKey: string
+      record: ClaimedArtworkRecord | null
+      snapshot: ArtworkSnapshot
+    }>('/api/imdb/claim-bundle', 'POST', payload)
+  },
+
+  updateArtworkFocus(payload: {
+    targetType: ArtworkTargetType
+    targetKey: string
+    slot: ArtworkSlot
+    focus: ArtworkFocus
+  }) {
+    return send<{ record: ClaimedArtworkRecord | null; snapshot: ArtworkSnapshot }>(
+      '/api/artwork/focus',
+      'PATCH',
+      payload,
+    )
+  },
+
+  clearArtwork(payload: {
+    targetType: ArtworkTargetType
+    targetKey: string
+    slot?: ArtworkSlot
+  }) {
+    return send<{ removed: boolean; record: ClaimedArtworkRecord | null; snapshot: ArtworkSnapshot }>(
+      '/api/artwork',
+      'DELETE',
+      payload,
+    )
   },
 }

@@ -21,6 +21,11 @@ React frontend.
   `library/<Anime Name>/Season 01/<Anime Name> - S01E01.mp4`, preserves existing
   media across updates, discovers standalone/unknown `.mp4` files, and lets any
   client stream in-browser or download files to their device.
+- **IMDb Artwork Claimer (`tt…`)** — enter any IMDb ID (e.g. `tt0234144` or a
+  full `imdb.com/title/tt…` link, or search IMDb by title) to browse and claim
+  official widescreen banners, posters/covers, stills, and icons for uploaded
+  movies, anime series, unsorted videos, or the app's own banner, icon, and
+  browser favicon — verified and saved locally in `data/artwork/` for offline use.
 - **Bookmarks** — a persisted list you can add to from any card, the detail
   sheet, search results, or the schedule.
 - **Settings** — quality, default search result, sub/dub, shared library path,
@@ -97,6 +102,14 @@ optional environment variables:
 | `/api/library/:id/download` | GET | Download a local file to a client device |
 | `/api/library/:id/subtitle` | GET/POST | Serve or attach (chunked) a local sidecar subtitle (`.vtt`/`.srt`/`.ass`) |
 | `/api/library/:id` | DELETE | Delete one local file without removing anime metadata |
+| `/api/imdb/lookup?id=` | GET | Fetch official IMDb photos (banners, posters, stills, logos) by `tt…` ID or URL |
+| `/api/imdb/search?q=` | GET | Search IMDb titles to find matching `tt…` IDs |
+| `/api/imdb/preview?u=` | GET | Allowlist-verified thumbnail proxy for IMDb gallery previews |
+| `/api/imdb/claim` | POST | Claim & locally cache an IMDb photo as `banner`, `poster`, or `icon` |
+| `/api/imdb/claim-bundle` | POST | Claim multiple slots (`banner` + `poster` + `icon`) in one call |
+| `/api/artwork` | GET/DELETE | List all claimed artwork mappings or reset a slot/target |
+| `/api/artwork/focus` | PATCH | Adjust crop focal point (`top`, `center`, `bottom`) for a claimed slot |
+| `/api/artwork/:artId` | GET | Serve locally cached artwork by opaque `art_…` ID |
 | `/api/health` | GET | Server status |
 
 ## Why not AniDB directly
