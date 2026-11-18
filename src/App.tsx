@@ -12,6 +12,8 @@ import Browse from './pages/Browse'
 // bundle small.
 const Schedule = lazy(() => import('./pages/Schedule'))
 const Search = lazy(() => import('./pages/Search'))
+const DownloadsPage = lazy(() => import('./pages/Downloads'))
+const DownloadedPage = lazy(() => import('./pages/Downloaded'))
 const Bookmarks = lazy(() => import('./pages/Bookmarks'))
 const SettingsPage = lazy(() => import('./pages/Settings'))
 
@@ -30,6 +32,8 @@ export default function App() {
               <Route path="browse" element={<Browse />} />
               <Route path="schedule" element={<LazyPage><Schedule /></LazyPage>} />
               <Route path="search" element={<LazyPage><Search /></LazyPage>} />
+              <Route path="downloads" element={<LazyPage><DownloadsPage /></LazyPage>} />
+              <Route path="downloaded" element={<LazyPage><DownloadedPage /></LazyPage>} />
               <Route path="bookmarks" element={<LazyPage><Bookmarks /></LazyPage>} />
               <Route path="settings" element={<LazyPage><SettingsPage /></LazyPage>} />
               <Route path="*" element={<Navigate to="/" replace />} />

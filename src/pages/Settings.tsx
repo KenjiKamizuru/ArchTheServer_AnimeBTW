@@ -1,7 +1,19 @@
-import { useEffect, useState } from 'react'
-import { AlertTriangle, Check, ExternalLink, Info, Loader2, RefreshCw, Save, Zap } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import {
+  AlertTriangle,
+  Check,
+  ExternalLink,
+  HardDrive,
+  Info,
+  Loader2,
+  Lock,
+  RefreshCw,
+  Save,
+  Zap,
+} from 'lucide-react'
 import { api } from '../lib/api'
-import { useSettings } from '../lib/settings'
+import { refreshDownloads, refreshLibrary } from '../lib/downloads'
+import { saveSettings, useSettings } from '../lib/settings'
 import { useToast } from '../components/Toasts'
 import type { AppSettings, ResolverStatus } from '../types'
 
@@ -19,6 +31,10 @@ function editable(s: AppSettings) {
     quality: s.quality,
     dub: s.dub,
     resultIndex: s.resultIndex,
+    libraryDir: s.libraryDir,
+    maxConcurrentDownloads: s.maxConcurrentDownloads,
+    preferLocalPlayback: s.preferLocalPlayback,
+    allowedHostsText: (s.allowedExternalHosts ?? []).join('\n'),
   }
 }
 
@@ -31,8 +47,15 @@ export default function SettingsPage() {
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<ResolverStatus | null>(null)
   const [statusBusy, setStatusBusy] = useState(false)
+  const touchedRef = useRef(false)
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(editable(settings))
+
+  useEffect(() => {
+    if (!touchedRef.current) {
+      setDraft(editable(settings))
+    }
+  }, [settings])
 
   function checkStatus() {
     setStatusBusy(true)
@@ -48,14 +71,34 @@ export default function SettingsPage() {
   }, [])
 
   function set<K extends keyof Draft>(key: K, value: Draft[K]) {
+    touchedRef.current = true
     setDraft((d) => ({ ...d, [key]: value }))
   }
 
   async function onSave() {
     setBusy(true)
     try {
-      const next = await api.saveSettings(draft)
+      const allowedExternalHosts = draft.allowedHostsText
+        .split(/[\r\n,\s]+/)
+        .map((v) => v.trim())
+        .filter(Boolean)
+
+      const patch: Partial<AppSettings> = {
+        quality: draft.quality,
+        dub: draft.dub,
+        resultIndex: draft.resultIndex,
+        maxConcurrentDownloads: draft.maxConcurrentDownloads,
+        preferLocalPlayback: draft.preferLocalPlayback,
+        allowedExternalHosts,
+      }
+      if (!settings.libraryDirLocked) {
+        patch.libraryDir = draft.libraryDir
+      }
+
+      const next = await saveSettings(patch)
+      touchedRef.current = false
       setDraft(editable(next))
+      await Promise.all([refreshLibrary(true), refreshDownloads()])
       toast('Settings saved')
       checkStatus()
     } catch (err) {
@@ -71,7 +114,7 @@ export default function SettingsPage() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight text-white md:text-2xl">Settings</h1>
           <p className="mt-0.5 text-xs text-white/40">
-            Stream quality and provider behaviour.
+            Stream quality, shared media library, and persistent download limits.
           </p>
         </div>
         <button
@@ -89,7 +132,7 @@ export default function SettingsPage() {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="flex items-center gap-2 text-[11px] font-semibold tracking-wider text-white/40 uppercase">
             <Zap size={13} className="text-accent" />
-            Streaming
+            Streaming &amp; Default Quality
           </h2>
           <button
             type="button"
@@ -132,7 +175,7 @@ export default function SettingsPage() {
 
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <label className="block">
-            <span className="mb-1 block text-[11px] text-white/45">Quality</span>
+            <span className="mb-1 block text-[11px] text-white/45">Default quality</span>
             <select
               value={draft.quality}
               onChange={(event) => set('quality', event.target.value)}
@@ -145,7 +188,7 @@ export default function SettingsPage() {
               ))}
             </select>
             <span className="mt-1 block text-[11px] text-white/35">
-              Falls back to the best stream when the requested quality is unavailable.
+              Used for live streaming and pre-selected when queuing downloads.
             </span>
           </label>
 
@@ -175,10 +218,92 @@ export default function SettingsPage() {
           </label>
         </div>
 
-        <p className="mt-3 flex items-center gap-1.5 text-[11px] text-white/35">
-          <Check size={11} className="text-accent" />
-          Updated {new Date(settings.updatedAt).toLocaleString()}
-        </p>
+        {settings.updatedAt > 0 ? (
+          <p className="mt-3 flex items-center gap-1.5 text-[11px] text-white/35">
+            <Check size={11} className="text-accent" />
+            Updated {new Date(settings.updatedAt).toLocaleString()}
+          </p>
+        ) : null}
+      </section>
+
+      <section className="mt-6 rounded-xl bg-ink-900 p-4 ring-1 ring-white/5 md:p-5">
+        <h2 className="flex items-center gap-2 text-[11px] font-semibold tracking-wider text-white/40 uppercase">
+          <HardDrive size={13} className="text-accent" />
+          Shared Media Library &amp; Downloads
+        </h2>
+
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <label className="block">
+            <span className="mb-1 flex items-center gap-1.5 text-[11px] text-white/45">
+              Shared library directory
+              {settings.libraryDirLocked ? (
+                <span className="inline-flex items-center gap-1 text-[10px] text-accent">
+                  <Lock size={10} />
+                  env
+                </span>
+              ) : null}
+            </span>
+            <input
+              value={draft.libraryDir}
+              disabled={settings.libraryDirLocked}
+              onChange={(event) => set('libraryDir', event.target.value)}
+              placeholder="library"
+              className="w-full rounded-lg bg-ink-800 px-2.5 py-2 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-60"
+            />
+            <span className="mt-1 block text-[11px] text-white/35">
+              {settings.libraryDirLocked
+                ? 'Controlled by the LIBRARY_DIR environment variable on the server.'
+                : 'Defaults to library/ (excluded from Git). Absolute paths such as /mnt/media/anime are supported; source folders are blocked.'}
+            </span>
+          </label>
+
+          <label className="block">
+            <span className="mb-1 block text-[11px] text-white/45">Simultaneous downloads</span>
+            <input
+              type="number"
+              min={1}
+              max={6}
+              value={draft.maxConcurrentDownloads}
+              onChange={(event) => set('maxConcurrentDownloads', Number(event.target.value))}
+              className="w-full rounded-lg bg-ink-800 px-2.5 py-2 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-accent/60"
+            />
+            <span className="mt-1 block text-[11px] text-white/35">
+              How many episodes download in parallel (1–6). Remaining jobs stay in the persistent queue.
+            </span>
+          </label>
+
+          <label className="flex items-center gap-2 sm:col-span-2">
+            <input
+              type="checkbox"
+              checked={draft.preferLocalPlayback}
+              onChange={(event) => set('preferLocalPlayback', event.target.checked)}
+              className="h-4 w-4 accent-[var(--color-accent)]"
+            />
+            <span className="text-sm text-white/70">
+              Prefer local library files over remote streaming when an episode is downloaded
+            </span>
+          </label>
+
+          <label className="block sm:col-span-2">
+            <span className="mb-1 block text-[11px] text-white/45">
+              Additional approved external source domains
+            </span>
+            <textarea
+              rows={3}
+              value={draft.allowedHostsText}
+              onChange={(event) => set('allowedHostsText', event.target.value)}
+              placeholder={'cdn.example.com\n*.example.org'}
+              className="w-full rounded-lg bg-ink-800 px-2.5 py-2 font-mono text-xs text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
+            />
+            <span className="mt-1 block text-[11px] text-white/35">
+              One hostname or wildcard (<code className="text-white/55">*.domain.com</code>) per line for
+              external MP4/M3U8 downloads. Private, loopback, and link-local networks are always blocked.
+              {settings.envExternalHostsConfigured
+                ? ' Additional domains from ALLOWED_SOURCE_HOSTS are also active.'
+                : ''}
+            </span>
+          </label>
+        </div>
       </section>
 
       <section className="mt-6 rounded-xl bg-ink-900 p-4 ring-1 ring-white/5 md:p-5">
@@ -189,8 +314,10 @@ export default function SettingsPage() {
         <div className="mt-3 space-y-2 text-[11px] leading-relaxed text-white/45">
           <p>
             Show metadata, schedules and scores come from AniList and AniDB public APIs. Episodes are
-            resolved on the server by searching hianime.at, decoding the ZokoAnime embed, and
-            remuxing the stream with ffmpeg — nothing is downloaded, the video plays in the browser.
+            resolved on the server via the built-in hianime/ZokoAnime resolver and muxed with ffmpeg —
+            streamed live or saved into the shared local library under{' '}
+            <code className="text-white/60">Anime Name/Season 01/Anime Name - S01E01.mp4</code> for
+            offline playback.
           </p>
           <p className="flex flex-wrap gap-3">
             <a
@@ -213,8 +340,8 @@ export default function SettingsPage() {
             </a>
           </p>
           <p>
-            Streaming rules differ by country — use it only for media you are allowed to watch where
-            you live.
+            Streaming and download rules differ by country — use only for media you are authorized to
+            access where you live.
           </p>
         </div>
       </section>

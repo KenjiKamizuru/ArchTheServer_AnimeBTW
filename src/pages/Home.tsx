@@ -1,10 +1,13 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Bookmark, BookmarkCheck, CalendarClock, Play, Star } from 'lucide-react'
+import { Bookmark, BookmarkCheck, CalendarClock, FolderDown, Loader2, Play, Star, Upload } from 'lucide-react'
 import type { Media } from '../types'
 import { api } from '../lib/api'
 import { useAsync } from '../lib/hooks'
 import { toggleBookmark, useBookmarks } from '../lib/bookmarks'
-import { formatMediaType, formatSeason, relativeTime } from '../lib/format'
+import { enqueueBulkDownload } from '../lib/downloads'
+import { useSettings } from '../lib/settings'
+import { formatMediaType, formatSeason, inferSeasonFromTitle, relativeTime } from '../lib/format'
 import { CardSkeletons } from '../components/MediaCard'
 import { MediaRow } from '../components/MediaRow'
 import { useDetail } from '../components/MediaModal'
@@ -37,12 +40,28 @@ export default function Home() {
               : 'Loading the current season…'}
           </p>
         </div>
-        <Link
-          to="/browse"
-          className="text-xs font-medium text-white/50 transition hover:text-accent"
-        >
-          Browse other seasons →
-        </Link>
+        <div className="flex flex-wrap items-center gap-3">
+          <Link
+            to="/downloads?bulk=1"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-accent/15 px-3 py-1.5 text-xs font-semibold text-accent ring-1 ring-accent/35 transition hover:bg-accent/25"
+          >
+            <FolderDown size={13} />
+            Bulk Download Season
+          </Link>
+          <Link
+            to="/downloaded?upload=movie"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-white/6 px-3 py-1.5 text-xs font-medium text-white/80 ring-1 ring-white/12 transition hover:bg-white/12 hover:text-white"
+          >
+            <Upload size={13} className="text-accent" />
+            Upload Movie
+          </Link>
+          <Link
+            to="/browse"
+            className="text-xs font-medium text-white/50 transition hover:text-accent"
+          >
+            Browse seasons →
+          </Link>
+        </div>
       </div>
 
       {error && !seasonMedia.length ? (
@@ -93,7 +112,9 @@ export default function Home() {
 function Hero({ media }: { media: Media }) {
   const open = useDetail()
   const toast = useToast()
+  const settings = useSettings()
   const bookmarks = useBookmarks()
+  const [seasonBusy, setSeasonBusy] = useState(false)
   const saved = bookmarks.some((b) => b.mediaId === media.id)
 
   async function onBookmark() {
@@ -101,6 +122,40 @@ function Hero({ media }: { media: Media }) {
       await toggleBookmark(media)
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Could not update bookmarks', 'err')
+    }
+  }
+
+  async function onDownloadSeason() {
+    if (seasonBusy) return
+    setSeasonBusy(true)
+    try {
+      const inferred = inferSeasonFromTitle(media.title)
+      const count = media.airedEpisodes > 0 ? media.airedEpisodes : media.episodes ?? undefined
+      const res = await enqueueBulkDownload({
+        mode: 'season',
+        mediaId: media.id,
+        animeTitle: media.title,
+        query: media.title,
+        season: inferred.season,
+        episodeCount: count,
+        discoverFromProvider: true,
+        quality: settings.quality,
+        dub: settings.dub,
+        format: media.format,
+        cover: media.cover,
+        durationMinutes: media.duration,
+      })
+      if (res.queuedCount > 0) {
+        toast(`Queued ${res.queuedCount} episode${res.queuedCount === 1 ? '' : 's'} of ${media.title}`)
+      } else if (res.skippedDownloaded > 0) {
+        toast(`Whole season of ${media.title} is already in your local library`)
+      } else {
+        toast(`${media.title} is already queued`)
+      }
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not queue season', 'err')
+    } finally {
+      setSeasonBusy(false)
     }
   }
 
@@ -163,6 +218,15 @@ function Hero({ media }: { media: Media }) {
             >
               <Play size={16} />
               Watch episode
+            </button>
+            <button
+              type="button"
+              onClick={() => void onDownloadSeason()}
+              disabled={seasonBusy}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-accent/18 px-4 py-2.5 text-sm font-semibold text-accent ring-1 ring-accent/45 backdrop-blur transition hover:bg-accent/28 disabled:opacity-50"
+            >
+              {seasonBusy ? <Loader2 size={15} className="animate-spin" /> : <FolderDown size={15} />}
+              Download Season
             </button>
             <button
               type="button"
