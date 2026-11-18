@@ -139,7 +139,7 @@ export const api = {
     if (params.resultIndex) qs.set('resultIndex', String(params.resultIndex))
     if (params.episode) qs.set('episode', String(params.episode))
     if (params.quality) qs.set('quality', params.quality)
-    if (params.dub) qs.set('dub', '1')
+    if (params.dub !== undefined) qs.set('dub', params.dub ? '1' : '0')
     return `/api/live/stream?${qs.toString()}`
   },
 
@@ -155,7 +155,7 @@ export const api = {
     if (params.resultIndex) qs.set('resultIndex', String(params.resultIndex))
     if (params.episode) qs.set('episode', String(params.episode))
     if (params.quality) qs.set('quality', params.quality)
-    if (params.dub) qs.set('dub', '1')
+    if (params.dub !== undefined) qs.set('dub', params.dub ? '1' : '0')
     return `/api/live/subtitle?${qs.toString()}`
   },
 }

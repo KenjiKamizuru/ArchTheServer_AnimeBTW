@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Check, ExternalLink, Info, Loader2, RefreshCw, Save, Zap } from 'lucide-react'
 import { api } from '../lib/api'
-import { useSettings } from '../lib/settings'
+import { saveSettings, useSettings } from '../lib/settings'
 import { useToast } from '../components/Toasts'
 import type { AppSettings, ResolverStatus } from '../types'
 
@@ -31,8 +31,15 @@ export default function SettingsPage() {
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<ResolverStatus | null>(null)
   const [statusBusy, setStatusBusy] = useState(false)
+  const touchedRef = useRef(false)
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(editable(settings))
+
+  useEffect(() => {
+    if (!touchedRef.current) {
+      setDraft(editable(settings))
+    }
+  }, [settings])
 
   function checkStatus() {
     setStatusBusy(true)
@@ -48,13 +55,15 @@ export default function SettingsPage() {
   }, [])
 
   function set<K extends keyof Draft>(key: K, value: Draft[K]) {
+    touchedRef.current = true
     setDraft((d) => ({ ...d, [key]: value }))
   }
 
   async function onSave() {
     setBusy(true)
     try {
-      const next = await api.saveSettings(draft)
+      const next = await saveSettings(draft)
+      touchedRef.current = false
       setDraft(editable(next))
       toast('Settings saved')
       checkStatus()

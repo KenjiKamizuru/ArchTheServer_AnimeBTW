@@ -10,6 +10,40 @@ import {
 } from 'react'
 import { AlertTriangle, Loader2, Radio, RotateCw, X } from 'lucide-react'
 import { api } from '../lib/api'
+import { concatBytes, Mp4BoxTracker, selectMseMimeType } from '../lib/mp4'
+
+const BASE_MSE_TYPE = 'video/mp4; codecs="avc1.42E01E,mp4a.40.2"'
+const MAX_BUFFER_AHEAD = 90
+const KEEP_BUFFER_BEHIND = 30
+const EVICT_MIN_SECONDS = 15
+const MAX_QUEUED_BYTES = 8 * 1024 * 1024
+
+type MediaSourceCtor = typeof MediaSource
+
+function getMediaSourceSupport(): { Ctor: MediaSourceCtor; managed: boolean } | null {
+  if (typeof window === 'undefined') return null
+  if (typeof MediaSource === 'function' && MediaSource.isTypeSupported(BASE_MSE_TYPE)) {
+    return { Ctor: MediaSource, managed: false }
+  }
+  const managed = (globalThis as { ManagedMediaSource?: MediaSourceCtor }).ManagedMediaSource
+  if (typeof managed === 'function' && managed.isTypeSupported(BASE_MSE_TYPE)) {
+    return { Ctor: managed, managed: true }
+  }
+  return null
+}
+
+function bufferedAheadSeconds(video: HTMLVideoElement): number {
+  const now = video.currentTime
+  const ranges = video.buffered
+  for (let i = 0; i < ranges.length; i++) {
+    const start = ranges.start(i)
+    const end = ranges.end(i)
+    if (now >= start - 0.5 && now <= end + 0.5) {
+      return Math.max(0, end - now)
+    }
+  }
+  return 0
+}
 
 export type PlaybackSource = {
   kind: 'live'
@@ -71,23 +105,22 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
   const [error, setError] = useState<string | null>(null)
   const [mseFallback, setMseFallback] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const autoPlayedRef = useRef(false)
   const urls = useMemo(() => sourcesFor(source), [source])
 
-  // Firefox on desktop cannot play progressive fragmented MP4 through a plain
-  // <video src> (the audio track is dropped). Feeding the same fragments
-  // through Media Source Extensions works there, and in Chrome; browsers
-  // without MSE (Safari, iOS) keep the direct source, which they can play.
-  const canUseMse = useMemo(() => {
-    const type = 'video/mp4; codecs="avc1.42E01E,mp4a.40.2"'
-    return typeof MediaSource === 'function' && MediaSource.isTypeSupported(type)
-  }, [])
-  const useMse = canUseMse && !mseFallback
+  // Firefox cannot play progressive fragmented MP4 reliably through a plain
+  // <video src> (the audio track is dropped). Feeding the remuxed fMP4 through
+  // MediaSource (or iOS Safari's ManagedMediaSource) preserves both video and
+  // audio across desktop and mobile browsers; older browsers fall back to src.
+  const mseSupport = useMemo(() => getMediaSourceSupport(), [])
+  const useMse = Boolean(mseSupport) && !mseFallback
 
   useEffect(() => {
     setAttempt(0)
     setLoading(true)
     setError(null)
     setMseFallback(false)
+    autoPlayedRef.current = false
   }, [source])
 
   useEffect(() => {
@@ -109,83 +142,240 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
     'episode' in source && source.episode ? `${source.title} · EP ${source.episode}` : source.title
 
   useEffect(() => {
-    if (!useMse) return
+    autoPlayedRef.current = false
+    if (!useMse || !mseSupport) return
     const video = videoRef.current
     if (!video) return
 
-    // Chrome rejects the bare 'video/mp4' type — include the codec strings that
-    // match what ffmpeg emits (H.264 baseline-ish + AAC-LC).
-    const MSE_TYPE = 'video/mp4; codecs="avc1.42E01E,mp4a.40.2"'
-    const mediaSource = new MediaSource() as MediaSource & { end(): void }
+    const { Ctor } = mseSupport
+    const mediaSource = new Ctor()
     const objectUrl = URL.createObjectURL(mediaSource)
     const controller = new AbortController()
+    const tracker = new Mp4BoxTracker()
+    const initChunks: Uint8Array[] = []
     const queue: Uint8Array[] = []
+    let queuedBytes = 0
     let sourceBuffer: SourceBuffer | null = null
     let streamEnded = false
+    let quotaBlocked = false
     let aborted = false
+    let wakeReader: (() => void) | null = null
+
+    const wake = () => {
+      const fn = wakeReader
+      if (fn) {
+        wakeReader = null
+        fn()
+      }
+    }
+
+    const waitForDrain = () =>
+      new Promise<void>((resolve) => {
+        if (aborted) {
+          resolve()
+          return
+        }
+        wakeReader = resolve
+      })
+
+    const fail = (message?: string) => {
+      if (aborted) return
+      aborted = true
+      controller.abort()
+      wake()
+      setLoading(false)
+      setError(message || 'The stream ended before it could be played. Try again.')
+    }
+
+    const fallbackToDirect = () => {
+      if (aborted) return
+      aborted = true
+      controller.abort()
+      wake()
+      setMseFallback(true)
+    }
+
+    const tryEvict = (keepBehind: number): boolean => {
+      if (!sourceBuffer || sourceBuffer.updating || sourceBuffer.buffered.length === 0) return false
+      const start = sourceBuffer.buffered.start(0)
+      const removeEnd = video.currentTime - keepBehind
+      if (removeEnd <= start + 1) return false
+      try {
+        sourceBuffer.remove(start, removeEnd)
+        return true
+      } catch {
+        return false
+      }
+    }
 
     const flush = () => {
-      if (!sourceBuffer || sourceBuffer.updating) return
-      if (queue.length > 0) {
-        sourceBuffer.appendBuffer(queue.shift() as BufferSource)
+      if (aborted || !sourceBuffer || sourceBuffer.updating || mediaSource.readyState !== 'open') {
         return
       }
-      if (streamEnded && mediaSource.readyState === 'open') {
-        mediaSource.end()
-        void video.play().catch(() => {})
+
+      if (
+        queue.length > 0 &&
+        tracker.atSegmentBoundary &&
+        video.currentTime > KEEP_BUFFER_BEHIND + EVICT_MIN_SECONDS &&
+        sourceBuffer.buffered.length > 0 &&
+        video.currentTime - KEEP_BUFFER_BEHIND - sourceBuffer.buffered.start(0) >= EVICT_MIN_SECONDS
+      ) {
+        if (tryEvict(KEEP_BUFFER_BEHIND)) return
       }
-    }
 
-    const fail = () => {
-      if (aborted) return
-      setLoading(false)
-      setError('The stream ended before it could be played. Try again.')
-    }
-
-    mediaSource.addEventListener('sourceopen', () => {
-      if (aborted) return
-      try {
-        sourceBuffer = mediaSource.addSourceBuffer(MSE_TYPE)
-        sourceBuffer.addEventListener('updateend', flush)
-        sourceBuffer.addEventListener('error', () => setMseFallback(true))
-        void (async () => {
-          try {
-            const response = await fetch(videoSrc, { signal: controller.signal })
-            if (!response.ok || !response.body) {
-              fail()
-              return
-            }
-            const reader = response.body.getReader()
-            for (;;) {
-              const { done, value } = await reader.read()
-              if (done) break
-              queue.push(value)
-              flush()
-            }
-            streamEnded = true
-            flush()
-          } catch {
+      if (queue.length > 0) {
+        const next = queue[0]
+        try {
+          sourceBuffer.appendBuffer(next as BufferSource)
+          queue.shift()
+          queuedBytes -= next.byteLength
+          quotaBlocked = false
+          tracker.push(next)
+          if (queuedBytes < MAX_QUEUED_BYTES / 2) wake()
+        } catch (err) {
+          if (err instanceof DOMException && err.name === 'QuotaExceededError') {
+            quotaBlocked = true
+            tryEvict(5)
+            return
+          }
+          if (video.readyState === 0) {
+            fallbackToDirect()
+          } else {
             fail()
           }
-        })()
-      } catch {
-        setMseFallback(true)
+        }
+        return
       }
-    })
 
+      wake()
+      if (streamEnded && mediaSource.readyState === 'open') {
+        try {
+          mediaSource.endOfStream()
+        } catch {
+          /* already ended */
+        }
+      }
+    }
+
+    const onSourceBufferError = () => {
+      if (aborted) return
+      if (video.readyState === 0) {
+        fallbackToDirect()
+      } else {
+        fail('Playback was interrupted while decoding the stream. Try again.')
+      }
+    }
+
+    const onProgress = () => {
+      if (aborted) return
+      if (quotaBlocked) flush()
+      if (bufferedAheadSeconds(video) < MAX_BUFFER_AHEAD * 0.75) wake()
+    }
+
+    const onSourceOpen = () => {
+      if (aborted) return
+      void (async () => {
+        try {
+          const response = await fetch(videoSrc, { signal: controller.signal })
+          if (!response.ok) {
+            const payload = (await response.json().catch(() => null)) as { error?: string } | null
+            fail(payload?.error)
+            return
+          }
+          if (!response.body) {
+            fail()
+            return
+          }
+
+          const reader = response.body.getReader()
+          for (;;) {
+            while (
+              !aborted &&
+              sourceBuffer &&
+              (quotaBlocked ||
+                queuedBytes >= MAX_QUEUED_BYTES ||
+                bufferedAheadSeconds(video) >= MAX_BUFFER_AHEAD)
+            ) {
+              await waitForDrain()
+            }
+            if (aborted) break
+
+            const { done, value } = await reader.read()
+            if (done) break
+            if (!value || value.byteLength === 0) continue
+
+            if (!sourceBuffer) {
+              initChunks.push(value)
+              const merged = concatBytes(initChunks)
+              const mime = selectMseMimeType(merged, (type) => Ctor.isTypeSupported(type))
+              if (mime === 'need-more') continue
+              if (!mime || mediaSource.readyState !== 'open') {
+                fallbackToDirect()
+                return
+              }
+              try {
+                sourceBuffer = mediaSource.addSourceBuffer(mime)
+              } catch {
+                fallbackToDirect()
+                return
+              }
+              initChunks.length = 0
+              sourceBuffer.addEventListener('updateend', flush)
+              sourceBuffer.addEventListener('error', onSourceBufferError)
+              queue.push(merged)
+              queuedBytes += merged.byteLength
+              flush()
+              continue
+            }
+
+            queue.push(value)
+            queuedBytes += value.byteLength
+            flush()
+          }
+
+          if (aborted) return
+          if (!sourceBuffer) {
+            fail()
+            return
+          }
+          streamEnded = true
+          flush()
+        } catch {
+          fail()
+        }
+      })()
+    }
+
+    video.addEventListener('timeupdate', onProgress)
+    video.addEventListener('seeking', onProgress)
+    video.addEventListener('ratechange', onProgress)
+    mediaSource.addEventListener('sourceopen', onSourceOpen, { once: true })
     video.src = objectUrl
 
     return () => {
       aborted = true
       controller.abort()
-      URL.revokeObjectURL(objectUrl)
+      wake()
+      mediaSource.removeEventListener('sourceopen', onSourceOpen)
+      video.removeEventListener('timeupdate', onProgress)
+      video.removeEventListener('seeking', onProgress)
+      video.removeEventListener('ratechange', onProgress)
       if (sourceBuffer) {
         sourceBuffer.removeEventListener('updateend', flush)
-        if (mediaSource.readyState === 'open') mediaSource.end()
+        sourceBuffer.removeEventListener('error', onSourceBufferError)
+        try {
+          if (mediaSource.readyState === 'open' && sourceBuffer.updating) {
+            sourceBuffer.abort()
+          }
+        } catch {
+          /* already closed */
+        }
       }
       video.removeAttribute('src')
+      video.load()
+      URL.revokeObjectURL(objectUrl)
     }
-  }, [videoSrc, useMse])
+  }, [videoSrc, useMse, mseSupport])
 
   return (
     <div
@@ -222,16 +412,29 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
             ref={videoRef}
             key={`${videoSrc}${useMse ? '-mse' : ''}`}
             src={useMse ? undefined : videoSrc}
+            disableRemotePlayback={useMse && mseSupport?.managed ? true : undefined}
             controls
             autoPlay
             playsInline
             onLoadedMetadata={() => setLoading(false)}
-            onCanPlay={() => setLoading(false)}
-            onError={() =>
+            onCanPlay={(event) => {
+              setLoading(false)
+              if (!autoPlayedRef.current) {
+                autoPlayedRef.current = true
+                const el = event.currentTarget
+                if (el.paused) void el.play().catch(() => {})
+              }
+            }}
+            onError={(event) => {
+              if (useMse && event.currentTarget.readyState === 0) {
+                setMseFallback(true)
+                return
+              }
+              setLoading(false)
               setError(
                 'This stream could not be played in the browser. Try again, or pick a different quality in Settings.',
               )
-            }
+            }}
             className="max-h-[calc(100vh-8rem)] w-full rounded-xl bg-black shadow-2xl ring-1 ring-white/10"
           >
             {subtitleSrc ? (
@@ -257,6 +460,7 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
                 onClick={() => {
                   setError(null)
                   setLoading(true)
+                  setMseFallback(false)
                   setAttempt((value) => value + 1)
                 }}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-black transition hover:bg-accent-600"

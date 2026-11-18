@@ -195,6 +195,12 @@ app.post(
   }),
 )
 
+function resolveDubParam(raw, fallback) {
+  if (raw === undefined) return Boolean(fallback)
+  const value = String(raw).trim().toLowerCase()
+  return value === '1' || value === 'true'
+}
+
 app.get(
   '/api/live/subtitle',
   wrap(async (req, res) => {
@@ -208,7 +214,7 @@ app.get(
       resultIndex: req.query.resultIndex ?? config.resultIndex,
       episode: req.query.episode ?? 1,
       quality: req.query.quality ?? config.quality,
-      dub: req.query.dub === '1' || req.query.dub === 'true',
+      dub: resolveDubParam(req.query.dub, config.dub),
     })
     if (!stream.subtitleUrl) {
       res.status(404).json({ error: 'Subtitle not found' })
@@ -231,12 +237,13 @@ app.get(
       resultIndex: req.query.resultIndex ?? config.resultIndex,
       episode: req.query.episode ?? 1,
       quality: req.query.quality ?? config.quality,
-      dub: req.query.dub === '1' || req.query.dub === 'true',
+      dub: resolveDubParam(req.query.dub, config.dub),
     })
     playback.remux(req, res, {
       url: stream.videoUrl,
+      audioUrl: stream.audioUrl,
       referer: stream.referer,
-      hls: stream.videoUrl.includes('.m3u8'),
+      hls: Boolean(stream.hls || stream.videoUrl.includes('.m3u8') || stream.audioUrl?.includes('.m3u8')),
       realtime: true,
     })
   }),

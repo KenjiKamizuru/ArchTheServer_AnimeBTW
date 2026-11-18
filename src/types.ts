@@ -81,7 +81,9 @@ export interface ResolverStatus {
 export interface WatchResult {
   resolved: boolean
   videoUrl: string
+  audioUrl: string | null
   height: number
+  hls: boolean
   subtitleUrl: string | null
   referer: string
   title: string
