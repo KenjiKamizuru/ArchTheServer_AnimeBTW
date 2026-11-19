@@ -36,6 +36,12 @@ import {
 import { beginTwoFactorSetup, confirmTwoFactorSetup, disableTwoFactor, verifyTwoFactor } from './twoFactor.mjs'
 import { issueRecoveryCodes, recoveryCodesStatus } from './recoveryCodes.mjs'
 import { validateAvatarImage, avatarFileName, AVATAR_EXTENSIONS, AVATAR_MAX_BYTES } from './avatars.mjs'
+import {
+  normalizeProfileVisibility,
+  canViewProfile,
+  getOrCreateProfileLink,
+  rotateProfileLink,
+} from './profilePrivacy.mjs'
 import { atomicWriteFile } from './security.mjs'
 
 const EMAIL_VERIFY_TTL_MS = 24 * 60 * 60 * 1000
@@ -1196,6 +1202,58 @@ app.delete(
       if (file) await fsp.rm(path.join(AVATAR_DIR, file), { force: true })
     }
     res.json({ ok: true })
+  }),
+)
+
+// Profile privacy (AV-111): public / private / link-only visibility.
+// Non-viewable profiles answer a generic 404 (no existence oracle).
+app.put(
+  '/api/auth/profile-visibility',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user, users } = await requireSessionUser(req)
+    const parsed = normalizeProfileVisibility(req.body?.visibility)
+    if (!parsed.ok) throw Object.assign(new Error(parsed.error), { status: 400 })
+    user.profileVisibility = parsed.value
+    await kv.set('users', users)
+    res.json({ visibility: parsed.value })
+  }),
+)
+
+app.get(
+  '/api/auth/profile-link',
+  wrap(async (req, res) => {
+    const { user, users } = await requireSessionUser(req)
+    const { token } = getOrCreateProfileLink(user)
+    await kv.set('users', users)
+    res.json({ token, path: `/profile/${user.id}` })
+  }),
+)
+
+app.post(
+  '/api/auth/profile-link/rotate',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user, users } = await requireSessionUser(req)
+    const { token } = rotateProfileLink(user)
+    await kv.set('users', users)
+    res.json({ token, path: `/profile/${user.id}` })
+  }),
+)
+
+app.get(
+  '/api/profile/:userId',
+  wrap(async (req, res) => {
+    const users = (await kv.get('users', [])) ?? []
+    const user = users.find((u) => u?.id === req.params.userId)
+    const notFound = () => Object.assign(new Error('Profile not found'), { status: 404 })
+    if (!user) throw notFound()
+    const token = readCookie(req, SESSION_COOKIE)
+    const record = token ? await kv.get(`session:${hashToken(token)}`, null) : null
+    const viewerId = record && isSessionValid(record) ? record.userId : null
+    const view = canViewProfile(user, { viewerId, token: req.query.token ?? null })
+    if (!view.ok) throw notFound()
+    res.json({ user: publicUser(user), visibility: user.profileVisibility ?? 'public' })
   }),
 )
 
