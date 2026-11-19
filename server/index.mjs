@@ -44,6 +44,7 @@ import {
 } from './profilePrivacy.mjs'
 import { normalizePreferencesUpdate } from './userPreferences.mjs'
 import { normalizeShowActivity, buildActivitySummary } from './profileActivity.mjs'
+import { buildAccountExport } from './accountExport.mjs'
 import { atomicWriteFile } from './security.mjs'
 
 const EMAIL_VERIFY_TTL_MS = 24 * 60 * 60 * 1000
@@ -1232,6 +1233,32 @@ app.put(
     user.showActivity = parsed.value
     await kv.set('users', users)
     res.json({ showActivity: parsed.value })
+  }),
+)
+
+// Account data export (AV-118a): everything the account stores about its
+// owner, as a JSON download — credential material is never included (see
+// accountExport.mjs for the withheld-field list).
+app.get(
+  '/api/auth/export',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user } = await requireSessionUser(req)
+    const passkeys = await listPasskeys(user.id, { kv })
+    let activeSessions = 0
+    for (const key of await kv.list('session:', { limit: 10_000 })) {
+      const session = await kv.get(key, null)
+      if (session?.userId === user.id && isSessionValid(session)) activeSessions += 1
+    }
+    // Re-fetch the stored passkey records for metadata-only export.
+    const stored = []
+    for (const summary of passkeys) {
+      const record = await kv.get(`passkey:${summary.credentialId}`, null)
+      if (record) stored.push(record)
+    }
+    const { export: payload, excluded } = buildAccountExport(user, { passkeys: stored, activeSessions })
+    res.setHeader('Content-Disposition', `attachment; filename="animevault-account-${user.id}.json"`)
+    res.json({ ...payload, excluded })
   }),
 )
 
