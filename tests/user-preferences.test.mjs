@@ -7,8 +7,10 @@ import {
   normalizeDefaultSubtitle,
   normalizeDefaultAudio,
   normalizeDefaultQuality,
+  normalizeMaxContentRating,
   normalizePreferencesUpdate,
   PLAYBACK_QUALITIES,
+  CONTENT_RATINGS,
 } from '../server/userPreferences.mjs'
 
 test('language tags: pattern validation, normalization, empty clears', () => {
@@ -86,4 +88,22 @@ test('playback quality: closed-set allowlist', () => {
   })
   const badUpdate = normalizePreferencesUpdate({ defaultQuality: 'best' })
   assert.equal(badUpdate.ok, false)
+})
+
+test('content rating: MAL-aligned closed set, null = no limit', () => {
+  assert.deepEqual([...CONTENT_RATINGS], ['g', 'pg', 'pg-13', 'r', 'r+', 'nc-17'], 'ordering is the documented scalar')
+  for (const rating of CONTENT_RATINGS) {
+    assert.deepEqual(normalizeMaxContentRating(rating), { ok: true, value: rating })
+  }
+  assert.deepEqual(normalizeMaxContentRating(' PG-13 '), { ok: true, value: 'pg-13' }, 'case-insensitive')
+  assert.deepEqual(normalizeMaxContentRating(''), { ok: true, value: null })
+  assert.deepEqual(normalizeMaxContentRating(undefined), { ok: true, value: null })
+  for (const bad of ['pg13', 'r-17', 'm', 'tv-14', '<i>r</i>', 'everyone']) {
+    assert.equal(normalizeMaxContentRating(bad).ok, false, `should reject ${JSON.stringify(bad)}`)
+  }
+  assert.deepEqual(normalizePreferencesUpdate({ maxContentRating: 'r+' }), {
+    ok: true,
+    value: { maxContentRating: 'r+' },
+  })
+  assert.equal(normalizePreferencesUpdate({ maxContentRating: 'nc-18' }).ok, false)
 })

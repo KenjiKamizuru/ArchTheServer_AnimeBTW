@@ -13,6 +13,10 @@
 // - `defaultQuality` — preferred playback quality from a CLOSED SET
 //   ('auto', '2160p', '1080p', '720p', '576p', '480p', '360p'); unlike the
 //   language tags this IS an allowlist (quality has no "regional variants").
+// - `maxContentRating` — the highest allowed content rating, scalar over the
+//   MAL-aligned ordering g < pg < pg-13 < r < r+ < nc-17 (recorded: the
+//   common anime/broadcast vocabulary; other sources' ratings map onto it at
+//   consumption time); null = no limit.
 // Language tags are validated by pattern so valid regional variants are not
 // wrongly rejected; empty clears any field to null.
 // These are STORED DEFAULTS consumed by the player/download flows; AV-113/114
@@ -57,6 +61,15 @@ export function normalizeDefaultQuality(value) {
   return { ok: false, error: `defaultQuality must be one of: ${PLAYBACK_QUALITIES.join(', ')}` }
 }
 
+export const CONTENT_RATINGS = ['g', 'pg', 'pg-13', 'r', 'r+', 'nc-17']
+
+export function normalizeMaxContentRating(value) {
+  const clean = String(value ?? '').trim().toLowerCase()
+  if (!clean) return { ok: true, value: null }
+  if (CONTENT_RATINGS.includes(clean)) return { ok: true, value: clean }
+  return { ok: false, error: `maxContentRating must be one of: ${CONTENT_RATINGS.join(', ')}` }
+}
+
 /** Normalize a partial preference update; unknown keys are ignored. */
 export function normalizePreferencesUpdate(body) {
   const out = {}
@@ -66,6 +79,7 @@ export function normalizePreferencesUpdate(body) {
     ['defaultSubtitle', normalizeDefaultSubtitle],
     ['defaultAudio', normalizeDefaultAudio],
     ['defaultQuality', normalizeDefaultQuality],
+    ['maxContentRating', normalizeMaxContentRating],
   ]
   for (const [key, normalize] of fields) {
     if (body && typeof body === 'object' && key in body) {

@@ -103,6 +103,7 @@ function AccountsCard() {
   const [prefSubtitle, setPrefSubtitle] = useState('')
   const [prefAudio, setPrefAudio] = useState('')
   const [prefQuality, setPrefQuality] = useState('')
+  const [prefRating, setPrefRating] = useState('')
   const [prefsBusy, setPrefsBusy] = useState(false)
   const [prefsError, setPrefsError] = useState<string | null>(null)
 
@@ -155,6 +156,7 @@ function AccountsCard() {
         setPrefSubtitle(res.defaultSubtitle ?? '')
         setPrefAudio(res.defaultAudio ?? '')
         setPrefQuality(res.defaultQuality ?? '')
+        setPrefRating(res.maxContentRating ?? '')
       })
       .catch(() => {
         setPrefLanguage('')
@@ -162,6 +164,7 @@ function AccountsCard() {
         setPrefSubtitle('')
         setPrefAudio('')
         setPrefQuality('')
+        setPrefRating('')
       })
   }, [user])
 
@@ -388,12 +391,14 @@ function AccountsCard() {
         defaultSubtitle: prefSubtitle,
         defaultAudio: prefAudio,
         defaultQuality: prefQuality,
+        maxContentRating: prefRating,
       })
       setPrefLanguage(res.preferredLanguage ?? '')
       setPrefLocale(res.locale ?? '')
       setPrefSubtitle(res.defaultSubtitle ?? '')
       setPrefAudio(res.defaultAudio ?? '')
       setPrefQuality(res.defaultQuality ?? '')
+      setPrefRating(res.maxContentRating ?? '')
       toast('Preferences saved')
     } catch (err) {
       setPrefsError(err instanceof Error ? err.message : 'Could not save preferences')
@@ -691,6 +696,19 @@ function AccountsCard() {
                   <option value="576p">Quality: 576p</option>
                   <option value="480p">Quality: 480p</option>
                   <option value="360p">Quality: 360p</option>
+                </select>
+                <select
+                  value={prefRating}
+                  onChange={(event) => setPrefRating(event.target.value)}
+                  className="rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white ring-1 ring-white/10 outline-none focus:ring-accent/60"
+                >
+                  <option value="">Rating limit: none</option>
+                  <option value="g">Up to G</option>
+                  <option value="pg">Up to PG</option>
+                  <option value="pg-13">Up to PG-13</option>
+                  <option value="r">Up to R</option>
+                  <option value="r+">Up to R+</option>
+                  <option value="nc-17">Up to NC-17</option>
                 </select>
                 <button
                   type="button"

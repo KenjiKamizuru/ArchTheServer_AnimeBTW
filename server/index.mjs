@@ -1267,6 +1267,7 @@ const preferencesView = (user) => ({
   defaultSubtitle: user.defaultSubtitle ?? null,
   defaultAudio: user.defaultAudio ?? null,
   defaultQuality: user.defaultQuality ?? null,
+  maxContentRating: user.maxContentRating ?? null,
 })
 
 app.get(

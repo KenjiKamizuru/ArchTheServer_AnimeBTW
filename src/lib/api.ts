@@ -541,11 +541,11 @@ export const api = {
   },
 
   preferences() {
-    return get<{ preferredLanguage: string | null; locale: string | null; defaultSubtitle: string | null; defaultAudio: string | null; defaultQuality: string | null }>('/api/auth/preferences', false)
+    return get<{ preferredLanguage: string | null; locale: string | null; defaultSubtitle: string | null; defaultAudio: string | null; defaultQuality: string | null; maxContentRating: string | null }>('/api/auth/preferences', false)
   },
 
-  updatePreferences(body: { preferredLanguage?: string | null; locale?: string | null; defaultSubtitle?: string | null; defaultAudio?: string | null; defaultQuality?: string | null }) {
-    return send<{ preferredLanguage: string | null; locale: string | null; defaultSubtitle: string | null; defaultAudio: string | null; defaultQuality: string | null }>('/api/auth/preferences', 'PUT', body)
+  updatePreferences(body: { preferredLanguage?: string | null; locale?: string | null; defaultSubtitle?: string | null; defaultAudio?: string | null; defaultQuality?: string | null; maxContentRating?: string | null }) {
+    return send<{ preferredLanguage: string | null; locale: string | null; defaultSubtitle: string | null; defaultAudio: string | null; defaultQuality: string | null; maxContentRating: string | null }>('/api/auth/preferences', 'PUT', body)
   },
 
   resolverStatus() {
