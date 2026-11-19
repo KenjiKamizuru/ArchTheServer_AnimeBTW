@@ -43,6 +43,7 @@ import {
   rotateProfileLink,
 } from './profilePrivacy.mjs'
 import { normalizePreferencesUpdate } from './userPreferences.mjs'
+import { normalizeBetaOptInsUpdate, setBetaOptIns, betaOptInsView } from './featureFlags.mjs'
 import { normalizeShowActivity, buildActivitySummary } from './profileActivity.mjs'
 import { buildAccountExport } from './accountExport.mjs'
 import { validateDeletionConfirmation, DELETION_ARTIFACTS } from './accountDeletion.mjs'
@@ -1600,6 +1601,28 @@ app.put(
     Object.assign(user, parsed.value)
     await kv.set('users', users)
     res.json(preferencesView(user))
+  }),
+)
+
+// Account-level feature flags / beta opt-ins (AV-125a): stored, owner-edited.
+app.get(
+  '/api/auth/features',
+  wrap(async (req, res) => {
+    const { user } = await requireSessionUser(req)
+    res.json(betaOptInsView(user))
+  }),
+)
+
+app.put(
+  '/api/auth/features/betas',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user, users } = await requireSessionUser(req)
+    const parsed = normalizeBetaOptInsUpdate(req.body)
+    if (!parsed.ok) throw Object.assign(new Error(parsed.error), { status: 400 })
+    setBetaOptIns(user, parsed.value)
+    await kv.set('users', users)
+    res.json(betaOptInsView(user))
   }),
 )
 
