@@ -1729,6 +1729,11 @@ app.put('/api/lists/:id/order', limitMutations, wrap(async (req, res) => {
   const list = await listStore.setOrder(req.params.id, req.body?.mediaIds)
   res.json({ ...list, entries: sortListEntries(list.entries, 'order', list.order), sort: 'order' })
 }))
+
+// Bulk move between custom lists (AV-134).
+app.post('/api/lists/:id/move', limitMutations, wrap(async (req, res) => {
+  res.json(await listStore.moveEntries(req.params.id, req.body?.to, req.body?.mediaIds))
+}))
 app.delete('/api/lists/:id', limitMutations, wrap(async (req, res) => {
   res.json(await listStore.deleteList(req.params.id))
 }))

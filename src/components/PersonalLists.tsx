@@ -53,6 +53,9 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
   const [pick, setPick] = useState<Entry | null>(null)
   const [dragFrom, setDragFrom] = useState<number | null>(null)
   const [dropAt, setDropAt] = useState<number | null>(null)
+  const [selectMode, setSelectMode] = useState(false)
+  const [selected, setSelected] = useState<Set<number>>(() => new Set())
+  const [moveTarget, setMoveTarget] = useState('')
   useEffect(() => {
     let cancelled = false
     setList(null)
@@ -77,6 +80,18 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
     ids.splice(to, 0, moved)
     await perform(async () => {
       await request(`/api/lists/${encodeURIComponent(active)}/order`, 'PUT', { mediaIds: ids })
+    })
+  }
+  // Bulk move (AV-134): one round-trip per move, memberships and per-list
+  // notes/ratings travel together (server-side transfer).
+  async function moveSelected() {
+    if (!moveTarget || selected.size === 0) return
+    const ids = [...selected]
+    setSelected(new Set())
+    setSelectMode(false)
+    await perform(async () => {
+      const result = await request<{ moved: number }>(`/api/lists/${encodeURIComponent(active)}/move`, 'POST', { to: moveTarget, mediaIds: ids })
+      setMessage(`Moved ${result.moved} entr${result.moved === 1 ? 'y' : 'ies'}.`)
     })
   }
   const button = 'rounded-lg bg-white/10 px-3 py-2 text-xs text-white hover:bg-white/20 disabled:opacity-50'
@@ -174,6 +189,24 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
               setTimeout(() => URL.revokeObjectURL(url), 1000)
             })}>Export {format.toUpperCase()}</button>)}
           </div>
+          {list.custom && <button type="button" className={button} disabled={busy || list.count === 0} onClick={() => {
+            setSelectMode((value) => !value)
+            setSelected(new Set())
+          }}>{selectMode ? 'Exit select' : 'Select'}</button>}
+          {selectMode ? (
+            <>
+              <label className="sr-only" htmlFor="move-target">Move selected entries to list</label>
+              <select id="move-target" className={input} value={moveTarget} onChange={(event) => setMoveTarget(event.target.value)}>
+                <option value="">Move to…</option>
+                {(overview?.lists ?? []).filter((item) => item.id !== active).map((item) => (
+                  <option key={item.id} value={item.id}>{item.name}</option>
+                ))}
+              </select>
+              <button type="button" className={button} disabled={busy || !moveTarget || selected.size === 0} onClick={() => void moveSelected()}>
+                Move {selected.size > 0 ? `${selected.size} selected` : 'selected'}
+              </button>
+            </>
+          ) : null}
           {list.custom && <button type="button" className={button} disabled={busy} onClick={() => {
             if (window.confirm(`Delete list “${list.name}”? Titles with a status will remain in their status lists.`)) void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}`, 'DELETE'); setActive('status:planned') })
           }}>Delete list</button>}
@@ -209,6 +242,20 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
             }}
             className={`flex flex-wrap items-center gap-2 py-2 ${dropAt === index && dragFrom !== null && dragFrom !== index ? 'ring-1 ring-accent/60' : ''}`}
           >
+            {selectMode ? (
+              <input
+                type="checkbox"
+                aria-label={`Select ${entry.media.title}`}
+                checked={selected.has(entry.mediaId)}
+                onChange={() => setSelected((prev) => {
+                  const next = new Set(prev)
+                  if (next.has(entry.mediaId)) next.delete(entry.mediaId)
+                  else next.add(entry.mediaId)
+                  return next
+                })}
+                className="shrink-0"
+              />
+            ) : null}
             {list.custom && sort === 'order' && !busy ? (
               <span
                 draggable

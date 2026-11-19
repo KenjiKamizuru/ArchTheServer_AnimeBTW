@@ -170,6 +170,45 @@ export async function setOrder(id, rawIds) {
   return readList(id)
 }
 
+/** Bulk-move entries between two CUSTOM lists (AV-134). Per-list notes and
+ * ratings travel with the membership (source context wins only where the
+ * target has none of its own); statuses are never touched. */
+export async function moveEntries(fromId, toId, rawIds) {
+  const from = info(fromId)
+  const to = info(toId)
+  if (!from.custom || !to.custom) throw error('Entries move between custom lists only')
+  if (fromId === toId) throw error('Choose two different lists')
+  if (!Array.isArray(rawIds) || rawIds.length === 0) throw error('mediaIds must be a non-empty array of media ids')
+  if (rawIds.length > 500) throw error('Move at most 500 entries at a time')
+  const ids = rawIds.map((value) => Number(value))
+  if (ids.some((value) => !Number.isInteger(value) || value <= 0)) throw error('Invalid media id')
+  if (new Set(ids).size !== ids.length) throw error('Duplicate media id')
+  const moving = state.entries.filter((item) => ids.includes(item.mediaId))
+  if (moving.length !== ids.length || moving.some((entry) => !includes(entry, fromId))) {
+    throw error('Every entry must belong to the source list')
+  }
+  for (const entry of moving) {
+    entry.listIds = entry.listIds.filter((item) => item !== fromId)
+    if (!entry.listIds.includes(toId)) entry.listIds.push(toId)
+    // Transfer per-list context; the target's own context, if any, wins.
+    for (const key of ['notes', 'ratings']) {
+      if (!entry[key]) continue
+      const carried = entry[key].find((item) => item.listId === fromId)
+      entry[key] = entry[key].filter((item) => item.listId !== fromId)
+      if (carried && !entry[key].some((item) => item.listId === toId)) {
+        entry[key].push({ ...carried, listId: toId })
+      }
+    }
+    // Keep the manual order arrays consistent.
+    const fromRecord = state.lists.find((item) => item.id === fromId)
+    const toRecord = state.lists.find((item) => item.id === toId)
+    if (fromRecord) fromRecord.order = fromRecord.order.filter((item) => item !== entry.mediaId)
+    if (toRecord && !toRecord.order.includes(entry.mediaId)) toRecord.order.push(entry.mediaId)
+  }
+  await persist()
+  return { moved: moving.length }
+}
+
 export async function setNote(id, rawId, text) {
   info(id)
   const mediaId = Number(rawId)
