@@ -90,14 +90,21 @@ export function normalizeTitleKey(title) {
     .replace(/[^a-z0-9\u3040-\u30ff\u3400-\u9fff]+/g, '')
 }
 
-/** All alias keys of an entry: title variants + synonyms + native + romaji. */
+/** All alias keys of an entry: title variants + synonyms + native + romaji.
+ * Accepts both the flat provider shape and the unified model's `titles{}`. */
 export function titleAliasKeys(entry = {}) {
+  const nested = entry.titles && !Array.isArray(entry.titles) ? entry.titles : {}
   const names = [
     entry.title,
     entry.romaji,
     entry.english,
     entry.native,
+    nested.canonical,
+    nested.english,
+    nested.romaji,
+    nested.native,
     ...(Array.isArray(entry.synonyms) ? entry.synonyms : []),
+    ...(Array.isArray(nested.alternatives) ? nested.alternatives : []),
     ...(Array.isArray(entry.titles) ? entry.titles : []),
   ]
   const keys = new Set()
