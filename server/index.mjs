@@ -1268,6 +1268,8 @@ const preferencesView = (user) => ({
   defaultAudio: user.defaultAudio ?? null,
   defaultQuality: user.defaultQuality ?? null,
   maxContentRating: user.maxContentRating ?? null,
+  theme: user.theme ?? null,
+  preferLocalPlayback: user.preferLocalPlayback ?? null,
 })
 
 app.get(

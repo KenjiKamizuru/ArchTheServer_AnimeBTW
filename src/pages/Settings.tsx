@@ -104,6 +104,8 @@ function AccountsCard() {
   const [prefAudio, setPrefAudio] = useState('')
   const [prefQuality, setPrefQuality] = useState('')
   const [prefRating, setPrefRating] = useState('')
+  const [prefTheme, setPrefTheme] = useState('')
+  const [prefLocalPlayback, setPrefLocalPlayback] = useState('')
   const [prefsBusy, setPrefsBusy] = useState(false)
   const [prefsError, setPrefsError] = useState<string | null>(null)
 
@@ -157,6 +159,8 @@ function AccountsCard() {
         setPrefAudio(res.defaultAudio ?? '')
         setPrefQuality(res.defaultQuality ?? '')
         setPrefRating(res.maxContentRating ?? '')
+        setPrefTheme(res.theme ?? '')
+        setPrefLocalPlayback(res.preferLocalPlayback == null ? '' : String(res.preferLocalPlayback))
       })
       .catch(() => {
         setPrefLanguage('')
@@ -165,6 +169,8 @@ function AccountsCard() {
         setPrefAudio('')
         setPrefQuality('')
         setPrefRating('')
+        setPrefTheme('')
+        setPrefLocalPlayback('')
       })
   }, [user])
 
@@ -392,6 +398,8 @@ function AccountsCard() {
         defaultAudio: prefAudio,
         defaultQuality: prefQuality,
         maxContentRating: prefRating,
+        theme: prefTheme,
+        preferLocalPlayback: prefLocalPlayback === '' ? null : prefLocalPlayback === 'true',
       })
       setPrefLanguage(res.preferredLanguage ?? '')
       setPrefLocale(res.locale ?? '')
@@ -399,6 +407,8 @@ function AccountsCard() {
       setPrefAudio(res.defaultAudio ?? '')
       setPrefQuality(res.defaultQuality ?? '')
       setPrefRating(res.maxContentRating ?? '')
+      setPrefTheme(res.theme ?? '')
+      setPrefLocalPlayback(res.preferLocalPlayback == null ? '' : String(res.preferLocalPlayback))
       toast('Preferences saved')
     } catch (err) {
       setPrefsError(err instanceof Error ? err.message : 'Could not save preferences')
@@ -709,6 +719,25 @@ function AccountsCard() {
                   <option value="r">Up to R</option>
                   <option value="r+">Up to R+</option>
                   <option value="nc-17">Up to NC-17</option>
+                </select>
+                <select
+                  value={prefTheme}
+                  onChange={(event) => setPrefTheme(event.target.value)}
+                  className="rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white ring-1 ring-white/10 outline-none focus:ring-accent/60"
+                >
+                  <option value="">Theme: app default</option>
+                  <option value="dark">Theme: dark</option>
+                  <option value="light">Theme: light</option>
+                  <option value="system">Theme: follow system</option>
+                </select>
+                <select
+                  value={prefLocalPlayback}
+                  onChange={(event) => setPrefLocalPlayback(event.target.value)}
+                  className="rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white ring-1 ring-white/10 outline-none focus:ring-accent/60"
+                >
+                  <option value="">Playback: app default</option>
+                  <option value="true">Playback: prefer local files</option>
+                  <option value="false">Playback: prefer streaming</option>
                 </select>
                 <button
                   type="button"

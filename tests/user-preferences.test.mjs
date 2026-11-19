@@ -8,9 +8,12 @@ import {
   normalizeDefaultAudio,
   normalizeDefaultQuality,
   normalizeMaxContentRating,
+  normalizeTheme,
+  normalizePreferLocalPlayback,
   normalizePreferencesUpdate,
   PLAYBACK_QUALITIES,
   CONTENT_RATINGS,
+  THEMES,
 } from '../server/userPreferences.mjs'
 
 test('language tags: pattern validation, normalization, empty clears', () => {
@@ -106,4 +109,28 @@ test('content rating: MAL-aligned closed set, null = no limit', () => {
     value: { maxContentRating: 'r+' },
   })
   assert.equal(normalizePreferencesUpdate({ maxContentRating: 'nc-18' }).ok, false)
+})
+
+test('theme & interface overrides: closed sets, null follows global', () => {
+  assert.deepEqual([...THEMES], ['dark', 'light', 'system'])
+  for (const theme of THEMES) {
+    assert.deepEqual(normalizeTheme(theme), { ok: true, value: theme })
+  }
+  assert.deepEqual(normalizeTheme(' LIGHT '), { ok: true, value: 'light' })
+  assert.deepEqual(normalizeTheme(''), { ok: true, value: null })
+  for (const bad of ['sepia', 'dark;', '<b>dark</b>', 'auto']) {
+    assert.equal(normalizeTheme(bad).ok, false, `should reject ${JSON.stringify(bad)}`)
+  }
+  assert.deepEqual(normalizePreferLocalPlayback(true), { ok: true, value: true })
+  assert.deepEqual(normalizePreferLocalPlayback(false), { ok: true, value: false })
+  assert.deepEqual(normalizePreferLocalPlayback(null), { ok: true, value: null })
+  assert.deepEqual(normalizePreferLocalPlayback(''), { ok: true, value: null })
+  for (const bad of ['yes', 'true', 1, 0, 'no']) {
+    assert.equal(normalizePreferLocalPlayback(bad).ok, false, `should reject ${JSON.stringify(bad)}`)
+  }
+  assert.deepEqual(normalizePreferencesUpdate({ theme: 'system', preferLocalPlayback: false }), {
+    ok: true,
+    value: { theme: 'system', preferLocalPlayback: false },
+  })
+  assert.equal(normalizePreferencesUpdate({ theme: 'neon' }).ok, false)
 })

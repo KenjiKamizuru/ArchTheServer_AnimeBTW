@@ -1,5 +1,6 @@
-// Per-user language & locale preferences (AV-112) and playback defaults
-// (AV-113). Pure; no I/O.
+// Per-user language & locale preferences (AV-112), playback defaults
+// (AV-113/114), content-rating limit (AV-115), and theme/interface overrides
+// (AV-116). Pure; no I/O.
 //
 // Scope decisions (recorded per task rules):
 // - `preferredLanguage` — the user's preferred content/UI language (BCP-47
@@ -17,6 +18,12 @@
 //   MAL-aligned ordering g < pg < pg-13 < r < r+ < nc-17 (recorded: the
 //   common anime/broadcast vocabulary; other sources' ratings map onto it at
 //   consumption time); null = no limit.
+// - `theme` — 'dark' | 'light' | 'system'; null = follow the global app
+//   setting (AppSettings.theme/systemTheme). Recorded: 'system' collapses to
+//   the global `systemTheme: true` at consumption time.
+// - `preferLocalPlayback` — boolean | null = follow the global
+//   (AppSettings.preferLocalPlayback). These mirror real AppSettings fields
+//   as PER-USER OVERRIDES (signed-in user's value wins at consumption time).
 // Language tags are validated by pattern so valid regional variants are not
 // wrongly rejected; empty clears any field to null.
 // These are STORED DEFAULTS consumed by the player/download flows; AV-113/114
@@ -70,6 +77,21 @@ export function normalizeMaxContentRating(value) {
   return { ok: false, error: `maxContentRating must be one of: ${CONTENT_RATINGS.join(', ')}` }
 }
 
+export const THEMES = ['dark', 'light', 'system']
+
+export function normalizeTheme(value) {
+  const clean = String(value ?? '').trim().toLowerCase()
+  if (!clean) return { ok: true, value: null }
+  if (THEMES.includes(clean)) return { ok: true, value: clean }
+  return { ok: false, error: `theme must be one of: ${THEMES.join(', ')}` }
+}
+
+export function normalizePreferLocalPlayback(value) {
+  if (value === null || value === undefined || value === '') return { ok: true, value: null }
+  if (value === true || value === false) return { ok: true, value }
+  return { ok: false, error: 'preferLocalPlayback must be true or false' }
+}
+
 /** Normalize a partial preference update; unknown keys are ignored. */
 export function normalizePreferencesUpdate(body) {
   const out = {}
@@ -80,6 +102,8 @@ export function normalizePreferencesUpdate(body) {
     ['defaultAudio', normalizeDefaultAudio],
     ['defaultQuality', normalizeDefaultQuality],
     ['maxContentRating', normalizeMaxContentRating],
+    ['theme', normalizeTheme],
+    ['preferLocalPlayback', normalizePreferLocalPlayback],
   ]
   for (const [key, normalize] of fields) {
     if (body && typeof body === 'object' && key in body) {
