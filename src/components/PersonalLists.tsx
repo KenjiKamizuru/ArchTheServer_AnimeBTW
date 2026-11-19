@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { GripVertical } from 'lucide-react'
 import type { Media } from '../types'
 
 type ListSummary = { id: string; name: string; count: number; description?: string }
@@ -48,6 +49,8 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
   const [busy, setBusy] = useState(false)
   const [revision, setRevision] = useState(0)
   const [pick, setPick] = useState<Entry | null>(null)
+  const [dragFrom, setDragFrom] = useState<number | null>(null)
+  const [dropAt, setDropAt] = useState<number | null>(null)
   useEffect(() => {
     let cancelled = false
     setList(null)
@@ -62,6 +65,17 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
     try { await action(); setRevision((value) => value + 1) }
     catch (err) { setError(err instanceof Error ? err.message : 'Could not update lists') }
     finally { setBusy(false) }
+  }
+  // Drag-and-drop ordering (AV-128b): persist the FULL permutation via the
+  // order API; the revision bump re-reads the list in 'order' sort.
+  async function reorder(from: number, to: number) {
+    if (!list || from === to) return
+    const ids = list.entries.map((entry) => entry.mediaId)
+    const [moved] = ids.splice(from, 1)
+    ids.splice(to, 0, moved)
+    await perform(async () => {
+      await request(`/api/lists/${encodeURIComponent(active)}/order`, 'PUT', { mediaIds: ids })
+    })
   }
   const button = 'rounded-lg bg-white/10 px-3 py-2 text-xs text-white hover:bg-white/20 disabled:opacity-50'
   const input = 'rounded-lg bg-ink-900 px-3 py-2 text-sm text-white ring-1 ring-white/10'
@@ -149,6 +163,7 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
             <option value="title">Title</option>
             <option value="score">Highest score</option>
             <option value="year">Newest season</option>
+            <option value="order">Custom order</option>
           </select>
         </div>
         {pick && <p role="status" className="mt-3 text-sm text-white/70">Try <Link className="text-white underline" to={`/anime/${pick.mediaId}`}>{pick.media.title}</Link></p>}
@@ -161,7 +176,28 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
           <button className={button} disabled={busy || !bookmarkId}>Add to list</button>
         </form>
         {list.entries.length === 0 ? <p className="mt-3 text-sm text-white/50">No titles in this list yet.</p> : <ul className="mt-3 divide-y divide-white/10">
-          {list.entries.map((entry) => <li key={entry.mediaId} className="flex flex-wrap items-center gap-2 py-2">
+          {list.entries.map((entry, index) => <li
+            key={entry.mediaId}
+            onDragOver={(event) => { if (dragFrom !== null && dragFrom !== index) { event.preventDefault(); setDropAt(index) } }}
+            onDrop={(event) => {
+              event.preventDefault()
+              if (dragFrom !== null && dragFrom !== index) void reorder(dragFrom, index)
+              setDragFrom(null); setDropAt(null)
+            }}
+            className={`flex flex-wrap items-center gap-2 py-2 ${dropAt === index && dragFrom !== null && dragFrom !== index ? 'ring-1 ring-accent/60' : ''}`}
+          >
+            {list.custom && sort === 'order' && !busy ? (
+              <span
+                draggable
+                onDragStart={() => setDragFrom(index)}
+                onDragEnd={() => { setDragFrom(null); setDropAt(null) }}
+                title="Drag to reorder"
+                aria-hidden
+                className="cursor-grab select-none text-white/40"
+              >
+                <GripVertical size={14} />
+              </span>
+            ) : null}
             <Link className="min-w-0 flex-1 text-sm text-white hover:underline" to={`/anime/${entry.mediaId}`}>{entry.media.title}</Link>
             <label className="sr-only" htmlFor={`status-${entry.mediaId}`}>Status for {entry.media.title}</label>
             <select id={`status-${entry.mediaId}`} className={input} disabled={busy} value={entry.status ?? ''} onChange={(e) => {
