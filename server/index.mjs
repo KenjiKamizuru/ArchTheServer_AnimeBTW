@@ -3,6 +3,7 @@ import express from 'express'
 import path from 'node:path'
 import { brotliCompressSync, constants as zlibConstants, gzipSync } from 'node:zlib'
 import { existsSync, lstatSync, createReadStream, readFileSync } from 'node:fs'
+import fsp from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import * as anilist from './anilist.mjs'
 import * as inspectView from './inspect.mjs'
@@ -34,6 +35,8 @@ import {
 } from './passkeyAuth.mjs'
 import { beginTwoFactorSetup, confirmTwoFactorSetup, disableTwoFactor, verifyTwoFactor } from './twoFactor.mjs'
 import { issueRecoveryCodes, recoveryCodesStatus } from './recoveryCodes.mjs'
+import { validateAvatarImage, avatarFileName, AVATAR_EXTENSIONS, AVATAR_MAX_BYTES } from './avatars.mjs'
+import { atomicWriteFile } from './security.mjs'
 
 const EMAIL_VERIFY_TTL_MS = 24 * 60 * 60 * 1000
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000
@@ -211,7 +214,8 @@ app.use((req, res, next) => {
   if (
     req.path === '/api/library/import' ||
     /^\/api\/library\/uploads\/[^/]+(\/chunk)?$/.test(req.path) ||
-    (req.method === 'POST' && /^\/api\/library\/[^/]+\/subtitle$/.test(req.path))
+    (req.method === 'POST' && /^\/api\/library\/[^/]+\/subtitle$/.test(req.path)) ||
+    (req.method === 'POST' && req.path === '/api/auth/avatar')
   ) {
     return next()
   }
@@ -1117,6 +1121,81 @@ app.post(
     const codes = issueRecoveryCodes(user)
     await kv.set('users', users)
     res.json({ codes })
+  }),
+)
+
+// Profile avatars (AV-108): header-sniffed images only (PNG/JPEG/GIF,
+// ≤512 KB, ≤4096px — see avatars.mjs), stored on disk under data/avatars/
+// (the kv store caps values at 64 KB). Served back only as their sniffed
+// image Content-Type. The Content-Type a client sends is ignored.
+const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const AVATAR_DIR = process.env.ANIMEVAULT_DATA
+  ? path.resolve(process.env.ANIMEVAULT_DATA, 'avatars')
+  : path.join(ROOT_DIR, 'data', 'avatars')
+
+async function readBodyCapped(req, maxBytes) {
+  const chunks = []
+  let total = 0
+  for await (const chunk of req) {
+    total += chunk.length
+    if (total > maxBytes) {
+      throw Object.assign(new Error('The image is larger than 512 KB'), { status: 413 })
+    }
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks)
+}
+
+async function findAvatarFile(userId) {
+  for (const ext of AVATAR_EXTENSIONS) {
+    const file = avatarFileName(userId, ext)
+    if (!file) continue
+    const full = path.join(AVATAR_DIR, file)
+    if (existsSync(full)) return { full, ext }
+  }
+  return null
+}
+
+app.post(
+  '/api/auth/avatar',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user } = await requireSessionUser(req)
+    const bytes = await readBodyCapped(req, AVATAR_MAX_BYTES)
+    const result = validateAvatarImage(bytes)
+    if (!result.ok) throw Object.assign(new Error(result.error), { status: 400 })
+    await fsp.mkdir(AVATAR_DIR, { recursive: true })
+    const target = avatarFileName(user.id, result.ext)
+    for (const ext of AVATAR_EXTENSIONS) {
+      const stale = avatarFileName(user.id, ext)
+      if (stale && stale !== target) await fsp.rm(path.join(AVATAR_DIR, stale), { force: true })
+    }
+    await atomicWriteFile(path.join(AVATAR_DIR, target), bytes)
+    res.json({ ok: true, mime: result.mime, width: result.width, height: result.height })
+  }),
+)
+
+app.get(
+  '/api/auth/avatar/:userId',
+  wrap(async (req, res) => {
+    const found = await findAvatarFile(req.params.userId)
+    if (!found) throw Object.assign(new Error('Avatar not found'), { status: 404 })
+    res.setHeader('Content-Type', found.ext === 'png' ? 'image/png' : found.ext === 'jpg' ? 'image/jpeg' : 'image/gif')
+    res.setHeader('Cache-Control', 'public, max-age=3600')
+    res.sendFile(found.full)
+  }),
+)
+
+app.delete(
+  '/api/auth/avatar',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user } = await requireSessionUser(req)
+    for (const ext of AVATAR_EXTENSIONS) {
+      const file = avatarFileName(user.id, ext)
+      if (file) await fsp.rm(path.join(AVATAR_DIR, file), { force: true })
+    }
+    res.json({ ok: true })
   }),
 )
 
