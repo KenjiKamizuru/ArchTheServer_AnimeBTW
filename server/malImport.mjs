@@ -59,7 +59,17 @@ export function parseMalExport(document) {
     const note = normalizeMalNote(raw?.tags, raw?.comments)
     if (typeof raw?.tags === 'string' && raw.tags.length > 1000) return invalid('tags must be at most 1000 characters')
     if (typeof raw?.comments === 'string' && raw.comments.length > 1000) return invalid('comments must be at most 1000 characters')
-    entries.push({ malId, title, status, rating: score === 0 ? null : score, note })
+    // AV-173: the watched count drives progress import. Additive fields —
+    // existing consumers ignore them. Missing = 0 (planned entries).
+    const rawWatched = raw?.watched_episodes ?? 0
+    const watchedEpisodes = Number(rawWatched)
+    if (!Number.isInteger(watchedEpisodes) || watchedEpisodes < 0) return invalid('watched_episodes must be a non-negative integer')
+    const rawTotal = raw?.episodes ?? null
+    const episodesTotal = rawTotal === null || rawTotal === undefined ? null : Number(rawTotal)
+    if (episodesTotal !== null && (!Number.isInteger(episodesTotal) || episodesTotal < 0)) {
+      return invalid('episodes must be a non-negative integer')
+    }
+    entries.push({ malId, title, status, rating: score === 0 ? null : score, note, watchedEpisodes, episodesTotal })
   }
   return { ok: true, value: { entries } }
 }

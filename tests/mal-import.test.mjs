@@ -24,7 +24,7 @@ test('parses an official-shape export and maps fields (AV-142a)', () => {
   const parsed = parseMalExport([malEntry()])
   assert.equal(parsed.ok, true)
   assert.deepEqual(parsed.value.entries, [
-    { malId: 31646, title: '3-gatsu no Lion', status: 'completed', rating: 9, note: 'Slice of Life\na masterpiece' },
+    { malId: 31646, title: '3-gatsu no Lion', status: 'completed', rating: 9, note: 'Slice of Life\na masterpiece', watchedEpisodes: 22, episodesTotal: 22 },
   ])
 })
 test('status mapping covers the five MAL statuses', () => {
