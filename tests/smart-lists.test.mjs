@@ -177,3 +177,67 @@ test('malformed edges and records never break the scan', () => {
   assert.deepEqual(rows[0].upcoming.map((item) => item.id), [50], 'self-edges, bad ids and missing records are ignored')
   assert.equal(returningSoon([], null, null, { now: JUNE_2026 }).length, 0, 'sparse inputs are safe')
 })
+
+// ── New episodes available (AV-137) ────────────────────────────────────
+import { newEpisodesAvailable } from '../server/smartLists.mjs'
+
+const progress = (mediaId, episode, season = 's1') => ({ mediaId, season, episode, positionSeconds: 10, updatedAt: JUNE_2026 })
+const aired = (id, airedEpisodes) => ({ id, airedEpisodes })
+
+test('a started show with aired episodes past its marker is listed (AV-137)', () => {
+  const rows = newEpisodesAvailable([entry(1, 'watching')], [progress(1, 8)], new Map([[1, aired(1, 12)]]))
+  assert.equal(rows.length, 1)
+  assert.deepEqual(rows[0], {
+    mediaId: 1,
+    media: { id: 1, title: 'Show 1', cover: null },
+    status: 'watching',
+    addedAt: NOW - 30 * DAY,
+    airedEpisodes: 12,
+    watchedThrough: 8,
+    newCount: 4,
+  })
+})
+test('watching and paused qualify; planned, completed, dropped and unknown do not', () => {
+  const entries = [entry(1, 'watching'), entry(2, 'paused'), entry(3, 'planned'), entry(4, 'completed'), entry(5, 'dropped'), entry(6, 'weird')]
+  const records = new Map([1, 2, 3, 4, 5, 6].map((id) => [id, aired(id, 10)]))
+  const rows = newEpisodesAvailable(entries, [1, 2, 3, 4, 5, 6].map((id) => progress(id, 1)), records)
+  assert.deepEqual(rows.map((row) => row.mediaId), [1, 2], 'only started-but-unfinished statuses')
+})
+test('entries without recorded progress are excluded as uncertain', () => {
+  const rows = newEpisodesAvailable([entry(1, 'watching')], [], new Map([[1, aired(1, 12)]]))
+  assert.equal(rows.length, 0, 'pre-AV-151 viewing is unrecorded — how far along is unknown')
+})
+test('caught up (or ahead of airing) means no new episodes', () => {
+  const records = new Map([[1, aired(1, 12)], [2, aired(2, 12)]])
+  assert.equal(newEpisodesAvailable([entry(1, 'watching')], [progress(1, 12)], records).length, 0, 'aired == marker')
+  assert.equal(newEpisodesAvailable([entry(2, 'watching')], [progress(2, 15)], records).length, 0, 'marker past airing')
+  assert.equal(newEpisodesAvailable([entry(1, 'watching')], [progress(1, 11)], records).length, 1, 'one behind counts')
+})
+test('the marker is the max episode across all seasons and episodes', () => {
+  const rows = newEpisodesAvailable([entry(1, 'watching')], [progress(1, 3, 's1'), progress(1, 9, 's2'), progress(1, 5, 's1')], new Map([[1, aired(1, 12)]]))
+  assert.equal(rows[0].watchedThrough, 9, 'the highest marker wins regardless of season key')
+  assert.equal(rows[0].newCount, 3)
+})
+test('airedEpisodes must be a valid positive integer', () => {
+  for (const bad of [null, undefined, 0, -3, 2.5, 'x']) {
+    const rows = newEpisodesAvailable([entry(1, 'watching')], [progress(1, 1)], new Map([[1, aired(1, bad)]]))
+    assert.equal(rows.length, 0, `airedEpisodes=${String(bad)} never lists`)
+  }
+})
+test('malformed progress rows are ignored; rows are deduped and sorted', () => {
+  const entries = [entry(1, 'watching'), entry(1, 'paused'), entry(2, 'watching'), entry(3, 'watching'), { mediaId: 4, status: 'watching' }, entry(-5, 'watching')]
+  const progressRows = [
+    null,
+    { mediaId: 'x', episode: 4 },
+    { mediaId: 1, episode: 0 },
+    { mediaId: 1, episode: 'q' },
+    progress(1, 2),
+    progress(1, 7),
+    progress(2, 1),
+    progress(3, 1),
+  ]
+  const records = new Map([[1, aired(1, 10)], [2, aired(2, 10)], [3, aired(3, 8)]])
+  const rows = newEpisodesAvailable(entries, progressRows, records)
+  assert.deepEqual(rows.map((row) => [row.mediaId, row.newCount]), [[2, 9], [3, 7], [1, 3]], 'sorted by most new first (2 with 9, then 3 with 7, then 1 with 3)')
+  assert.equal(newEpisodesAvailable([], null, null).length, 0, 'sparse inputs are safe')
+})

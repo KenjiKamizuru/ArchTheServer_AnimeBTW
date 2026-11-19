@@ -144,3 +144,53 @@ export function returningSoon(entries, edgesByMedia, recordsById, { now = Date.n
   rows.sort((a, b) => seasonKey(a.upcoming[0]) - seasonKey(b.upcoming[0]) || String(a.media?.title ?? '').localeCompare(String(b.media?.title ?? '')) || a.mediaId - b.mediaId)
   return rows
 }
+
+// ── New episodes available (AV-137) ────────────────────────────────────
+// "Anime with new episodes available" = started-but-unfinished entries
+// (watching/paused — same set as stalled shows; planned is "not started",
+// completed/dropped are done or abandoned) whose episodes have AIRED past
+// the viewer's recorded marker. Scope decisions recorded: the marker is the
+// MAX episode number across the media's progress records (any season —
+// per-season numbering is AV-171/172 work and can skew multi-season
+// trackers; intentionally conservative), and entries with NO progress
+// records are EXCLUDED (pre-AV-151 viewing is unrecorded, so "how far
+// along" is unknown — mark uncertain, never guess). `airedEpisodes` must be
+// a valid positive integer. Pure: airing data and progress are injected.
+
+/** Rows: `[{ mediaId, media, status, addedAt, airedEpisodes, watchedThrough, newCount }]`
+ * sorted by most new episodes first, then title, then id. */
+export function newEpisodesAvailable(entries, progress, recordsById) {
+  const markerByMedia = new Map()
+  for (const record of Array.isArray(progress) ? progress : []) {
+    const mediaId = Number(record?.mediaId)
+    const episode = Number(record?.episode)
+    if (!Number.isSafeInteger(mediaId) || mediaId <= 0 || !Number.isInteger(episode) || episode <= 0) continue
+    const marker = markerByMedia.get(mediaId)
+    if (marker === undefined || episode > marker) markerByMedia.set(mediaId, episode)
+  }
+  const rows = []
+  const seen = new Set()
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const mediaId = Number(entry?.mediaId)
+    if (!Number.isSafeInteger(mediaId) || mediaId <= 0 || seen.has(mediaId) || !entry?.media) continue
+    seen.add(mediaId)
+    if (entry.status !== 'watching' && entry.status !== 'paused') continue
+    const watchedThrough = markerByMedia.get(mediaId)
+    if (watchedThrough === undefined) continue
+    const record = recordsById instanceof Map ? recordsById.get(mediaId) : undefined
+    const airedEpisodes = Number(record?.airedEpisodes)
+    if (!Number.isInteger(airedEpisodes) || airedEpisodes <= 0) continue
+    if (airedEpisodes <= watchedThrough) continue
+    rows.push({
+      mediaId,
+      media: entry.media,
+      status: entry.status,
+      addedAt: Number.isFinite(entry?.addedAt) ? entry.addedAt : 0,
+      airedEpisodes,
+      watchedThrough,
+      newCount: airedEpisodes - watchedThrough,
+    })
+  }
+  rows.sort((a, b) => b.newCount - a.newCount || String(a.media?.title ?? '').localeCompare(String(b.media?.title ?? '')) || a.mediaId - b.mediaId)
+  return rows
+}

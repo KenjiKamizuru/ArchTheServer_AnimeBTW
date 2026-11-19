@@ -96,3 +96,21 @@ test('the returning-soon route answers with its payload shape (AV-138)', async (
   assert.equal(typeof r.body.unavailable, 'boolean')
   if (r.body.unavailable) assert.equal(r.body.entries.length, 0, 'an upstream failure yields an empty list, not junk')
 })
+test('the new-episodes route requires sign-in and answers with its payload shape (AV-137)', async () => {
+  const anonymous = cookie
+  cookie = ''
+  const unauth = await req('/api/lists/smart/new-episodes')
+  assert.equal(unauth.status, 401)
+  assert.equal(unauth.body.error, 'Sign in to see new episodes')
+  cookie = anonymous
+  // Airing data comes from AniList; offline the route degrades to
+  // unavailable:true with empty entries — either way it must answer 200
+  // with a consistent payload (semantics are pinned in smart-lists.test.mjs).
+  const r = await req('/api/lists/smart/new-episodes')
+  assert.equal(r.status, 200)
+  assert.equal(r.body.name, 'New episodes')
+  assert.ok(Array.isArray(r.body.entries))
+  assert.equal(r.body.count, r.body.entries.length)
+  assert.equal(typeof r.body.unavailable, 'boolean')
+  if (r.body.unavailable) assert.equal(r.body.entries.length, 0)
+})

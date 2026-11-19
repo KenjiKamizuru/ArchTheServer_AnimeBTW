@@ -45,7 +45,7 @@ import {
 import { normalizePreferencesUpdate } from './userPreferences.mjs'
 import { normalizeBetaOptInsUpdate, setBetaOptIns, betaOptInsView } from './featureFlags.mjs'
 import { parseMalExport, matchResolved, toImportDocument } from './malImport.mjs'
-import { stalledUnfinished, clampIdleDays, returningSoon } from './smartLists.mjs'
+import { stalledUnfinished, clampIdleDays, returningSoon, newEpisodesAvailable } from './smartLists.mjs'
 import { normalizeShowActivity, buildActivitySummary } from './profileActivity.mjs'
 import { buildAccountExport } from './accountExport.mjs'
 import { validateDeletionConfirmation, DELETION_ARTIFACTS } from './accountDeletion.mjs'
@@ -1817,6 +1817,32 @@ app.get('/api/lists/smart/returning', limitOutbound, wrap(async (req, res) => {
     res.json({ name: 'Returning soon', entries: rows, count: rows.length, unavailable: false })
   } catch {
     res.json({ name: 'Returning soon', entries: [], count: 0, unavailable: true })
+  }
+}))
+
+// Smart list (AV-137): "new episodes available" — started-but-unfinished
+// (watching/paused) entries whose episodes have aired past the viewer's
+// recorded marker (max progress episode; entries without progress are
+// excluded as uncertain). Session-gated like /api/progress (reads the
+// caller's per-profile progress); airing data via AniList (cached) —
+// upstream failure degrades to `unavailable` instead of breaking.
+app.get('/api/lists/smart/new-episodes', limitOutbound, wrap(async (req, res) => {
+  let user
+  try {
+    ;({ user } = await requireSessionUser(req))
+  } catch (error) {
+    if (error?.status === 401) throw Object.assign(new Error('Sign in to see new episodes'), { status: 401 })
+    throw error
+  }
+  const entries = [...listStore.readList('status:watching').entries, ...listStore.readList('status:paused').entries]
+  const progress = progressStore.listProgress(progressProfileId(user, req))
+  try {
+    const recordsById = new Map()
+    for (const record of await anilist.mediaWithRelations(entries.map((entry) => entry.mediaId))) recordsById.set(record.id, record)
+    const rows = newEpisodesAvailable(entries, progress, recordsById)
+    res.json({ name: 'New episodes', entries: rows, count: rows.length, unavailable: false })
+  } catch {
+    res.json({ name: 'New episodes', entries: [], count: 0, unavailable: true })
   }
 }))
 

@@ -85,6 +85,7 @@ function EntryNote({ entry, listId, busy, onSave }: { entry: Entry; listId: stri
 
 type StalledRow = Entry & { lastProgressAt: number | null }
 type ReturningRow = { mediaId: number; media: Media; status: string; upcoming: { id: number; title: string; season: string; seasonYear: number }[] }
+type NewEpisodesRow = { mediaId: number; media: Media; status: string; airedEpisodes: number; watchedThrough: number; newCount: number }
 
 /** Lists are shared across this installation until account support exists. */
 export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
@@ -137,6 +138,20 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
       .catch((err: Error) => { if (!cancelled) { setReturningRows([]); setError(err.message) } })
     return () => { cancelled = true }
   }, [returningOpen])
+  // New episodes (AV-137): started shows whose episodes have aired past the
+  // recorded marker; read-only, per signed-in profile.
+  const [newOpen, setNewOpen] = useState(false)
+  const [newRows, setNewRows] = useState<NewEpisodesRow[] | null>(null)
+  const [newUnavailable, setNewUnavailable] = useState(false)
+  useEffect(() => {
+    if (!newOpen) { setNewRows(null); return }
+    let cancelled = false
+    setNewRows(null)
+    request<{ entries: NewEpisodesRow[]; unavailable: boolean }>('/api/lists/smart/new-episodes')
+      .then((result) => { if (!cancelled) { setNewRows(result.entries); setNewUnavailable(result.unavailable) } })
+      .catch((err: Error) => { if (!cancelled) { setNewRows([]); setError(err.message) } })
+    return () => { cancelled = true }
+  }, [newOpen])
   useEffect(() => {
     let cancelled = false
     setList(null)
@@ -349,6 +364,23 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
                 <span className="text-white/50">
                   {row.upcoming.map((item) => `${item.title} (${item.season.charAt(0) + item.season.slice(1).toLowerCase()} ${item.seasonYear})`).join(', ')}
                 </span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+      <div className="mt-3 rounded-xl border border-white/10 p-3">
+        <button type="button" className={button} onClick={() => setNewOpen((open) => !open)}>{newOpen ? 'Hide new episodes' : 'New episodes'}</button>
+        {newOpen && newRows === null ? <p className="mt-2 text-sm text-white/70">Checking…</p> : null}
+        {newOpen && newUnavailable ? <p className="mt-2 text-sm text-white/70">Airing data is unavailable right now — try again shortly.</p> : null}
+        {newOpen && !newUnavailable && newRows?.length === 0 ? <p className="mt-2 text-sm text-white/70">Nothing new right now — every started show is caught up.</p> : null}
+        {newOpen && newRows && newRows.length > 0 ? (
+          <ul className="mt-2 space-y-1">
+            {newRows.map((row) => (
+              <li key={row.mediaId} className="flex items-center gap-2 text-sm">
+                {row.media.cover ? <img src={row.media.cover} alt="" loading="lazy" className="h-8 w-6 rounded object-cover" /> : null}
+                <Link className="text-white underline" to={`/anime/${row.mediaId}`}>{row.media.title}</Link>
+                <span className="text-white/50">{row.newCount} new (aired {row.airedEpisodes}, seen through {row.watchedThrough})</span>
               </li>
             ))}
           </ul>
