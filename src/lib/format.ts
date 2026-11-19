@@ -232,3 +232,14 @@ export function nextEpisodeNumber(current: number, max: number): number | null {
   const episode = clampEpisode(current, max)
   return episode < Math.max(1, Math.floor(max)) ? episode + 1 : null
 }
+
+/**
+ * The previous episode number, or null when there is none (AV-185).
+ * Same strict-input contract as nextEpisodeNumber: non-integers and
+ * values below 1 are refused, not coerced.
+ */
+export function previousEpisodeNumber(current: number, max: number): number | null {
+  if (!Number.isInteger(current) || current < 1) return null
+  const episode = clampEpisode(current, max)
+  return episode > 1 ? episode - 1 : null
+}

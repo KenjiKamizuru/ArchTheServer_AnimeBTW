@@ -65,6 +65,7 @@ import {
   formatSpeed,
   inferSeasonFromTitle,
   nextEpisodeNumber,
+  previousEpisodeNumber,
   pickSharedSeriesTitle,
   relativeTime,
   safeExternalHref,
@@ -305,6 +306,7 @@ function DetailSheet({
       mediaId: media?.id ?? item.mediaId ?? null,
       seasonKey: seasonKeyFor(media?.season, media?.seasonYear),
       onNext: item.episode ? nextEpisodeAction(item.episode) : undefined,
+      onPrev: item.episode ? prevEpisodeAction(item.episode) : undefined,
     })
     onClose()
   }
@@ -315,6 +317,12 @@ function DetailSheet({
   function nextEpisodeAction(ep: number): (() => void) | undefined {
     const next = nextEpisodeNumber(ep, maxEpisode)
     return next ? () => { void playEpisode(next) } : undefined
+  }
+
+  // AV-185: the "previous episode" control — same state-free resolution.
+  function prevEpisodeAction(ep: number): (() => void) | undefined {
+    const prev = previousEpisodeNumber(ep, maxEpisode)
+    return prev ? () => { void playEpisode(prev) } : undefined
   }
 
   /** Resolves local-first like onWatch, falling back to live streaming. */
@@ -330,6 +338,7 @@ function DetailSheet({
         mediaId: media.id,
         seasonKey,
         onNext: nextEpisodeAction(ep),
+        onPrev: prevEpisodeAction(ep),
       })
     }
     if (localCopy && settings.preferLocalPlayback) {
@@ -358,6 +367,7 @@ function DetailSheet({
         mediaId: media.id,
         seasonKey,
         onNext: nextEpisodeAction(ep),
+        onPrev: prevEpisodeAction(ep),
       })
     } catch {
       openLocal()
@@ -402,6 +412,7 @@ function DetailSheet({
         mediaId: media.id,
         seasonKey: seasonKeyFor(media.season, media.seasonYear),
         onNext: nextEpisodeAction(ep),
+        onPrev: prevEpisodeAction(ep),
       })
       onClose()
     } catch (err) {

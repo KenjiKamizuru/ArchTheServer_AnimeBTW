@@ -306,7 +306,7 @@ Strengthen the existing Player component into a reliable everyday player.
 - [ ] **AV-182** — Add tap-to-seek gestures on touch devices.
 - [ ] **AV-183** — Add a configurable skip-forward interval.
 - [ ] **AV-184** — Add a configurable skip-backward interval.
-- [ ] **AV-185** — Add previous-episode and next-episode controls.
+- [x] **AV-185** — Add previous-episode and next-episode controls. *(Prev/next controls in the player's top bar (ChevronLeft/Right, aria-labelled, rendered only when the corresponding action exists) — always available during playback, not just after completion. `PlaybackSource` gained `onPrev?: () => void` beside `onNext`; MediaModal supplies both through the same state-free `playEpisode` resolver (`prevEpisodeAction(ep)` via the new pure gate `previousEpisodeNumber(current, max)` in lib/format.ts — strict-input contract mirroring nextEpisodeNumber: non-integers refused, clamps first, null at episode 1). All four open sites carry both actions (playLocal, playEpisode's local+live opens, onWatch's live open). Clicking a control mid-playback switches sources cleanly (the `<video key={videoSrc}>` remount + [source] reset — the AV-159 verified basis). Evidence: tests/episode-nav.test.mjs +1 (strict-input contract, clamped-then-step semantics, no previous at episode 1). Suite **691 pass**, typecheck + build clean. **Pending (honest)**: live-browser click of the controls.)*
 - [ ] **AV-186** — Add a central play/pause control that fades when idle.
 - [ ] **AV-187** — Add a persistent control bar during pointer movement.
 - [ ] **AV-188** — Add playback speed selection with a remembered preference.

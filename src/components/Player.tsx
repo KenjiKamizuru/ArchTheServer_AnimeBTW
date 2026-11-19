@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { AlertTriangle, Download, HardDrive, Loader2, Radio, RotateCw, X } from 'lucide-react'
+import { AlertTriangle, ChevronLeft, ChevronRight, Download, HardDrive, Loader2, Radio, RotateCw, X } from 'lucide-react'
 import { api } from '../lib/api'
 import { formatEpisodeCode } from '../lib/format'
 import { useSettings } from '../lib/settings'
@@ -61,6 +61,7 @@ export type PlaybackSource =
       dub?: boolean
       mediaId?: number | null
       seasonKey?: string
+      onPrev?: () => void
       onNext?: () => void
     }
   | {
@@ -74,6 +75,7 @@ export type PlaybackSource =
       directPlayable: boolean
       mediaId?: number | null
       seasonKey?: string
+      onPrev?: () => void
       onNext?: () => void
     }
 
@@ -584,6 +586,31 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
             {urls.live ? 'Streaming' : `Shared library · ${urls.fileName}`}
           </p>
         </div>
+
+        {/* Episode controls (AV-185): always available while a source
+            knows its neighbours; the [source] reset handles the switch. */}
+        {source.onPrev ? (
+          <button
+            type="button"
+            onClick={() => source.onPrev?.()}
+            className="shrink-0 rounded-full bg-white/5 p-2 text-white/60 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-white"
+            aria-label="Previous episode"
+            title="Previous episode"
+          >
+            <ChevronLeft size={18} />
+          </button>
+        ) : null}
+        {source.onNext ? (
+          <button
+            type="button"
+            onClick={() => source.onNext?.()}
+            className="shrink-0 rounded-full bg-white/5 p-2 text-white/60 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-white"
+            aria-label="Next episode"
+            title="Next episode"
+          >
+            <ChevronRight size={18} />
+          </button>
+        ) : null}
 
         {urls.download ? (
           <a
