@@ -202,3 +202,25 @@ test('runtimeSeconds validation and preservation', async () => {
   assert.equal(store.getProgress('u_thr', 84, 's1', 1).runtimeSeconds, 1500, 'a provided runtime updates it')
   assert.equal(store.getProgress('u_thr', 84, 's1', 1).state, 'started')
 })
+
+// AV-164: batch scoped clear removes EXACTLY the listed records.
+test('batch clear removes exactly the listed entries (AV-164)', async () => {
+  const record = (mediaId, episode) => store.saveProgress('u_batch', { mediaId, season: 's1', episode, positionSeconds: 120, runtimeSeconds: 1400 })
+  await record(501, 1)
+  await record(501, 2)
+  await record(502, 1)
+  const result = await store.clearProgressEntries('u_batch', [
+    { mediaId: 501, season: 's1', episode: 1 },
+    { mediaId: 501, season: 's1', episode: 1 }, // duplicate — removed once
+    { mediaId: 999, season: 's1', episode: 1 }, // unknown — ignored
+    { mediaId: 502, season: 's1', episode: 1 },
+  ])
+  assert.deepEqual(result, { removed: 2 })
+  const left = store.listProgress('u_batch')
+  assert.equal(left.length, 1, 'only the unlisted record survives')
+  assert.equal(left[0].episode, 2)
+  // an empty batch removes nothing; foreign profiles are never touched
+  assert.deepEqual(await store.clearProgressEntries('u_batch', []), { removed: 0 })
+  assert.deepEqual(await store.clearProgressEntries('nobody', [{ mediaId: 501, season: 's1', episode: 2 }]), { removed: 0 })
+  assert.equal(store.listProgress('u_batch').length, 1)
+})

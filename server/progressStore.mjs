@@ -211,3 +211,21 @@ export async function clearProgress(profileId, scope = {}) {
   if (removed) await persist()
   return { removed }
 }
+
+/**
+ * Batch scoped clear (AV-164): removes EXACTLY the listed records of the
+ * profile — duplicates count once, unknown keys are ignored. Used by the
+ * watch-history bulk deletion.
+ */
+export async function clearProgressEntries(profileId, items) {
+  const keys = new Set(
+    items.map((item) => `${Number(item.mediaId)}\u0000${String(item.season ?? '')}\u0000${Number(item.episode)}`),
+  )
+  const before = state.entries.length
+  state.entries = state.entries.filter(
+    (entry) => !(entry.profileId === profileId && keys.has(`${entry.mediaId}\u0000${entry.season}\u0000${entry.episode}`)),
+  )
+  const removed = before - state.entries.length
+  if (removed) await persist()
+  return { removed }
+}

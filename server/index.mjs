@@ -1661,6 +1661,29 @@ app.delete(
   limitMutations,
   wrap(async (req, res) => {
     const { user } = await requireSessionUser(req)
+    const entries = req.body?.entries
+    if (entries !== undefined) {
+      // AV-164: batch scoped clear — exactly the listed records.
+      const valid =
+        Array.isArray(entries) &&
+        entries.length <= 500 &&
+        entries.every(
+          (item) =>
+            item &&
+            Number.isInteger(Number(item.mediaId)) &&
+            Number(item.mediaId) > 0 &&
+            typeof item.season === 'string' &&
+            Number.isInteger(Number(item.episode)) &&
+            Number(item.episode) >= 1,
+        )
+      if (!valid) {
+        throw Object.assign(new Error('entries must be an array of {mediaId, season, episode} (max 500)'), {
+          status: 400,
+        })
+      }
+      res.json(await progressStore.clearProgressEntries(progressProfileId(user, req), entries))
+      return
+    }
     res.json(await progressStore.clearProgress(progressProfileId(user, req), {
       mediaId: req.body?.mediaId,
       season: req.body?.season,

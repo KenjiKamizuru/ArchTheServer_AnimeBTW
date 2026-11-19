@@ -406,6 +406,11 @@ export const api = {
     return send<{ removed: number }>('/api/progress', 'DELETE', { mediaId, season, episode })
   },
 
+  // AV-164: batch variant — one call removes exactly the listed entries.
+  removeProgressEntries(items: { mediaId: number; season: string; episode: number }[]) {
+    return send<{ removed: number }>('/api/progress', 'DELETE', { entries: items })
+  },
+
   // AV-158: continue-watching rail data (in-progress episodes + media).
   continueWatching() {
     return get<{ entries: ContinueEntry[]; count: number; unavailable: boolean }>('/api/progress/continue', false)
