@@ -10,6 +10,43 @@ type Overview = { statuses: ListSummary[]; lists: ListSummary[]; totalEntries: n
 type List = ListSummary & { entries: Entry[]; custom: boolean }
 type UndoRecord = { media: Media; status: string | null; addedAt: number; note: string; priority: number | null; rating: number | null; orderIndex: number | null }
 
+// List grouping (AV-133a): by season (media.season + seasonYear) or by the
+// entry's PRIMARY genre (genres[0]); franchise grouping (133b) needs a
+// relations refetch (online relationship data) and is deliberately separate.
+const SEASON_LABELS: Record<string, string> = { WINTER: 'Winter', SPRING: 'Spring', SUMMER: 'Summer', FALL: 'Fall' }
+
+function buildGroups(entries: Entry[], groupBy: 'none' | 'season' | 'genre') {
+  if (groupBy === 'none') return [{ key: '', label: '', items: entries }]
+  const SEASON_ORDER: Record<string, number> = { WINTER: 0, SPRING: 1, SUMMER: 2, FALL: 3 }
+  const buckets = new Map<string, { label: string; sort: number; items: Entry[] }>()
+  for (const entry of entries) {
+    let key: string
+    let label: string
+    let sort: number
+    if (groupBy === 'season') {
+      const season = entry.media.season
+      const year = entry.media.seasonYear
+      key = season && year ? `${SEASON_LABELS[season] ?? season} ${year}` : 'unknown'
+      label = key === 'unknown' ? 'Unknown season' : key
+      // Numeric (year, season) so ordering is chronological, not lexical.
+      sort = key === 'unknown' ? -1 : (year ?? 0) * 10 + (SEASON_ORDER[season ?? 'WINTER'] ?? 0)
+    } else {
+      const genre = entry.media.genres[0] ?? ''
+      key = genre || 'none'
+      label = genre || 'No genre'
+      sort = 0
+    }
+    const bucket = buckets.get(key) ?? { label, sort, items: [] }
+    bucket.items.push(entry)
+    buckets.set(key, bucket)
+  }
+  return [...buckets.entries()].map(([key, bucket]) => ({ key, ...bucket })).sort((a, b) => {
+    if (a.key === 'unknown' || a.key === 'none') return 1
+    if (b.key === 'unknown' || b.key === 'none') return -1
+    return groupBy === 'season' ? b.sort - a.sort : a.label.localeCompare(b.label)
+  })
+}
+
 async function request<T>(url: string, method = 'GET', body?: unknown): Promise<T> {
   const response = await fetch(url, { method, headers: body === undefined ? undefined : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
   if (!response.ok) {
@@ -58,6 +95,7 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
   const [selected, setSelected] = useState<Set<number>>(() => new Set())
   const [moveTarget, setMoveTarget] = useState('')
   const [undo, setUndo] = useState<{ listId: string; records: UndoRecord[]; count: number } | null>(null)
+  const [groupBy, setGroupBy] = useState<'none' | 'season' | 'genre'>('none')
   useEffect(() => {
     let cancelled = false
     setList(null)
@@ -260,6 +298,12 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
             <option value="year">Newest season</option>
             <option value="order">Custom order</option>
           </select>
+          <label className="text-sm text-white/70" htmlFor="list-group">Group by</label>
+          <select id="list-group" className={input} value={groupBy} onChange={(event) => setGroupBy(event.target.value as 'none' | 'season' | 'genre')}>
+            <option value="none">No grouping</option>
+            <option value="season">Season</option>
+            <option value="genre">Genre</option>
+          </select>
         </div>
         {pick && <p role="status" className="mt-3 text-sm text-white/70">Try <Link className="text-white underline" to={`/anime/${pick.mediaId}`}>{pick.media.title}</Link></p>}
         <form className="mt-3 flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); const media = bookmarks.find((item) => String(item.id) === bookmarkId); if (media) void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}/entries`, 'POST', { media }); setBookmarkId('') }) }}>
@@ -270,8 +314,13 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
           </select>
           <button className={button} disabled={busy || !bookmarkId}>Add to list</button>
         </form>
-        {list.entries.length === 0 ? <p className="mt-3 text-sm text-white/50">No titles in this list yet.</p> : <ul className="mt-3 divide-y divide-white/10">
-          {list.entries.map((entry, index) => <li
+        {list.entries.length === 0 ? <p className="mt-3 text-sm text-white/50">No titles in this list yet.</p> : buildGroups(list.entries, groupBy).map((group) => (
+          <div key={group.key || 'all'}>
+            {groupBy !== 'none' ? (
+              <h4 className="mt-4 text-xs font-semibold uppercase tracking-wide text-white/40">{group.label} · {group.items.length}</h4>
+            ) : null}
+            <ul className="mt-3 divide-y divide-white/10">
+          {group.items.map((entry, index) => <li
             key={entry.mediaId}
             onDragOver={(event) => { if (dragFrom !== null && dragFrom !== index) { event.preventDefault(); setDropAt(index) } }}
             onDrop={(event) => {
@@ -295,7 +344,7 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
                 className="shrink-0"
               />
             ) : null}
-            {list.custom && sort === 'order' && !busy ? (
+            {list.custom && sort === 'order' && !busy && groupBy === 'none' ? (
               <span
                 draggable
                 onDragStart={() => setDragFrom(index)}
@@ -335,7 +384,9 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
             </select>
             <EntryNote entry={entry} listId={active} busy={busy} onSave={(note) => void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}/entries/${entry.mediaId}/note`, 'PUT', { note }) })} />
           </li>)}
-        </ul>}
+            </ul>
+          </div>
+        ))}
       </div>}
     </section>
   )
