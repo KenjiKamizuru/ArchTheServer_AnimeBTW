@@ -128,7 +128,12 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
               const blob = await response.blob()
               const url = URL.createObjectURL(blob)
               const anchor = document.createElement('a')
-              anchor.href = url; anchor.download = `animevault-list.${format}`; document.body.appendChild(anchor); anchor.click(); anchor.remove()
+              anchor.href = url
+              // Name the file after the list (path-unsafe characters stripped,
+              // Unicode preserved) so exports of different lists don't collide.
+              const slug = list.name.replace(/[\\/:*?"<>|]+/g, '').trim() || 'list'
+              anchor.download = `animevault-list-${slug}.${format}`
+              document.body.appendChild(anchor); anchor.click(); anchor.remove()
               setTimeout(() => URL.revokeObjectURL(url), 1000)
             })}>Export {format.toUpperCase()}</button>)}
           </div>

@@ -246,7 +246,7 @@ Make bookmarks evolve into a flexible personal anime organization system.
 - [ ] **AV-140** — Add watchlist capacity warnings that users can disable.
 - [ ] **AV-141** — Add duplicate prevention across the same list.
 - [ ] **AV-142** — Add list import from supported external list formats.
-- [ ] **AV-143** — Add list export to JSON and CSV.
+- [x] **AV-143** — Add list export to JSON and CSV. *(Verified + one weak spot fixed this review: all layers were already implemented — `listExport.mjs` (JSON `animevault-list` v1 with name/description/entries incl. note/priority/rating, `listIds` never leaked; CSV RFC-4180 quoting + spreadsheet-formula neutralization incl. whitespace/control-char prefixes, CRLF, ISO timestamps), `GET /api/lists/:id/export?format=json|csv` (attachment headers, correct content types, 400 on unknown format), UI Export JSON/CSV blob downloads. Evidence: tests/list-export.test.mjs (37 tests) + lists-http.test.mjs (export→import round-trip, attachment/type checks). Weak spot fixed: every download was named `animevault-list.<format>` so exports of different lists overwrote each other — the filename now includes the list name (path-unsafe characters stripped, Unicode preserved). Client-only: suite **542 pass** unchanged, typecheck + build clean. **Pending (honest)**: live-browser interaction.)*
 - [ ] **AV-144** — Add list comparison between two profiles.
 - [ ] **AV-145** — Add list templates such as weekend watchlist or short anime queue.
 - [ ] **AV-146** — Add a random pick action limited to the current list.
