@@ -45,7 +45,7 @@ import {
 import { normalizePreferencesUpdate } from './userPreferences.mjs'
 import { normalizeBetaOptInsUpdate, setBetaOptIns, betaOptInsView } from './featureFlags.mjs'
 import { parseMalExport, matchResolved, toImportDocument } from './malImport.mjs'
-import { stalledUnfinished, clampIdleDays } from './smartLists.mjs'
+import { stalledUnfinished, clampIdleDays, returningSoon } from './smartLists.mjs'
 import { normalizeShowActivity, buildActivitySummary } from './profileActivity.mjs'
 import { buildAccountExport } from './accountExport.mjs'
 import { validateDeletionConfirmation, DELETION_ARTIFACTS } from './accountDeletion.mjs'
@@ -1784,6 +1784,40 @@ app.get('/api/lists/smart/stalled', wrap(async (req, res) => {
   const progress = progressStore.listProgress(progressProfileId(user, req))
   const rows = stalledUnfinished(entries, progress, { now: Date.now(), idleDays: days })
   res.json({ name: 'Stalled shows', days, entries: rows, count: rows.length })
+}))
+
+// Smart list (AV-138): "returning soon" — entries with a SEQUEL relation
+// whose installment lands in a future season. Relationship data comes from
+// AniList (batched + cached, AV-133b) — never title similarity. Upstream
+// failure degrades to an empty list with `unavailable: true` (the panel
+// tells the viewer) instead of breaking the page.
+app.get('/api/lists/smart/returning', limitOutbound, wrap(async (req, res) => {
+  const entries = []
+  const seen = new Set()
+  for (const id of listStore.STATUSES.map((status) => `status:${status}`)) {
+    for (const record of listStore.readList(id).entries) {
+      if (!seen.has(record.mediaId)) { seen.add(record.mediaId); entries.push(record) }
+    }
+  }
+  try {
+    const base = await anilist.mediaWithRelations([...seen])
+    const edgesByMedia = new Map()
+    const sequelIds = new Set()
+    for (const record of base) {
+      const edges = Array.isArray(record.relations) ? record.relations : []
+      edgesByMedia.set(record.id, edges)
+      for (const edge of edges) {
+        const relatedId = Number(edge?.node?.id)
+        if (edge?.relationType === 'SEQUEL' && Number.isSafeInteger(relatedId) && relatedId > 0) sequelIds.add(relatedId)
+      }
+    }
+    const recordsById = new Map()
+    for (const record of await anilist.mediaWithRelations([...sequelIds])) recordsById.set(record.id, record)
+    const rows = returningSoon(entries, edgesByMedia, recordsById, { now: Date.now() })
+    res.json({ name: 'Returning soon', entries: rows, count: rows.length, unavailable: false })
+  } catch {
+    res.json({ name: 'Returning soon', entries: [], count: 0, unavailable: true })
+  }
 }))
 
 // Franchise grouping for a saved list (AV-133b): refetches RELATION data

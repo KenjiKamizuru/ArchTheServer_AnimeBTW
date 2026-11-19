@@ -84,6 +84,7 @@ function EntryNote({ entry, listId, busy, onSave }: { entry: Entry; listId: stri
 }
 
 type StalledRow = Entry & { lastProgressAt: number | null }
+type ReturningRow = { mediaId: number; media: Media; status: string; upcoming: { id: number; title: string; season: string; seasonYear: number }[] }
 
 /** Lists are shared across this installation until account support exists. */
 export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
@@ -122,6 +123,20 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
       .catch((err: Error) => { if (!cancelled) { setStalledRows([]); setError(err.message) } })
     return () => { cancelled = true }
   }, [stalledOpen, stalledDays])
+  // Returning soon (AV-138): entries whose SEQUEL lands in a future season
+  // (AniList relationship data — never title matching); read-only.
+  const [returningOpen, setReturningOpen] = useState(false)
+  const [returningRows, setReturningRows] = useState<ReturningRow[] | null>(null)
+  const [returningUnavailable, setReturningUnavailable] = useState(false)
+  useEffect(() => {
+    if (!returningOpen) { setReturningRows(null); return }
+    let cancelled = false
+    setReturningRows(null)
+    request<{ entries: ReturningRow[]; unavailable: boolean }>('/api/lists/smart/returning')
+      .then((result) => { if (!cancelled) { setReturningRows(result.entries); setReturningUnavailable(result.unavailable) } })
+      .catch((err: Error) => { if (!cancelled) { setReturningRows([]); setError(err.message) } })
+    return () => { cancelled = true }
+  }, [returningOpen])
   useEffect(() => {
     let cancelled = false
     setList(null)
@@ -315,6 +330,25 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
                 <Link className="text-white underline" to={`/anime/${row.mediaId}`}>{row.media.title}</Link>
                 <span className="text-white/70">{row.status}</span>
                 <span className="text-white/50">{row.lastProgressAt === null ? 'no recorded progress' : `last progress ${new Date(row.lastProgressAt).toLocaleDateString()}`}</span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+      <div className="mt-3 rounded-xl border border-white/10 p-3">
+        <button type="button" className={button} onClick={() => setReturningOpen((open) => !open)}>{returningOpen ? 'Hide returning soon' : 'Returning soon'}</button>
+        {returningOpen && returningRows === null ? <p className="mt-2 text-sm text-white/70">Checking…</p> : null}
+        {returningOpen && returningUnavailable ? <p className="mt-2 text-sm text-white/70">Relationship data is unavailable right now — try again shortly.</p> : null}
+        {returningOpen && !returningUnavailable && returningRows?.length === 0 ? <p className="mt-2 text-sm text-white/70">Nothing returning soon — no watched show has a sequel dated into a future season.</p> : null}
+        {returningOpen && returningRows && returningRows.length > 0 ? (
+          <ul className="mt-2 space-y-1">
+            {returningRows.map((row) => (
+              <li key={row.mediaId} className="flex items-center gap-2 text-sm">
+                {row.media.cover ? <img src={row.media.cover} alt="" loading="lazy" className="h-8 w-6 rounded object-cover" /> : null}
+                <Link className="text-white underline" to={`/anime/${row.mediaId}`}>{row.media.title}</Link>
+                <span className="text-white/50">
+                  {row.upcoming.map((item) => `${item.title} (${item.season.charAt(0) + item.season.slice(1).toLowerCase()} ${item.seasonYear})`).join(', ')}
+                </span>
               </li>
             ))}
           </ul>

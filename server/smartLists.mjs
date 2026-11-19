@@ -69,3 +69,78 @@ export function stalledUnfinished(entries, progress, { now = Date.now(), idleDay
   })
   return rows
 }
+
+// ── Returning soon (AV-138) ─────────────────────────────────────────────
+// "Shows returning in a future season" = entries with a SEQUEL relation
+// (AniList relationship data — never title similarity) whose installment is
+// dated into a FUTURE season. Scope decisions recorded: only `SEQUEL` counts
+// as "returning" (side stories/spin-offs are new shows, not returns); a
+// related record is "future" only when BOTH season and seasonYear are known
+// and its (year, season) key is strictly after the current season —
+// undated or same-season-unknown cases are excluded (mark uncertain, never
+// guess). Pure: relationship data is injected; `now` is injected.
+
+export const RETURNING_RELATIONS = new Set(['SEQUEL'])
+const SEASON_INDEX = { WINTER: 0, SPRING: 1, SUMMER: 2, FALL: 3 }
+const SEASON_STEP = 10
+
+/** Sortable (year, season) key, or null when the season date is unknown. */
+export function seasonKey(media) {
+  const year = Number(media?.seasonYear)
+  const season = SEASON_INDEX[media?.season]
+  if (!Number.isInteger(year) || year < 1900 || year > 2100 || season === undefined) return null
+  return year * SEASON_STEP + season
+}
+
+/** The key of the season in progress at `now` (UTC). */
+export function currentSeasonKey(now = Date.now()) {
+  const date = new Date(now)
+  return date.getUTCFullYear() * SEASON_STEP + Math.floor(date.getUTCMonth() / 3)
+}
+
+/**
+ * Rows for the "returning soon" list:
+ * `[{ mediaId, media, status, addedAt, upcoming: [{ id, title, format, season, seasonYear }] }]`
+ * sorted by the soonest upcoming installment. `edgesByMedia` maps entry
+ * mediaId → relation edges (`{ relationType, node: { id } }`); `recordsById`
+ * maps related ids → normalized catalog records (title/season/seasonYear).
+ */
+export function returningSoon(entries, edgesByMedia, recordsById, { now = Date.now() } = {}) {
+  const current = currentSeasonKey(now)
+  const rows = []
+  const seen = new Set()
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const mediaId = Number(entry?.mediaId)
+    if (!Number.isSafeInteger(mediaId) || mediaId <= 0 || seen.has(mediaId) || !entry?.media) continue
+    seen.add(mediaId)
+    const upcoming = []
+    const claimed = new Set()
+    for (const edge of (edgesByMedia instanceof Map ? edgesByMedia.get(mediaId) : null) ?? []) {
+      if (!RETURNING_RELATIONS.has(edge?.relationType)) continue
+      const relatedId = Number(edge?.node?.id)
+      if (!Number.isSafeInteger(relatedId) || relatedId <= 0 || relatedId === mediaId || claimed.has(relatedId)) continue
+      const record = recordsById instanceof Map ? recordsById.get(relatedId) : undefined
+      const key = record ? seasonKey(record) : null
+      if (key === null || key <= current) continue
+      claimed.add(relatedId)
+      upcoming.push({
+        id: relatedId,
+        title: typeof record?.title === 'string' ? record.title : '',
+        format: record?.format ?? null,
+        season: record.season,
+        seasonYear: record.seasonYear,
+      })
+    }
+    if (!upcoming.length) continue
+    upcoming.sort((a, b) => seasonKey(a) - seasonKey(b) || String(a.title).localeCompare(String(b.title)) || a.id - b.id)
+    rows.push({
+      mediaId,
+      media: entry.media,
+      status: entry.status,
+      addedAt: Number.isFinite(entry?.addedAt) ? entry.addedAt : 0,
+      upcoming,
+    })
+  }
+  rows.sort((a, b) => seasonKey(a.upcoming[0]) - seasonKey(b.upcoming[0]) || String(a.media?.title ?? '').localeCompare(String(b.media?.title ?? '')) || a.mediaId - b.mediaId)
+  return rows
+}

@@ -90,3 +90,90 @@ test('entries without a media object never render', () => {
   const rows = stalledUnfinished([{ mediaId: 9, status: 'watching' }, entry(10, 'watching')], [], { now: NOW })
   assert.deepEqual(rows.map((row) => row.mediaId), [10])
 })
+
+// ── Returning soon (AV-138) ─────────────────────────────────────────────
+import { returningSoon, seasonKey, currentSeasonKey, RETURNING_RELATIONS } from '../server/smartLists.mjs'
+
+const JUNE_2026 = Date.UTC(2026, 5, 1) // SPRING 2026 in progress (key 20261)
+const edge = (relationType, id) => ({ relationType, node: { id } })
+const record = (id, title, season, seasonYear, format = 'TV') => ({ id, title, season, seasonYear, format })
+
+test('season keys: WINTER..FALL map through the year (AV-138)', () => {
+  assert.equal(seasonKey(record(1, 'a', 'WINTER', 2027)), 20270)
+  assert.equal(seasonKey(record(1, 'a', 'SPRING', 2026)), 20261)
+  assert.equal(seasonKey(record(1, 'a', 'SUMMER', 2026)), 20262)
+  assert.equal(seasonKey(record(1, 'a', 'FALL', 2026)), 20263)
+  assert.equal(currentSeasonKey(JUNE_2026), 20261, 'June sits in SPRING')
+  assert.equal(currentSeasonKey(Date.UTC(2026, 11, 31)), 20263, 'December sits in FALL')
+  assert.equal(currentSeasonKey(Date.UTC(2027, 0, 1)), 20270, 'January rolls the year')
+  assert.equal(seasonKey({ season: 'FALL', seasonYear: null }), null)
+  assert.equal(seasonKey({ season: null, seasonYear: 2027 }), null, 'year alone is uncertain')
+  assert.equal(seasonKey(record(1, 'a', 'FALL', 1899)), null, 'out-of-range years rejected')
+})
+test('a sequel dated into a future season makes the entry return', () => {
+  const entries = [entry(1, 'completed')]
+  const edges = new Map([[1, [edge('SEQUEL', 90)]]])
+  const records = new Map([[90, record(90, 'Show Season 2', 'WINTER', 2027)]])
+  const rows = returningSoon(entries, edges, records, { now: JUNE_2026 })
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].mediaId, 1)
+  assert.deepEqual(rows[0].upcoming, [{ id: 90, title: 'Show Season 2', format: 'TV', season: 'WINTER', seasonYear: 2027 }])
+})
+test('only SEQUEL counts as returning', () => {
+  const entries = [entry(1, 'completed')]
+  const edges = new Map([[1, ['PREQUEL', 'SIDE_STORY', 'SPIN_OFF', 'ALTERNATIVE', 'ADAPTATION', 'OTHER'].map((type, index) => edge(type, 100 + index)).concat([edge('SEQUEL', 90)])]])
+  const records = new Map([...['PREQUEL', 'SIDE_STORY', 'SPIN_OFF', 'ALTERNATIVE', 'ADAPTATION', 'OTHER'].map((type, index) => [100 + index, record(100 + index, type, 'WINTER', 2027)]), [90, record(90, 'Season 2', 'WINTER', 2027)]])
+  const rows = returningSoon(entries, edges, records, { now: JUNE_2026 })
+  assert.deepEqual(rows[0].upcoming.map((item) => item.id), [90], 'side stories and spin-offs are new shows, not returns')
+  assert.ok(RETURNING_RELATIONS.has('SEQUEL'))
+})
+test('the current season is not future; the next one is', () => {
+  const entries = [entry(1, 'completed')]
+  const edges = new Map([[1, [edge('SEQUEL', 10), edge('SEQUEL', 11), edge('SEQUEL', 12)]]])
+  const records = new Map([
+    [10, record(10, 'This season', 'SPRING', 2026)],
+    [11, record(11, 'Next season', 'SUMMER', 2026)],
+    [12, record(12, 'Last season', 'WINTER', 2026)],
+  ])
+  const rows = returningSoon(entries, edges, records, { now: JUNE_2026 })
+  assert.deepEqual(rows[0].upcoming.map((item) => item.id), [11], 'only strictly-future seasons count')
+})
+test('undated or uncertain related records are excluded, never guessed', () => {
+  const entries = [entry(1, 'completed')]
+  const edges = new Map([[1, [edge('SEQUEL', 20), edge('SEQUEL', 21), edge('SEQUEL', 22), edge('SEQUEL', 23)]]])
+  const records = new Map([
+    [20, record(20, 'No date', null, null)],
+    [21, record(21, 'Year only', null, 2027)],
+    [22, record(22, 'Same year, unknown season', null, 2026)],
+    [23, record(23, 'Also fine', 'FALL', 2026)],
+  ])
+  const rows = returningSoon(entries, edges, records, { now: JUNE_2026 })
+  assert.deepEqual(rows[0].upcoming.map((item) => item.id), [23], 'only fully-dated future seasons survive')
+})
+test('upcoming lists and rows are sorted by soonness, then title', () => {
+  const entries = [entry(1, 'completed'), entry(2, 'watching'), entry(3, 'paused')]
+  const edges = new Map([
+    [1, [edge('SEQUEL', 40), edge('SEQUEL', 41), edge('SEQUEL', 42)]],
+    [2, [edge('SEQUEL', 43)]],
+    [3, [edge('SEQUEL', 44)]],
+  ])
+  const records = new Map([
+    [40, record(40, 'Zeta late', 'WINTER', 2027)],
+    [41, record(41, 'Alpha soon', 'SUMMER', 2026)],
+    [42, record(42, 'Beta soon', 'SUMMER', 2026)],
+    [43, record(43, 'Fall show', 'FALL', 2026)],
+    [44, record(44, 'Zeta twin', 'WINTER', 2027)],
+  ])
+  const rows = returningSoon(entries, edges, records, { now: JUNE_2026 })
+  assert.deepEqual(rows[0].upcoming.map((item) => item.id), [41, 42, 40], 'SUMMER first (Alpha < Beta), then WINTER')
+  assert.deepEqual(rows.map((row) => row.mediaId), [1, 2, 3], 'soonest installment first: SUMMER row (20262), then FALL (20263), then WINTER (20270)')
+})
+test('malformed edges and records never break the scan', () => {
+  const entries = [entry(1, 'completed'), entry(1, 'watching'), { mediaId: 2, status: 'completed' }, entry(-3, 'completed')]
+  const edges = new Map([[1, [null, { relationType: 'SEQUEL' }, edge('SEQUEL', 1), edge('SEQUEL', -5), edge('SEQUEL', 'x'), edge('SEQUEL', 50)]]])
+  const records = new Map([[50, record(50, 'Real', 'WINTER', 2027)], [60, record(60, 'Ghost', 'WINTER', 2027)]])
+  const rows = returningSoon(entries, edges, records, { now: JUNE_2026 })
+  assert.equal(rows.length, 1, 'the duplicate entry and the media-less entry collapse/drop')
+  assert.deepEqual(rows[0].upcoming.map((item) => item.id), [50], 'self-edges, bad ids and missing records are ignored')
+  assert.equal(returningSoon([], null, null, { now: JUNE_2026 }).length, 0, 'sparse inputs are safe')
+})

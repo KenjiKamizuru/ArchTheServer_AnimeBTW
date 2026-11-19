@@ -83,3 +83,16 @@ test('the stalled list requires sign-in with a friendly error', async () => {
   assert.equal(r.body.error, 'Sign in to see stalled shows')
   cookie = saved
 })
+test('the returning-soon route answers with its payload shape (AV-138)', async () => {
+  // Relationship data comes from AniList over the network; in an offline
+  // environment the route degrades to unavailable:true with empty entries —
+  // either way it must answer 200 with a consistent payload (semantics are
+  // pinned in tests/smart-lists.test.mjs).
+  const r = await req('/api/lists/smart/returning')
+  assert.equal(r.status, 200)
+  assert.equal(r.body.name, 'Returning soon')
+  assert.ok(Array.isArray(r.body.entries))
+  assert.equal(r.body.count, r.body.entries.length)
+  assert.equal(typeof r.body.unavailable, 'boolean')
+  if (r.body.unavailable) assert.equal(r.body.entries.length, 0, 'an upstream failure yields an empty list, not junk')
+})
