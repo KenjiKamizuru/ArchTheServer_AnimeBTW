@@ -258,3 +258,12 @@ test('the progress export requires auth and keeps its shape (AV-174)', async () 
     assert.equal(typeof entry.episode, 'number')
   }
 })
+
+// AV-173: the import route's non-network paths (the anime_id resolution
+// itself needs outbound AniList access and is recorded pending).
+test('the MAL progress import rejects bad payloads and needs auth (AV-173)', async () => {
+  assert.equal((await req('/api/progress/import/mal', 'POST', { entries: [] }, { cookie: '' })).status, 401)
+  assert.equal((await req('/api/progress/import/mal', 'POST', { entries: [] })).status, 400, 'empty export rejected')
+  assert.equal((await req('/api/progress/import/mal', 'POST', { entries: [{ title: 'no id' }] })).status, 400, 'strict parse rejects malformed entries')
+  assert.equal((await req('/api/progress/import/mal', 'POST', { entries: [{ anime_id: 1, title: 'T', status: 'Not A Status', score: 0 }] })).status, 400, 'unknown statuses rejected')
+})

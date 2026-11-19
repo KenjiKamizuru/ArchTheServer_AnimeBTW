@@ -426,6 +426,20 @@ export const api = {
     return send<{ session: PlaybackSession | null; skipped?: boolean }>('/api/sessions', 'PUT', record)
   },
 
+  // AV-173: watched-progress import from a MAL export — explicit manual
+  // marks + watch statuses. Resolution is anime_id via the server.
+  importMalProgress(entries: unknown[]) {
+    return send<{
+      matched: number
+      unmatched: number
+      unmatchedSample: { malId: number; title: string }[]
+      importedMarks: number
+      rejectedMarks: number
+      statusesApplied: number
+      truncated: { mediaId: number; watchedEpisodes: number; importedMarks: number }[]
+    }>('/api/progress/import/mal', 'POST', { entries })
+  },
+
   // AV-174: deterministic export of this profile's progress with stable
   // external IDs. The caller triggers the file download.
   exportProgress() {

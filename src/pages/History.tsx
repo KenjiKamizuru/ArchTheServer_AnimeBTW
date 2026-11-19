@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Download, Loader2, RotateCcw, Trash2 } from 'lucide-react'
+import { Download, Loader2, RotateCcw, Trash2, Upload } from 'lucide-react'
 import type { Media, ProgressEntry } from '../types'
 import { api } from '../lib/api'
 import { filterWatchHistory, searchWatchHistory, watchHistoryRows, type WatchHistoryRow } from '../lib/history'
@@ -25,6 +25,7 @@ function formatPosition(positionSeconds: number | null, runtimeSeconds: number |
 
 export default function History() {
   const push = useToast()
+  const importInputRef = useRef<HTMLInputElement>(null)
   const [records, setRecords] = useState<ProgressEntry[] | null>(null)
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
@@ -92,6 +93,28 @@ export default function History() {
       }
     } catch {
         push('Could not remove the history entry', 'err')
+    }
+  }
+
+  // AV-173: watched-progress import from a MAL export file. The server
+  // resolves by anime_id (never title similarity) and reports every gap.
+  async function importMalFile(file: File) {
+    try {
+      const document: unknown = JSON.parse(await file.text())
+      const entries = Array.isArray(document) ? document : (document as { entries?: unknown[] })?.entries
+      if (!Array.isArray(entries) || entries.length === 0) {
+        push('Not a MyAnimeList export (expected a JSON array of entries)', 'err')
+        return
+      }
+      const result = await api.importMalProgress(entries)
+      const rejected = result.rejectedMarks > 0 ? `, ${result.rejectedMarks} rejected` : ''
+      const unmatched = result.unmatched > 0 ? `, ${result.unmatched} unmatched` : ''
+      const truncated = result.truncated.length > 0 ? `, ${result.truncated.length} truncated` : ''
+      push(`Imported ${result.importedMarks} marks and ${result.statusesApplied} statuses${rejected}${unmatched}${truncated}`)
+      const progress = (await api.getProgress()).entries
+      setRecords(progress)
+    } catch (err) {
+      push(err instanceof Error ? err.message : 'Could not import the file', 'err')
     }
   }
 
@@ -179,13 +202,33 @@ export default function History() {
           </button>
         ) : null}
         {records !== null && rows.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => void exportProgress()}
+            className="flex items-center gap-1.5 rounded-full bg-white/10 px-3.5 py-2 text-xs font-medium text-white/80 transition hover:bg-white/20"
+          >
+            <Download size={13} /> Export
+          </button>
+        ) : null}
+        {records !== null ? (
           <>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0]
+                event.target.value = ''
+                if (file) void importMalFile(file)
+              }}
+            />
             <button
               type="button"
-              onClick={() => void exportProgress()}
+              onClick={() => importInputRef.current?.click()}
               className="flex items-center gap-1.5 rounded-full bg-white/10 px-3.5 py-2 text-xs font-medium text-white/80 transition hover:bg-white/20"
             >
-              <Download size={13} /> Export
+              <Upload size={13} /> Import from MAL
             </button>
           </>
         ) : null}

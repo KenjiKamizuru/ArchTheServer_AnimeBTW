@@ -47,6 +47,7 @@ import { normalizeBetaOptInsUpdate, setBetaOptIns, betaOptInsView } from './feat
 import { parseMalExport, matchResolved, toImportDocument } from './malImport.mjs'
 import { stalledUnfinished, clampIdleDays, returningSoon, newEpisodesAvailable, continueWatching } from './smartLists.mjs'
 import { buildProgressExport } from './progressExport.mjs'
+import { mapWatchedProgress } from './malProgressImport.mjs'
 import { normalizeShowActivity, buildActivitySummary } from './profileActivity.mjs'
 import { buildAccountExport } from './accountExport.mjs'
 import { validateDeletionConfirmation, DELETION_ARTIFACTS } from './accountDeletion.mjs'
@@ -1905,6 +1906,64 @@ app.get('/api/progress/export', limitOutbound, wrap(async (req, res) => {
     }
   }
   res.json(buildProgressExport(rows, mediaById, { exportedAt: Date.now(), externalIdsUnavailable }))
+}))
+
+// Watched-progress import (AV-173): a MAL export becomes explicit 'manual'
+// marks + watch statuses. Resolution is anime_id via AniList (never title
+// similarity). Explicit-state saves are user claims and apply even in
+// private-history mode (the AV-165 rule).
+app.post('/api/progress/import/mal', limitMutations, limitOutbound, wrap(async (req, res) => {
+  const { user } = await requireSessionUser(req)
+  const raw = Array.isArray(req.body) ? req.body : req.body?.entries
+  const parsed = parseMalExport(raw)
+  if (!parsed.ok) throw Object.assign(new Error(parsed.error), { status: 400 })
+  const entries = parsed.value.entries
+  if (!entries.length) throw Object.assign(new Error('The export contains no entries'), { status: 400 })
+  const mediaByMalId = await anilist.mediaByMalIds(entries.map((entry) => entry.malId))
+  const { matched, unmatched } = matchResolved(entries, mediaByMalId)
+  if (!matched.length) {
+    throw Object.assign(new Error('No entries matched catalog media by anime_id'), { status: 422 })
+  }
+  // The season key mirrors the client's seasonKeyFor: <season>-<year>
+  // lowercased, else 'unknown'. Injected — the mapper stays pure.
+  const seasonOf = (media) => {
+    const season = typeof media?.season === 'string' ? media.season.trim().toLowerCase() : ''
+    const year = Number(media?.seasonYear)
+    return season && Number.isInteger(year) && year > 0 ? `${season}-${year}` : 'unknown'
+  }
+  const { marks, statuses, truncated } = mapWatchedProgress(matched, { seasonOf })
+  const profileId = progressProfileId(user, req)
+  let importedMarks = 0
+  let rejectedMarks = 0
+  for (const mark of marks) {
+    try {
+      await progressStore.saveProgress(profileId, mark, {
+        completionThresholdPercent: settings.get().episodeCompletionThresholdPercent,
+      })
+      importedMarks += 1
+    } catch {
+      // e.g. the 5000-record profile cap — reported, never hidden.
+      rejectedMarks += 1
+    }
+  }
+  let statusesApplied = 0
+  for (const row of statuses) {
+    const media = matched.find((entry) => Number(entry.media.id) === row.mediaId)?.media
+    if (!media) continue
+    // Status lists are installation-wide views over one status field
+    // (listStore.add moves the entry) — consistent with AV-137.
+    await listStore.add(`status:${row.status}`, media)
+    statusesApplied += 1
+  }
+  res.status(201).json({
+    matched: matched.length,
+    unmatched: unmatched.length,
+    unmatchedSample: unmatched.slice(0, 50).map((entry) => ({ malId: entry.malId, title: entry.title })),
+    importedMarks,
+    rejectedMarks,
+    statusesApplied,
+    truncated,
+  })
 }))
 
 // Smart list (AV-138): "returning soon" — entries with a SEQUEL relation
