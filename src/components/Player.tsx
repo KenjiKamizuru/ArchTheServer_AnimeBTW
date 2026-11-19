@@ -14,6 +14,7 @@ import { formatEpisodeCode } from '../lib/format'
 import { useSettings } from '../lib/settings'
 import { createProgressWriter } from '../lib/progressWriter'
 import { createWatchSession } from '../lib/watchSession'
+import { playerLoadingPhase, readinessLabels } from '../lib/playerLoading'
 import { concatBytes, Mp4BoxTracker, selectMseMimeType } from '../lib/mp4'
 import type { LibraryItem } from '../types'
 
@@ -157,6 +158,11 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
   const [mseFallback, setMseFallback] = useState(false)
   const [localRemuxFallback, setLocalRemuxFallback] = useState(false)
   const [ended, setEnded] = useState(false)
+  // AV-176: separate readiness signals — metadata (loadedmetadata), media
+  // (canplay), and mid-play stalls.
+  const [metaReady, setMetaReady] = useState(false)
+  const [mediaReady, setMediaReady] = useState(false)
+  const [buffering, setBuffering] = useState(false)
   const [autoCountdown, setAutoCountdown] = useState<number | null>(null)
   const [autoCancelled, setAutoCancelled] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -298,6 +304,14 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
       session.stop()
     }
   }, [videoSrc, useMse, settings.privateHistoryMode])
+
+  // AV-176: readiness states reset exactly when the <video> remounts (the
+  // element is keyed on videoSrc — source switches AND stream retries).
+  useEffect(() => {
+    setMetaReady(false)
+    setMediaReady(false)
+    setBuffering(false)
+  }, [videoSrc])
 
   // Auto-advance (AV-160): when the toggle is on, the next episode starts
   // after a short countdown the viewer can cancel — or take immediately.
@@ -644,15 +658,22 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
             controls
             autoPlay
             playsInline
-            onLoadedMetadata={() => setLoading(false)}
+            onLoadedMetadata={() => {
+              setLoading(false)
+              setMetaReady(true)
+            }}
             onCanPlay={(event) => {
               setLoading(false)
+              setMediaReady(true)
               if (!autoPlayedRef.current) {
                 autoPlayedRef.current = true
                 const el = event.currentTarget
                 if (el.paused) void el.play().catch(() => {})
               }
             }}
+            onWaiting={() => setBuffering(true)}
+            onStalled={() => setBuffering(true)}
+            onPlaying={() => setBuffering(false)}
             onError={(event) => {
               if (useMse && event.currentTarget.readyState === 0) {
                 setMseFallback(true)
@@ -682,14 +703,33 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
             ) : null}
           </video>
 
-          {loading && !error ? (
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-xl bg-black/35">
-              <div className="flex items-center gap-2 rounded-full bg-black/70 px-4 py-2 text-xs text-white/70 ring-1 ring-white/10">
-                <Loader2 size={14} className="animate-spin text-accent" />
-                {urls.live ? 'Resolving stream…' : 'Opening local file…'}
+          {/* AV-176: loading state with SEPARATE metadata and media
+              readiness — the two signals are shown side by side, and the
+              media line also covers mid-play stalls. */}
+          {(() => {
+            const phase = playerLoadingPhase(loading, metaReady, mediaReady, buffering)
+            if (phase === 'ready' || error) return null
+            const labels = readinessLabels(metaReady, mediaReady, buffering)
+            return (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-xl bg-black/35">
+                <div className="flex flex-col gap-1 rounded-2xl bg-black/70 px-4 py-2.5 text-xs text-white/70 ring-1 ring-white/10">
+                  <div className="flex items-center gap-2">
+                    <Loader2 size={14} className="animate-spin text-accent" />
+                    <span>{labels.metadata}</span>
+                  </div>
+                  <div className="flex items-center gap-2 pl-[22px]">
+                    <span>
+                      {phase === 'resolving'
+                        ? urls.live
+                          ? 'Resolving stream…'
+                          : 'Opening local file…'
+                        : labels.media}
+                    </span>
+                  </div>
+                </div>
               </div>
-            </div>
-          ) : null}
+            )
+          })()}
 
           {/* Completion (AV-159/160): the next-episode action after
               playback ends — auto-advance countdown when enabled, manual

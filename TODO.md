@@ -297,7 +297,7 @@ Make the app remember exactly where each person stopped watching.
 
 Strengthen the existing Player component into a reliable everyday player.
 
-- [ ] **AV-176** — Add a clear loading state with separate metadata and media readiness.
+- [x] **AV-176** — Add a clear loading state with separate metadata and media readiness. *(The player conflated both signals before: `loadedmetadata` and `canplay` each cleared one `loading` flag, and mid-play stalls showed nothing at all (a real gap between stream resolution and first frame). Now three separate signals drive the surface: `metaReady` (`loadedmetadata`), `mediaReady` (`canplay`), and `buffering` (`waiting`/`stalled` → on, `playing` → off) — all reset in an effect keyed on `videoSrc`, i.e. exactly when the keyed `<video>` remounts (source switches AND stream retries). Pure phase logic in src/lib/playerLoading.ts (`playerLoadingPhase` — precedence resolving ▸ metadata ▸ media ▸ ready; a stall moves media back to not-ready even after the first canplay; `readinessLabels` — the two lines rendered independently, never merged). The overlay shows both readiness lines side by side ("Metadata ready"/"Loading metadata…" + "Resolving stream…"/"Opening local file…"/"Loading media…"/"Buffering…"/"Media ready"), disappearing only when ALL signals agree. Evidence: tests/player-loading.test.mjs (2: phase precedence incl. the stall regression case; independent label mapping). Suite **693 pass**, typecheck + build clean. **Pending (honest)**: live-browser watch of the phase transitions.)*
 - [ ] **AV-177** — Add a player error screen with understandable recovery actions.
 - [ ] **AV-178** — Add click-to-pause and click-to-resume behavior.
 - [ ] **AV-179** — Add configurable keyboard shortcuts with conflict detection.
