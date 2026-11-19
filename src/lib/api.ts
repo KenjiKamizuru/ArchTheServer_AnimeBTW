@@ -571,6 +571,11 @@ export const api = {
     return get<{ guest: { id: string; name: string } | null }>('/api/auth/guests/active', false)
   },
 
+  /** Device-profile resolution (AV-123): who is using this device and with which preferences. */
+  getActiveProfile() {
+    return get<{ profile: { mode: 'owner' | 'guest'; name: string; guestId?: string; prefs: { preferredLanguage: string | null; locale: string | null; defaultSubtitle: string | null; defaultAudio: string | null; defaultQuality: string | null; maxContentRating: string | null; theme: string | null; preferLocalPlayback: boolean | null; loginNotifications: boolean | null } } }>('/api/auth/profile/active', false)
+  },
+
   setProfileVisibility(visibility: 'public' | 'private' | 'link-only') {
     return send<{ visibility: string }>('/api/auth/profile-visibility', 'PUT', { visibility })
   },

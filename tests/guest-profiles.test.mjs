@@ -120,3 +120,44 @@ test('device profile resolution: mode, precedence, owner fallback (AV-123)', () 
   // Clearing the selection (the switch back) is pure owner-mode again.
   assert.equal(resolveDeviceProfile(user, null).mode, 'owner')
 })
+
+test('guest selection never mutates account session records (AV-123b pin)', () => {
+  // The switching invariant: select/clear only change the av_guest marker
+  // (a response cookie). The account's session records — and every other
+  // field of the user — must survive a switch untouched.
+  const user = {
+    username: 'kenji',
+    displayName: 'Kenji',
+    sessions: [
+      { hash: 'aaa', current: true, createdAt: '2026-01-01T00:00:00.000Z' },
+      { hash: 'bbb', current: false, createdAt: '2025-12-01T00:00:00.000Z' },
+    ],
+    guests: [],
+    preferences: { theme: 'dark' },
+  }
+  const sessionsBefore = JSON.stringify(user.sessions)
+  const snapshot = JSON.parse(JSON.stringify(user))
+
+  // Create + resolve a selection — neither touches session records.
+  addGuest(user, 'Kenji', { makeId: () => 'g1' })
+  const active = resolveActiveGuest(user, 'g1')
+  assert.equal(active?.name, 'Kenji')
+  assert.equal(JSON.stringify(user.sessions), sessionsBefore, 'addGuest/select resolution leaves session records untouched')
+
+  // Guest preference writes land in user.guests[].prefs only.
+  setGuestPreferences(user.guests[0], { theme: 'light' })
+  assert.equal(JSON.stringify(user.sessions), sessionsBefore, 'guest preference writes leave session records untouched')
+
+  // Device-profile resolution is pure with respect to the user.
+  resolveDeviceProfile(user, 'g1')
+  resolveDeviceProfile(user, undefined)
+  resolveDeviceProfile(user, 'g404')
+  assert.equal(JSON.stringify(user.sessions), sessionsBefore, 'device-profile resolution leaves session records untouched')
+
+  // Even guest removal mutates only the guests list — never sessions.
+  removeGuest(user, 'g1')
+  assert.equal(JSON.stringify(user.sessions), sessionsBefore, 'removeGuest leaves session records untouched')
+  assert.equal(user.guests.length, 0, 'guest list returns to baseline after removal')
+  assert.deepEqual(user.sessions, snapshot.sessions, 'sessions identical to the pre-switch snapshot')
+  assert.deepEqual(user.preferences, snapshot.preferences, 'owner preferences untouched')
+})

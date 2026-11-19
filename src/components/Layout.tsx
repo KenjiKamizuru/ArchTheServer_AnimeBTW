@@ -6,6 +6,7 @@ import {
   Bookmark,
   Building2,
   CalendarClock,
+  ChevronDown,
   Compass,
   Download,
   HardDrive,
@@ -16,6 +17,7 @@ import {
   Search,
   Settings2,
   Sparkles,
+  UserRound,
 } from 'lucide-react'
 import { artworkForTarget, focusObjectClass, useArtwork } from '../lib/artwork'
 import { useDownloads, useLibrary } from '../lib/downloads'
@@ -62,6 +64,116 @@ function Brand() {
         <span className="block text-[10px] tracking-wider text-white/35 uppercase">watch anime</span>
       </span>
     </Link>
+  )
+}
+
+// Compact "who's watching" switcher (AV-123b). Switching only changes the
+// av_guest marker — the account session survives by construction (select/clear
+// never touch session records; see guestProfiles.mjs / server/index.mjs).
+function ProfileSwitcher() {
+  const [profile, setProfile] = useState<{ mode: 'owner' | 'guest'; name: string; guestId?: string } | null>(null)
+  const [ownerName, setOwnerName] = useState<string | null>(null)
+  const [guests, setGuests] = useState<{ id: string; name: string }[]>([])
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  const refresh = () => {
+    api
+      .getActiveProfile()
+      .then((r) => setProfile(r.profile))
+      .catch(() => {})
+  }
+
+  // Silent on 401: anonymous visitors simply see no switcher.
+  useEffect(() => {
+    refresh()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const toggle = () => {
+    const next = !open
+    setOpen(next)
+    if (next) {
+      api
+        .me()
+        .then((r) => setOwnerName(r.user ? r.user.displayName || r.user.username : null))
+        .catch(() => {})
+      api
+        .listGuests()
+        .then((r) => setGuests(r.guests.map((g) => ({ id: g.id, name: g.name }))))
+        .catch(() => {})
+    }
+  }
+
+  const switchTo = async (guestId: string | null) => {
+    setBusy(true)
+    try {
+      if (guestId) await api.selectGuest(guestId)
+      else await api.clearGuest()
+      refresh()
+      setOpen(false)
+    } catch {
+      // Keep the menu open on failure so the user can retry.
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!profile) return null
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        aria-label="Switch profile"
+        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-white/70 transition hover:bg-white/5 hover:text-white"
+      >
+        <UserRound size={15} />
+        <span className="min-w-0 flex-1 truncate text-left">{profile.name}</span>
+        <ChevronDown size={13} className={`shrink-0 transition ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open ? (
+        <div className="absolute bottom-full left-0 z-20 mb-1 w-full overflow-hidden rounded-xl border border-white/10 bg-ink-850 shadow-xl">
+          <p className="px-3 pt-2.5 text-[10px] font-medium uppercase tracking-wider text-white/35">
+            Watching as
+          </p>
+          <ul className="p-1.5">
+            <li>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => switchTo(null)}
+                className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-xs transition disabled:opacity-50 ${
+                  profile.mode === 'owner' ? 'bg-white/5 text-accent' : 'text-white/70 hover:bg-white/5 hover:text-white'
+                }`}
+              >
+                <span className="min-w-0 truncate">{ownerName ?? 'Owner'}</span>
+                {profile.mode === 'owner' ? <span aria-hidden>✓</span> : null}
+              </button>
+            </li>
+            {guests.map((g) => (
+              <li key={g.id}>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => switchTo(g.id)}
+                  className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-xs transition disabled:opacity-50 ${
+                    profile.guestId === g.id ? 'bg-white/5 text-accent' : 'text-white/70 hover:bg-white/5 hover:text-white'
+                  }`}
+                >
+                  <span className="min-w-0 truncate">{g.name}</span>
+                  {profile.guestId === g.id ? <span aria-hidden>✓</span> : null}
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p className="px-3 pb-2.5 text-[10px] leading-relaxed text-white/35">
+            Switching keeps this device signed in.
+          </p>
+        </div>
+      ) : null}
+    </div>
   )
 }
 
@@ -224,6 +336,7 @@ export default function Layout() {
         </nav>
 
         <div className="mt-auto space-y-2">
+          <ProfileSwitcher />
           <NavLink
             to="/settings"
             className={({ isActive }) =>
