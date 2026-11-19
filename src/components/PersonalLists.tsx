@@ -27,9 +27,11 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [revision, setRevision] = useState(0)
+  const [pick, setPick] = useState<Entry | null>(null)
   useEffect(() => {
     let cancelled = false
     setList(null)
+    setPick(null)
     Promise.all([request<Overview>('/api/lists'), request<List>(`/api/lists/${encodeURIComponent(active)}`)])
       .then(([summary, selected]) => { if (!cancelled) { setOverview(summary); setList(selected); setError('') } })
       .catch((err: Error) => { if (!cancelled) setError(err.message) })
@@ -70,10 +72,29 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
       {list && <div className="mt-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-medium text-white">{list.name}</h3>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className={button} disabled={busy || list.count === 0} onClick={() => {
+              setBusy(true); setError('')
+              void request<{ pick: Entry | null }>(`/api/lists/${encodeURIComponent(active)}/random`)
+                .then((result) => setPick(result.pick))
+                .catch((err: Error) => setError(err.message))
+                .finally(() => setBusy(false))
+            }}>Random pick</button>
+            {(['json', 'csv'] as const).map((format) => <button key={format} type="button" className={button} disabled={busy} onClick={() => void perform(async () => {
+              const response = await fetch(`/api/lists/${encodeURIComponent(active)}/export?format=${format}`)
+              if (!response.ok) throw new Error(`Export failed (${response.status})`)
+              const blob = await response.blob()
+              const url = URL.createObjectURL(blob)
+              const anchor = document.createElement('a')
+              anchor.href = url; anchor.download = `animevault-list.${format}`; document.body.appendChild(anchor); anchor.click(); anchor.remove()
+              setTimeout(() => URL.revokeObjectURL(url), 1000)
+            })}>Export {format.toUpperCase()}</button>)}
+          </div>
           {list.custom && <button type="button" className={button} disabled={busy} onClick={() => {
             if (window.confirm(`Delete list “${list.name}”? Titles will remain in their status lists.`)) void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}`, 'DELETE'); setActive('status:planned') })
           }}>Delete list</button>}
         </div>
+        {pick && <p role="status" className="mt-3 text-sm text-white/70">Try <Link className="text-white underline" to={`/anime/${pick.mediaId}`}>{pick.media.title}</Link></p>}
         <form className="mt-3 flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); const media = bookmarks.find((item) => String(item.id) === bookmarkId); if (media) void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}/entries`, 'POST', { media }); setBookmarkId('') }) }}>
           <label className="sr-only" htmlFor="list-bookmark">Choose a bookmark to add</label>
           <select id="list-bookmark" className={input} value={bookmarkId} onChange={(e) => setBookmarkId(e.target.value)}>

@@ -1,0 +1,35 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { csvCell, exportListCsv, exportListJson } from '../server/listExport.mjs'
+
+const entry = { mediaId: 42, media: { id: 42, title: 'Title, "one"\nnext' }, status: 'watching', addedAt: 0, listIds: ['secret-other-list'] }
+const list = { id: 'status:watching', name: 'Watching', entries: [entry] }
+const parsed = JSON.parse(exportListJson(list))
+test('JSON identifies format', () => assert.equal(parsed.format, 'animevault-list'))
+test('JSON version', () => assert.equal(parsed.version, 1))
+test('JSON list name', () => assert.equal(parsed.list.name, 'Watching'))
+test('JSON default description', () => assert.equal(parsed.list.description, ''))
+test('JSON media id', () => assert.equal(parsed.list.entries[0].mediaId, 42))
+test('JSON preserves title', () => assert.equal(parsed.list.entries[0].media.title, entry.media.title))
+test('JSON preserves status', () => assert.equal(parsed.list.entries[0].status, 'watching'))
+test('JSON preserves timestamp', () => assert.equal(parsed.list.entries[0].addedAt, 0))
+test('JSON does not expose other memberships', () => assert.equal(parsed.list.entries[0].listIds, undefined))
+test('JSON handles empty list', () => assert.deepEqual(JSON.parse(exportListJson({ name: 'x', entries: [] })).list.entries, []))
+test('CSV quotes plain text', () => assert.equal(csvCell('test'), '"test"'))
+test('CSV escapes quotes', () => assert.equal(csvCell('a"b'), '"a""b"'))
+test('CSV preserves comma', () => assert.equal(csvCell('a,b'), '"a,b"'))
+test('CSV preserves newline', () => assert.equal(csvCell('a\nb'), '"a\nb"'))
+test('CSV handles null', () => assert.equal(csvCell(null), '""'))
+test('CSV neutralizes equals', () => assert.equal(csvCell('=1+1'), '"\'=1+1"'))
+test('CSV neutralizes plus', () => assert.equal(csvCell('+1'), '"\'+1"'))
+test('CSV neutralizes minus', () => assert.equal(csvCell('-1'), '"\'-1"'))
+test('CSV neutralizes at', () => assert.equal(csvCell('@SUM(A1)'), '"\'@SUM(A1)"'))
+test('CSV neutralizes leading space before formula', () => assert.equal(csvCell('  =1'), '"\'  =1"'))
+test('CSV neutralizes leading tab', () => assert.equal(csvCell('\ttext'), '"\'\ttext"'))
+test('CSV neutralizes leading carriage return', () => assert.equal(csvCell('\rtext'), '"\'\rtext"'))
+test('CSV header', () => assert.ok(exportListCsv(list).startsWith('"mediaId","title","status","addedAt"\r\n')))
+test('CSV record quotes multiline title', () => assert.ok(exportListCsv(list).includes('"Title, ""one""\nnext"')))
+test('CSV timestamp ISO format', () => assert.ok(exportListCsv(list).includes('1970-01-01T00:00:00.000Z')))
+test('CSV ends with CRLF', () => assert.ok(exportListCsv(list).endsWith('\r\n')))
+test('CSV handles empty list', () => assert.equal(exportListCsv({ entries: [] }), '"mediaId","title","status","addedAt"\r\n'))
+test('CSV neutralizes dangerous titles', () => assert.ok(exportListCsv({ entries: [{ ...entry, media: { title: '=cmd' } }] }).includes('"\'=cmd"')))

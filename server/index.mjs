@@ -11,6 +11,8 @@ import * as searchEngine from './search.mjs'
 import * as detailEngine from './detail.mjs'
 import * as kv from './kv.mjs'
 import * as listStore from './listStore.mjs'
+import { exportListJson, exportListCsv } from './listExport.mjs'
+import { pickListEntry } from './listRandom.mjs'
 import * as store from './store.mjs'
 import * as settings from './settings.mjs'
 import * as resolver from './resolver.mjs'
@@ -641,6 +643,20 @@ app.post('/api/lists', limitMutations, wrap(async (req, res) => {
 }))
 app.post('/api/lists/migrate', limitMutations, wrap(async (_req, res) => {
   res.json(await listStore.migrateBookmarks(store.list()))
+}))
+app.get('/api/lists/:id/random', wrap(async (req, res) => {
+  const list = listStore.readList(req.params.id)
+  res.setHeader('Cache-Control', 'no-store')
+  res.json({ pick: pickListEntry(list.entries) })
+}))
+app.get('/api/lists/:id/export', wrap(async (req, res) => {
+  const format = String(req.query.format ?? 'json').toLowerCase()
+  if (format !== 'json' && format !== 'csv') throw Object.assign(new Error('Unsupported export format'), { status: 400 })
+  const list = listStore.readList(req.params.id)
+  res.setHeader('Cache-Control', 'no-store')
+  res.setHeader('Content-Disposition', `attachment; filename="animevault-list.${format}"`)
+  res.type(format === 'csv' ? 'text/csv' : 'application/json')
+  res.send(format === 'csv' ? exportListCsv(list) : exportListJson(list))
 }))
 app.get('/api/lists/:id', wrap(async (req, res) => res.json(listStore.readList(req.params.id))))
 app.delete('/api/lists/:id', limitMutations, wrap(async (req, res) => {
