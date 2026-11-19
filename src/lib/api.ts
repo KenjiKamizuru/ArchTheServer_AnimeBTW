@@ -552,15 +552,29 @@ export const api = {
   },
 
   createGuest(name: string) {
-    return send<{ guest: { id: string; name: string; createdAt: number | null } }>('/api/auth/guests', 'POST', { name })
+    return send<{ guest: { id: string; name: string; createdAt: number | null; pinProtected: boolean } }>('/api/auth/guests', 'POST', { name })
   },
 
   removeGuest(id: string) {
     return send<{ ok: boolean }>(`/api/auth/guests/${encodeURIComponent(id)}`, 'DELETE')
   },
 
-  selectGuest(id: string) {
-    return send<{ guest: { id: string; name: string } }>(`/api/auth/guests/${encodeURIComponent(id)}/select`, 'POST')
+  selectGuest(id: string, pin?: string) {
+    return send<{ guest: { id: string; name: string; pinProtected: boolean } }>(
+      `/api/auth/guests/${encodeURIComponent(id)}/select`,
+      'POST',
+      pin !== undefined ? { pin } : undefined,
+    )
+  },
+
+  /** Set or change a guest's profile PIN (AV-124). */
+  setGuestPin(id: string, pin: string) {
+    return send<{ guest: { id: string; name: string; pinProtected: boolean } }>(`/api/auth/guests/${encodeURIComponent(id)}/pin`, 'PUT', { pin })
+  },
+
+  /** Remove a guest's profile PIN (AV-124). */
+  removeGuestPin(id: string) {
+    return send<{ ok: boolean }>(`/api/auth/guests/${encodeURIComponent(id)}/pin`, 'DELETE')
   },
 
   clearGuest() {

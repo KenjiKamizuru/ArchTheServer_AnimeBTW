@@ -119,11 +119,13 @@ function AccountsCard() {
   const [sessions, setSessions] = useState<{ hash: string; createdAt: number | null; expiresAt: number | null; current: boolean }[]>([])
   const [sessionsBusy, setSessionsBusy] = useState(false)
   const [sessionsError, setSessionsError] = useState<string | null>(null)
-  const [guests, setGuests] = useState<{ id: string; name: string; createdAt: number | null }[]>([])
+  const [guests, setGuests] = useState<{ id: string; name: string; createdAt: number | null; pinProtected: boolean }[]>([])
   const [activeGuestId, setActiveGuestId] = useState<string | null>(null)
   const [guestName, setGuestName] = useState('')
   const [guestBusy, setGuestBusy] = useState(false)
   const [guestError, setGuestError] = useState<string | null>(null)
+  const [pinPrompt, setPinPrompt] = useState<{ id: string; mode: 'use' | 'set' } | null>(null)
+  const [pinDraft, setPinDraft] = useState('')
 
   useEffect(() => {
     setBioDraft(user?.bio ?? '')
@@ -533,15 +535,48 @@ function AccountsCard() {
     }
   }
 
-  async function selectGuest(id: string) {
+  async function selectGuest(id: string, pin?: string) {
     setGuestBusy(true)
     setGuestError(null)
     try {
-      const res = await api.selectGuest(id)
+      const res = await api.selectGuest(id, pin)
       setActiveGuestId(res.guest.id)
+      setPinPrompt(null)
+      setPinDraft('')
       toast(`Now using the ${res.guest.name} profile`)
     } catch (err) {
+      // Keep the PIN prompt open on failure so the user can retry.
       setGuestError(err instanceof Error ? err.message : 'Could not select the guest')
+    } finally {
+      setGuestBusy(false)
+    }
+  }
+
+  async function saveGuestPin(id: string) {
+    setGuestBusy(true)
+    setGuestError(null)
+    try {
+      const res = await api.setGuestPin(id, pinDraft)
+      setGuests((prev) => prev.map((item) => (item.id === id ? { ...item, pinProtected: res.guest.pinProtected } : item)))
+      setPinPrompt(null)
+      setPinDraft('')
+      toast('Profile PIN saved')
+    } catch (err) {
+      setGuestError(err instanceof Error ? err.message : 'Could not save the PIN')
+    } finally {
+      setGuestBusy(false)
+    }
+  }
+
+  async function removeGuestPin(id: string) {
+    setGuestBusy(true)
+    setGuestError(null)
+    try {
+      await api.removeGuestPin(id)
+      setGuests((prev) => prev.map((item) => (item.id === id ? { ...item, pinProtected: false } : item)))
+      toast('Profile PIN removed')
+    } catch (err) {
+      setGuestError(err instanceof Error ? err.message : 'Could not remove the PIN')
     } finally {
       setGuestBusy(false)
     }
@@ -1030,18 +1065,53 @@ function AccountsCard() {
                     <li key={item.id} className="flex items-center gap-2 text-[11px] text-white/70">
                       <UserPlus size={11} className="shrink-0" />
                       <span className="truncate">{item.name}</span>
+                      {item.pinProtected ? (
+                        <span className="inline-flex items-center gap-1 rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-white/50">
+                          <Lock size={9} /> PIN
+                        </span>
+                      ) : null}
                       {activeGuestId === item.id ? (
                         <span className="rounded bg-accent/20 px-1.5 py-0.5 text-[10px] font-semibold text-accent">Selected</span>
                       ) : (
                         <button
                           type="button"
-                          onClick={() => void selectGuest(item.id)}
+                          onClick={() => {
+                            if (item.pinProtected) {
+                              setPinPrompt({ id: item.id, mode: 'use' })
+                              setPinDraft('')
+                              setGuestError(null)
+                            } else {
+                              void selectGuest(item.id)
+                            }
+                          }}
                           disabled={guestBusy}
                           className="rounded-lg px-2 py-1 text-white/50 transition hover:bg-white/5 hover:text-white disabled:opacity-40"
                         >
                           Use
                         </button>
                       )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPinPrompt({ id: item.id, mode: 'set' })
+                          setPinDraft('')
+                          setGuestError(null)
+                        }}
+                        disabled={guestBusy}
+                        className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-white/40 transition hover:bg-white/5 hover:text-white disabled:opacity-40"
+                      >
+                        <KeyRound size={11} /> {item.pinProtected ? 'Change PIN' : 'Set PIN'}
+                      </button>
+                      {item.pinProtected ? (
+                        <button
+                          type="button"
+                          onClick={() => void removeGuestPin(item.id)}
+                          disabled={guestBusy}
+                          className="rounded-lg px-2 py-1 text-white/40 transition hover:bg-white/5 hover:text-white disabled:opacity-40"
+                        >
+                          Remove PIN
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         onClick={() => void removeGuest(item.id)}
@@ -1053,6 +1123,46 @@ function AccountsCard() {
                     </li>
                   ))}
                 </ul>
+              ) : null}
+              {pinPrompt ? (
+                <form
+                  className="mt-2 flex items-center gap-2"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    if (pinPrompt.mode === 'use') void selectGuest(pinPrompt.id, pinDraft)
+                    else void saveGuestPin(pinPrompt.id)
+                  }}
+                >
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    maxLength={6}
+                    placeholder={pinPrompt.mode === 'use' ? 'Profile PIN' : 'New PIN (4–6 digits)'}
+                    value={pinDraft}
+                    onChange={(event) => setPinDraft(event.target.value)}
+                    className="w-40 rounded-lg border border-white/10 bg-ink-900 px-2.5 py-1.5 text-[11px] text-white outline-none focus:border-accent/60"
+                  />
+                  <button
+                    type="submit"
+                    disabled={guestBusy || !pinDraft.trim()}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1.5 text-[11px] font-semibold text-black transition disabled:opacity-40"
+                  >
+                    {guestBusy ? <Loader2 size={12} className="animate-spin" /> : <KeyRound size={12} />}
+                    {pinPrompt.mode === 'use' ? 'Unlock & use' : 'Save PIN'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPinPrompt(null)
+                      setPinDraft('')
+                      setGuestError(null)
+                    }}
+                    className="rounded-lg px-2 py-1.5 text-[11px] text-white/50 transition hover:bg-white/5 hover:text-white"
+                  >
+                    Cancel
+                  </button>
+                </form>
               ) : null}
               {guestError ? <p className="mt-2 text-[11px] text-red-300">{guestError}</p> : null}
             </div>

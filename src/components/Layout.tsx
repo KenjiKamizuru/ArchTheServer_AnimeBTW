@@ -13,6 +13,7 @@ import {
   ImagePlus,
   LayoutGrid,
   LibraryBig,
+  Lock,
   Play,
   Search,
   Settings2,
@@ -73,9 +74,12 @@ function Brand() {
 function ProfileSwitcher() {
   const [profile, setProfile] = useState<{ mode: 'owner' | 'guest'; name: string; guestId?: string } | null>(null)
   const [ownerName, setOwnerName] = useState<string | null>(null)
-  const [guests, setGuests] = useState<{ id: string; name: string }[]>([])
+  const [guests, setGuests] = useState<{ id: string; name: string; pinProtected: boolean }[]>([])
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [pinPromptId, setPinPromptId] = useState<string | null>(null)
+  const [pinDraft, setPinDraft] = useState('')
+  const [switchError, setSwitchError] = useState<string | null>(null)
 
   const refresh = () => {
     api
@@ -100,20 +104,24 @@ function ProfileSwitcher() {
         .catch(() => {})
       api
         .listGuests()
-        .then((r) => setGuests(r.guests.map((g) => ({ id: g.id, name: g.name }))))
+        .then((r) => setGuests(r.guests.map((g) => ({ id: g.id, name: g.name, pinProtected: g.pinProtected }))))
         .catch(() => {})
     }
   }
 
-  const switchTo = async (guestId: string | null) => {
+  const switchTo = async (guestId: string | null, pin?: string) => {
     setBusy(true)
+    setSwitchError(null)
     try {
-      if (guestId) await api.selectGuest(guestId)
+      if (guestId) await api.selectGuest(guestId, pin)
       else await api.clearGuest()
+      setPinPromptId(null)
+      setPinDraft('')
       refresh()
       setOpen(false)
-    } catch {
-      // Keep the menu open on failure so the user can retry.
+    } catch (err) {
+      // Keep the menu (and the PIN prompt) open on failure so the user can retry.
+      setSwitchError(err instanceof Error ? err.message : 'Could not switch profile')
     } finally {
       setBusy(false)
     }
@@ -157,17 +165,57 @@ function ProfileSwitcher() {
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={() => switchTo(g.id)}
+                  onClick={() => {
+                    if (g.pinProtected && pinPromptId !== g.id) {
+                      setPinPromptId(g.id)
+                      setPinDraft('')
+                      setSwitchError(null)
+                    } else {
+                      void switchTo(g.id)
+                    }
+                  }}
                   className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-xs transition disabled:opacity-50 ${
                     profile.guestId === g.id ? 'bg-white/5 text-accent' : 'text-white/70 hover:bg-white/5 hover:text-white'
                   }`}
                 >
-                  <span className="min-w-0 truncate">{g.name}</span>
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span className="min-w-0 truncate">{g.name}</span>
+                    {g.pinProtected ? <Lock size={10} className="shrink-0 text-white/40" /> : null}
+                  </span>
                   {profile.guestId === g.id ? <span aria-hidden>✓</span> : null}
                 </button>
+                {g.pinProtected && pinPromptId === g.id ? (
+                  <form
+                    className="flex items-center gap-1.5 px-2.5 pb-2"
+                    onSubmit={(event) => {
+                      event.preventDefault()
+                      void switchTo(g.id, pinDraft)
+                    }}
+                  >
+                    <input
+                      type="password"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      maxLength={6}
+                      placeholder="PIN"
+                      aria-label={`PIN for ${g.name}`}
+                      value={pinDraft}
+                      onChange={(event) => setPinDraft(event.target.value)}
+                      className="w-20 rounded-lg border border-white/10 bg-ink-900 px-2 py-1 text-[11px] text-white outline-none focus:border-accent/60"
+                    />
+                    <button
+                      type="submit"
+                      disabled={busy || !pinDraft.trim()}
+                      className="rounded-lg bg-accent px-2 py-1 text-[10px] font-semibold text-black transition disabled:opacity-40"
+                    >
+                      Unlock
+                    </button>
+                  </form>
+                ) : null}
               </li>
             ))}
           </ul>
+          {switchError ? <p className="px-3 pb-2 text-[10px] text-red-300">{switchError}</p> : null}
           <p className="px-3 pb-2.5 text-[10px] leading-relaxed text-white/35">
             Switching keeps this device signed in.
           </p>
