@@ -18,7 +18,7 @@ import { focusObjectClass, removeArtwork, useArtwork } from '../lib/artwork'
 import { refreshDownloads, refreshLibrary } from '../lib/downloads'
 import { saveSettings, useSettings } from '../lib/settings'
 import { ImdbArtworkModal } from '../components/ImdbArtworkModal'
-import { UserPlus, LogIn, LogOut, KeyRound, Send, Fingerprint } from 'lucide-react'
+import { UserPlus, LogIn, LogOut, KeyRound, Send, Fingerprint, Shield } from 'lucide-react'
 import { passkeysSupported, registerPasskeyCeremony, signInWithPasskey } from '../lib/passkeys'
 import type { PasskeyCredential } from '../types'
 import type { RegisteredUser } from '../types'
@@ -80,6 +80,11 @@ function AccountsCard() {
   const [passkeyBusy, setPasskeyBusy] = useState(false)
   const [passkeyError, setPasskeyError] = useState<string | null>(null)
   const [passkeySupported] = useState(() => passkeysSupported())
+  const [twoFactorEnabled, setTwoFactorEnabled] = useState(false)
+  const [twoFactorSetup, setTwoFactorSetup] = useState<{ secret: string; otpauthUrl: string } | null>(null)
+  const [twoFactorCode, setTwoFactorCode] = useState('')
+  const [twoFactorBusy, setTwoFactorBusy] = useState(false)
+  const [twoFactorError, setTwoFactorError] = useState<string | null>(null)
 
   useEffect(() => {
     setBioDraft(user?.bio ?? '')
@@ -94,12 +99,18 @@ function AccountsCard() {
   useEffect(() => {
     if (!user) {
       setPasskeys([])
+      setTwoFactorEnabled(false)
+      setTwoFactorSetup(null)
       return
     }
     api
       .listPasskeys()
       .then((res) => setPasskeys(res.passkeys))
       .catch(() => setPasskeys([]))
+    api
+      .twoFactorStatus()
+      .then((res) => setTwoFactorEnabled(res.enabled))
+      .catch(() => setTwoFactorEnabled(false))
   }, [user])
 
   async function signIn() {
@@ -168,6 +179,52 @@ function AccountsCard() {
       setPasskeyError(err instanceof Error ? err.message : 'Could not remove the passkey')
     } finally {
       setPasskeyBusy(false)
+    }
+  }
+
+  async function startTwoFactorSetup() {
+    setTwoFactorBusy(true)
+    setTwoFactorError(null)
+    try {
+      const setup = await api.twoFactorSetup()
+      setTwoFactorSetup(setup)
+      setTwoFactorCode('')
+    } catch (err) {
+      setTwoFactorError(err instanceof Error ? err.message : 'Could not start two-factor setup')
+    } finally {
+      setTwoFactorBusy(false)
+    }
+  }
+
+  async function enableTwoFactor() {
+    setTwoFactorBusy(true)
+    setTwoFactorError(null)
+    try {
+      await api.twoFactorEnable(twoFactorCode.trim())
+      setTwoFactorEnabled(true)
+      setTwoFactorSetup(null)
+      setTwoFactorCode('')
+      toast('Two-factor authentication enabled')
+    } catch (err) {
+      setTwoFactorError(err instanceof Error ? err.message : 'Could not enable two-factor authentication')
+    } finally {
+      setTwoFactorBusy(false)
+    }
+  }
+
+  async function disableTwoFactor() {
+    setTwoFactorBusy(true)
+    setTwoFactorError(null)
+    try {
+      await api.twoFactorDisable(twoFactorCode.trim())
+      setTwoFactorEnabled(false)
+      setTwoFactorSetup(null)
+      setTwoFactorCode('')
+      toast('Two-factor authentication disabled')
+    } catch (err) {
+      setTwoFactorError(err instanceof Error ? err.message : 'Could not disable two-factor authentication')
+    } finally {
+      setTwoFactorBusy(false)
     }
   }
 
@@ -370,6 +427,85 @@ function AccountsCard() {
                 {passkeyError ? <p className="mt-2 text-[11px] text-red-300">{passkeyError}</p> : null}
               </div>
             ) : null}
+            <div className="mt-3 border-t border-white/5 pt-3">
+              <h3 className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-white/30">
+                <Shield size={11} /> Two-factor authentication
+              </h3>
+              <p className="mt-1 text-[11px] text-white/50">
+                {twoFactorEnabled
+                  ? 'Enabled — signing in with a password also requires a code from your authenticator app.'
+                  : 'Optional — protect password sign-in with a code from an authenticator app.'}
+              </p>
+              {twoFactorSetup && !twoFactorEnabled ? (
+                <div className="mt-2 space-y-2">
+                  <p className="text-[11px] text-white/70">
+                    Add this secret to your authenticator app (or open the link), then enter the 6-digit code:
+                  </p>
+                  <p className="select-all rounded-lg bg-ink-800 px-2.5 py-1.5 font-mono text-[11px] text-white ring-1 ring-white/10">
+                    {twoFactorSetup.secret}
+                  </p>
+                  <a
+                    href={twoFactorSetup.otpauthUrl}
+                    className="inline-flex items-center gap-1 text-[11px] text-accent underline underline-offset-2"
+                  >
+                    <ExternalLink size={11} /> Open in authenticator app
+                  </a>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      value={twoFactorCode}
+                      onChange={(event) => setTwoFactorCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                      placeholder="123456"
+                      className="w-28 rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void enableTwoFactor()}
+                      disabled={twoFactorBusy || twoFactorCode.length !== 6}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[11px] font-semibold text-black transition hover:bg-accent-600 disabled:opacity-40"
+                    >
+                      {twoFactorBusy ? <Loader2 size={12} className="animate-spin" /> : <Shield size={12} />} Enable
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  {twoFactorEnabled ? (
+                    <>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        value={twoFactorCode}
+                        onChange={(event) => setTwoFactorCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                        placeholder="123456"
+                        className="w-28 rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void disableTwoFactor()}
+                        disabled={twoFactorBusy || twoFactorCode.length !== 6}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-white/5 px-3 py-1.5 text-[11px] font-semibold text-white ring-1 ring-white/10 transition hover:bg-white/10 disabled:opacity-40"
+                      >
+                        {twoFactorBusy ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />} Disable
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => void startTwoFactorSetup()}
+                      disabled={twoFactorBusy}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[11px] font-semibold text-black transition hover:bg-accent-600 disabled:opacity-40"
+                    >
+                      {twoFactorBusy ? <Loader2 size={12} className="animate-spin" /> : <Shield size={12} />} Set up 2FA
+                    </button>
+                  )}
+                </div>
+              )}
+              {twoFactorError ? <p className="mt-2 text-[11px] text-red-300">{twoFactorError}</p> : null}
+            </div>
           </div>
           </>
         ) : (

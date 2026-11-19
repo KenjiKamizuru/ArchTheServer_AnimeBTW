@@ -482,6 +482,22 @@ export const api = {
     return send<{ ok: boolean }>(`/api/auth/passkey/${encodeURIComponent(credentialId)}`, 'DELETE')
   },
 
+  twoFactorStatus() {
+    return get<{ enabled: boolean; confirmedAt: number | null }>('/api/auth/2fa', false)
+  },
+
+  twoFactorSetup() {
+    return send<{ secret: string; otpauthUrl: string }>('/api/auth/2fa/setup', 'POST')
+  },
+
+  twoFactorEnable(code: string) {
+    return send<{ enabled: boolean }>('/api/auth/2fa/enable', 'POST', { code })
+  },
+
+  twoFactorDisable(code: string) {
+    return send<{ enabled: boolean }>('/api/auth/2fa/disable', 'POST', { code })
+  },
+
   resolverStatus() {
     return get<ResolverStatus>('/api/resolver/status', false)
   },
