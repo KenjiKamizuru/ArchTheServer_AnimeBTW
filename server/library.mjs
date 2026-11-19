@@ -25,6 +25,7 @@ import {
   sanitizeFileSegment,
   verifyRegularLibraryFile,
 } from './security.mjs'
+import { candidateKeys } from './metadata/libraryMatch.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const DATA_DIR = path.join(ROOT, 'data')
@@ -733,15 +734,7 @@ export async function listForAnime({ mediaId, title, romaji, english } = {}) {
   const numericId = Number(mediaId)
   const hasId = Number.isInteger(numericId) && numericId > 0
 
-  const titleKeys = new Set()
-  for (const candidate of [title, romaji, english]) {
-    if (!candidate) continue
-    titleKeys.add(normalizeLookupKey(candidate))
-    const inferred = inferSeriesAndSeason(candidate)
-    titleKeys.add(normalizeLookupKey(inferred.seriesTitle))
-    titleKeys.add(normalizeLookupKey(inferred.seriesFolder))
-  }
-  titleKeys.delete('')
+  const titleKeys = candidateKeys([title, romaji, english], { infer: inferSeriesAndSeason })
 
   const inferredTarget = inferSeriesAndSeason(title || romaji || english)
   const expectedSeason = inferredTarget.season
