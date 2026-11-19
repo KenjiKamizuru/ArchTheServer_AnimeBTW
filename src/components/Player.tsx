@@ -337,6 +337,10 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
             return
           }
 
+          const headerDuration = Number(response.headers.get('X-Stream-Duration'))
+          const streamDuration =
+            Number.isFinite(headerDuration) && headerDuration > 0 ? headerDuration : null
+
           const reader = response.body.getReader()
           for (;;) {
             while (
@@ -368,6 +372,17 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
               } catch {
                 fallbackToDirect()
                 return
+              }
+              if (
+                streamDuration !== null &&
+                mediaSource.readyState === 'open' &&
+                !Number.isFinite(mediaSource.duration)
+              ) {
+                try {
+                  mediaSource.duration = streamDuration
+                } catch {
+                  /* ignore if browser rejects before init segment */
+                }
               }
               initChunks.length = 0
               sourceBuffer.addEventListener('updateend', flush)

@@ -815,6 +815,7 @@ app.post(
       slug: result.slug,
       height: result.height,
       hls: Boolean(result.hls),
+      durationSec: result.durationSec ?? null,
       hasSubtitle: Boolean(result.subtitleUrl),
     })
   }),
@@ -872,6 +873,9 @@ app.get(
     const safeAudio = stream.audioUrl
       ? (await validateRemoteUrl(stream.audioUrl, { requireApprovedHost: false })).href
       : null
+    if (Number.isFinite(stream.durationSec) && stream.durationSec > 0) {
+      res.setHeader('X-Stream-Duration', String(stream.durationSec))
+    }
     playback.remux(req, res, {
       url: safeVideo.href,
       audioUrl: safeAudio,

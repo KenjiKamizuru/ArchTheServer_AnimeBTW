@@ -241,6 +241,17 @@ function chooseAudioRendition(renditions, audioGroup, { dub = false } = {}) {
   return picked?.uri ?? null
 }
 
+function sumHlsDuration(text) {
+  let total = 0
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    const m = line.trim().match(/^#EXTINF:\s*([0-9]+(?:\.[0-9]+)?)/i)
+    if (!m) continue
+    const sec = Number.parseFloat(m[1])
+    if (Number.isFinite(sec) && sec > 0) total += sec
+  }
+  return total > 0 ? Math.round(total * 100) / 100 : null
+}
+
 /**
  * Parses an HLS master playlist, selecting the requested video variant and any
  * separate `EXT-X-MEDIA:TYPE=AUDIO` rendition attached to it.
@@ -386,11 +397,21 @@ export async function resolve(query, { resultIndex = 1, episode = 1, quality = '
       const masterText = await html(master, referer)
       const selected = parseMasterPlaylist(masterText, master, { quality: wantedQuality, dub: wantDub })
       if (!selected) continue
+      let durationSec = /^#EXTINF:/im.test(masterText) ? sumHlsDuration(masterText) : null
+      if (durationSec === null && selected.hls) {
+        try {
+          const variantText = await html(selected.videoUrl, referer)
+          durationSec = sumHlsDuration(variantText)
+        } catch {
+          durationSec = null
+        }
+      }
       out = {
         videoUrl: selected.videoUrl,
         audioUrl: selected.audioUrl,
         height: selected.height,
         hls: selected.hls,
+        durationSec,
         subtitleUrl: safeSubUrl,
         referer,
         title: chosen.title,

@@ -213,6 +213,7 @@ export interface WatchResult {
   resolved: boolean
   height: number
   hls: boolean
+  durationSec?: number | null
   hasSubtitle?: boolean
   title: string
   slug: string
