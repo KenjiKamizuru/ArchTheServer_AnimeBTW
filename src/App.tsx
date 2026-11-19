@@ -15,6 +15,7 @@ import {
   DiscoverPage,
   DownloadedPage,
   DownloadsPage,
+  HistoryPage,
   HomePage,
   IndexPage,
   ProfilePage,
@@ -85,6 +86,7 @@ export default function App() {
               <Route path="downloads" element={<LazyPage><DownloadsPage /></LazyPage>} />
               <Route path="downloaded" element={<LazyPage><DownloadedPage /></LazyPage>} />
               <Route path="bookmarks" element={<LazyPage><BookmarksPage /></LazyPage>} />
+              <Route path="history" element={<LazyPage><HistoryPage /></LazyPage>} />
               <Route path="settings" element={<LazyPage><SettingsPage /></LazyPage>} />
               <Route path="profile/:userId" element={<LazyPage><ProfilePage /></LazyPage>} />
               <Route path="admin/inspect" element={<LazyPage><AdminInspectPage /></LazyPage>} />

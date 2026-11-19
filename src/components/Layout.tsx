@@ -10,6 +10,7 @@ import {
   Compass,
   Download,
   HardDrive,
+  History as HistoryIcon,
   ImagePlus,
   LayoutGrid,
   LibraryBig,
@@ -34,6 +35,7 @@ const DESKTOP_NAV = [
   { to: '/downloads', label: 'Downloads', icon: Download, end: false, badgeKey: 'queue' as const },
   { to: '/downloaded', label: 'Downloaded', icon: HardDrive, end: false, badgeKey: 'library' as const },
   { to: '/bookmarks', label: 'Bookmarks', icon: Bookmark, end: false, badgeKey: null },
+  { to: '/history', label: 'History', icon: HistoryIcon, end: false, badgeKey: null },
 ]
 
 const MOBILE_NAV = [
@@ -42,6 +44,7 @@ const MOBILE_NAV = [
   { to: '/discover', short: 'Discover', icon: Compass, end: false, matchLibrary: false },
   { to: '/downloads', short: 'Downloads', icon: Download, end: false, matchLibrary: true },
   { to: '/bookmarks', short: 'Saved', icon: Bookmark, end: false, matchLibrary: false },
+  { to: '/history', short: 'History', icon: HistoryIcon, end: false, matchLibrary: false },
 ]
 
 function Brand() {
