@@ -498,6 +498,14 @@ export const api = {
     return send<{ enabled: boolean }>('/api/auth/2fa/disable', 'POST', { code })
   },
 
+  recoveryCodesStatus() {
+    return get<{ total: number; remaining: number }>('/api/auth/recovery-codes', false)
+  },
+
+  regenerateRecoveryCodes() {
+    return send<{ codes: string[] }>('/api/auth/recovery-codes', 'POST')
+  },
+
   resolverStatus() {
     return get<ResolverStatus>('/api/resolver/status', false)
   },

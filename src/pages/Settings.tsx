@@ -85,6 +85,10 @@ function AccountsCard() {
   const [twoFactorCode, setTwoFactorCode] = useState('')
   const [twoFactorBusy, setTwoFactorBusy] = useState(false)
   const [twoFactorError, setTwoFactorError] = useState<string | null>(null)
+  const [recoveryStatus, setRecoveryStatus] = useState<{ total: number; remaining: number } | null>(null)
+  const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null)
+  const [recoveryBusy, setRecoveryBusy] = useState(false)
+  const [recoveryError, setRecoveryError] = useState<string | null>(null)
 
   useEffect(() => {
     setBioDraft(user?.bio ?? '')
@@ -111,6 +115,11 @@ function AccountsCard() {
       .twoFactorStatus()
       .then((res) => setTwoFactorEnabled(res.enabled))
       .catch(() => setTwoFactorEnabled(false))
+    api
+      .recoveryCodesStatus()
+      .then((res) => setRecoveryStatus(res))
+      .catch(() => setRecoveryStatus(null))
+    setRecoveryCodes(null)
   }, [user])
 
   async function signIn() {
@@ -225,6 +234,34 @@ function AccountsCard() {
       setTwoFactorError(err instanceof Error ? err.message : 'Could not disable two-factor authentication')
     } finally {
       setTwoFactorBusy(false)
+    }
+  }
+
+  async function regenerateRecoveryCodes() {
+    if (recoveryStatus && recoveryStatus.total > 0) {
+      const confirmed = window.confirm('Generating new codes invalidates all previous ones. Continue?')
+      if (!confirmed) return
+    }
+    setRecoveryBusy(true)
+    setRecoveryError(null)
+    try {
+      const res = await api.regenerateRecoveryCodes()
+      setRecoveryCodes(res.codes)
+      setRecoveryStatus({ total: res.codes.length, remaining: res.codes.length })
+    } catch (err) {
+      setRecoveryError(err instanceof Error ? err.message : 'Could not generate recovery codes')
+    } finally {
+      setRecoveryBusy(false)
+    }
+  }
+
+  async function copyRecoveryCodes() {
+    if (!recoveryCodes) return
+    try {
+      await navigator.clipboard.writeText(recoveryCodes.join('\n'))
+      toast('Recovery codes copied')
+    } catch {
+      toast('Could not copy — select the codes manually', 'err')
     }
   }
 
@@ -505,6 +542,54 @@ function AccountsCard() {
                 </div>
               )}
               {twoFactorError ? <p className="mt-2 text-[11px] text-red-300">{twoFactorError}</p> : null}
+            </div>
+            <div className="mt-3 border-t border-white/5 pt-3">
+              <h3 className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-white/30">
+                <KeyRound size={11} /> Recovery codes
+              </h3>
+              <p className="mt-1 text-[11px] text-white/50">
+                {recoveryStatus && recoveryStatus.total > 0
+                  ? `${recoveryStatus.remaining} of ${recoveryStatus.total} codes remaining — each code works once if you lose your authenticator.`
+                  : 'Single-use backup codes for two-factor sign-in when your authenticator is unavailable.'}
+              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void regenerateRecoveryCodes()}
+                  disabled={recoveryBusy}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[11px] font-semibold text-black transition hover:bg-accent-600 disabled:opacity-40"
+                >
+                  {recoveryBusy ? <Loader2 size={12} className="animate-spin" /> : <KeyRound size={12} />}{' '}
+                  {recoveryStatus && recoveryStatus.total > 0 ? 'Generate new codes' : 'Generate recovery codes'}
+                </button>
+                {recoveryCodes ? (
+                  <button
+                    type="button"
+                    onClick={() => void copyRecoveryCodes()}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-white/5 px-3 py-1.5 text-[11px] font-semibold text-white ring-1 ring-white/10 transition hover:bg-white/10"
+                  >
+                    <Send size={12} /> Copy
+                  </button>
+                ) : null}
+              </div>
+              {recoveryCodes ? (
+                <div className="mt-2">
+                  <p className="text-[11px] font-medium text-amber-200">
+                    Store these somewhere safe — they are shown only once and each works exactly once.
+                  </p>
+                  <ul className="mt-1 grid grid-cols-2 gap-1">
+                    {recoveryCodes.map((code) => (
+                      <li
+                        key={code}
+                        className="select-all rounded-lg bg-ink-800 px-2.5 py-1 font-mono text-[11px] text-white ring-1 ring-white/10"
+                      >
+                        {code}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {recoveryError ? <p className="mt-2 text-[11px] text-red-300">{recoveryError}</p> : null}
             </div>
           </div>
           </>
