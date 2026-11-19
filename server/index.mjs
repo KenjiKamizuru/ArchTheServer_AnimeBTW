@@ -47,7 +47,7 @@ import { normalizeShowActivity, buildActivitySummary } from './profileActivity.m
 import { buildAccountExport } from './accountExport.mjs'
 import { validateDeletionConfirmation, DELETION_ARTIFACTS } from './accountDeletion.mjs'
 import { listUserSessions, shouldRevoke, isSessionHash } from './sessionManagement.mjs'
-import { listGuests, addGuest, removeGuest } from './guestProfiles.mjs'
+import { listGuests, addGuest, removeGuest, resolveActiveGuest, guestPreferencesView, setGuestPreferences } from './guestProfiles.mjs'
 import { atomicWriteFile } from './security.mjs'
 
 const EMAIL_VERIFY_TTL_MS = 24 * 60 * 60 * 1000
@@ -1376,6 +1376,7 @@ app.delete(
 // Guest profiles (AV-122a): named selection labels for shared devices,
 // owned and managed by the account. Not accounts — no credentials, no
 // sessions of their own (profile switching is AV-123).
+const GUEST_COOKIE = 'av_guest'
 app.get(
   '/api/auth/guests',
   wrap(async (req, res) => {
@@ -1405,6 +1406,64 @@ app.delete(
     if (!result.ok) throw Object.assign(new Error(result.error), { status: 404 })
     await kv.set('users', users)
     res.json({ ok: true })
+  }),
+)
+
+// Guest usage semantics (AV-122b): the `av_guest` cookie is a non-secret
+// selection marker, validated against the signed-in account's guest list on
+// every use; the account session is what authorizes.
+app.get(
+  '/api/auth/guests/active',
+  wrap(async (req, res) => {
+    const { user } = await requireSessionUser(req)
+    const guestId = readCookie(req, GUEST_COOKIE)
+    const guest = guestId ? resolveActiveGuest(user, guestId) : null
+    res.json({ guest })
+  }),
+)
+
+app.post(
+  '/api/auth/guests/:id/select',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user } = await requireSessionUser(req)
+    const guest = resolveActiveGuest(user, req.params.id)
+    if (!guest) throw Object.assign(new Error('Guest not found'), { status: 404 })
+    res.cookie(GUEST_COOKIE, guest.id, { httpOnly: true, sameSite: 'lax', maxAge: 30 * 24 * 60 * 60 * 1000 })
+    res.json({ guest })
+  }),
+)
+
+app.post(
+  '/api/auth/guests/clear',
+  limitMutations,
+  wrap(async (req, res) => {
+    res.clearCookie(GUEST_COOKIE)
+    res.json({ ok: true })
+  }),
+)
+
+app.get(
+  '/api/auth/guests/:id/preferences',
+  wrap(async (req, res) => {
+    const { user } = await requireSessionUser(req)
+    const guest = resolveActiveGuest(user, req.params.id)
+    if (!guest) throw Object.assign(new Error('Guest not found'), { status: 404 })
+    res.json({ prefs: guestPreferencesView(user.guests.find((entry) => entry.id === guest.id)) })
+  }),
+)
+
+app.put(
+  '/api/auth/guests/:id/preferences',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user, users } = await requireSessionUser(req)
+    const record = (user.guests ?? []).find((entry) => entry?.id === String(req.params.id ?? ''))
+    if (!record) throw Object.assign(new Error('Guest not found'), { status: 404 })
+    const result = setGuestPreferences(record, req.body)
+    if (!result.ok) throw Object.assign(new Error(result.error), { status: 400 })
+    await kv.set('users', users)
+    res.json({ prefs: result.value })
   }),
 )
 

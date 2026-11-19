@@ -1,4 +1,5 @@
-// Guest profiles for household visitors (AV-122a). Pure; no I/O.
+// Guest profiles for household visitors (AV-122a: model + owner CRUD;
+// AV-122b: usage semantics). Pure; no I/O.
 //
 // Scope decisions (recorded per task rules):
 // - Guests are NAMED PROFILES ON AN ACCOUNT record (`guests` array), created
@@ -11,8 +12,17 @@
 //   case-insensitively within the account.
 // - Ids are random hex — never derived from the name (renaming-safe, no
 //   enumeration ordering).
+// - Usage (AV-122b): a shared device carries a `av_guest` cookie with the
+//   guest id — a NON-SECRET MARKER, never an access credential (recorded:
+//   forging a guest id grants nothing; the value is always validated against
+//   the signed-in account's guest list and the account session is what
+//   authorizes). It is revocable two ways: removing the guest, or clearing
+//   the cookie. Each guest carries its own `prefs` object validated by the
+//   shared userPreferences rules (theme/subtitles/audio/quality/…), kept
+//   separate from the owner's preferences.
 
 import { randomBytes } from 'node:crypto'
+import { normalizePreferencesUpdate } from './userPreferences.mjs'
 
 export const MAX_GUESTS = 6
 export const MAX_GUEST_NAME = 24
@@ -59,4 +69,34 @@ export function removeGuest(user, guestId) {
   if (!guests.some((entry) => entry?.id === id)) return { ok: false, error: 'Guest not found' }
   user.guests = guests.filter((entry) => entry?.id !== id)
   return { ok: true }
+}
+
+/** Resolve the selection cookie value against the account's guest list. */
+export function resolveActiveGuest(user, guestId) {
+  const id = String(guestId ?? '')
+  const record = (Array.isArray(user?.guests) ? user.guests : []).find((entry) => entry?.id === id)
+  return record ? { ...publicGuest(record), prefs: guestPreferencesView(record) } : null
+}
+
+export function guestPreferencesView(record) {
+  const prefs = record?.prefs ?? {}
+  return {
+    preferredLanguage: prefs.preferredLanguage ?? null,
+    locale: prefs.locale ?? null,
+    defaultSubtitle: prefs.defaultSubtitle ?? null,
+    defaultAudio: prefs.defaultAudio ?? null,
+    defaultQuality: prefs.defaultQuality ?? null,
+    maxContentRating: prefs.maxContentRating ?? null,
+    theme: prefs.theme ?? null,
+    preferLocalPlayback: prefs.preferLocalPlayback ?? null,
+    loginNotifications: null, // guests never receive account mail
+  }
+}
+
+/** Update a guest's preferences with the shared strict rules. */
+export function setGuestPreferences(record, body) {
+  const parsed = normalizePreferencesUpdate(body)
+  if (!parsed.ok) return parsed
+  record.prefs = { ...(record.prefs ?? {}), ...parsed.value }
+  return { ok: true, value: guestPreferencesView(record) }
 }
