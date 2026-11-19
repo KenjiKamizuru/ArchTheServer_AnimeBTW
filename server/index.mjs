@@ -33,6 +33,7 @@ import {
   removePasskey,
 } from './passkeyAuth.mjs'
 import { beginTwoFactorSetup, confirmTwoFactorSetup, disableTwoFactor, verifyTwoFactor } from './twoFactor.mjs'
+import { issueRecoveryCodes, recoveryCodesStatus } from './recoveryCodes.mjs'
 
 const EMAIL_VERIFY_TTL_MS = 24 * 60 * 60 * 1000
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000
@@ -1095,6 +1096,27 @@ app.post(
     const result = disableTwoFactor(user, req.body?.code)
     await kv.set('users', users)
     res.json(result)
+  }),
+)
+
+// Recovery codes (AV-107): single-use 2FA backup factors, stored hashed.
+// Plaintext is returned exactly once, at generation; only status afterwards.
+app.get(
+  '/api/auth/recovery-codes',
+  wrap(async (req, res) => {
+    const { user } = await requireSessionUser(req)
+    res.json(recoveryCodesStatus(user))
+  }),
+)
+
+app.post(
+  '/api/auth/recovery-codes',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user, users } = await requireSessionUser(req)
+    const codes = issueRecoveryCodes(user)
+    await kv.set('users', users)
+    res.json({ codes })
   }),
 )
 

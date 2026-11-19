@@ -11,6 +11,7 @@
 // - Login must present a valid code when twoFactorEnabled (see index.mjs).
 
 import { generateTotpSecret, verifyTotp, otpauthUrl } from './totp.mjs'
+import { consumeRecoveryCode, normalizeRecoveryCode } from './recoveryCodes.mjs'
 
 const invalid = () => Object.assign(new Error('Invalid two-factor code'), { status: 401 })
 
@@ -43,9 +44,13 @@ export function disableTwoFactor(user, code, { now = Date.now() } = {}) {
   return { enabled: false }
 }
 
-/** Login gate: when enabled, the code must verify. */
+/** Login gate: when enabled, a TOTP code — or a single-use recovery code
+ * (AV-107 backup factor) — must verify. */
 export function verifyTwoFactor(user, code, { now = Date.now() } = {}) {
   if (!user.twoFactorEnabled) return { ok: true }
-  if (!verifyTotp(user.twoFactorSecret, code, { time: Math.floor(now / 1000) })) throw invalid()
-  return { ok: true }
+  if (verifyTotp(user.twoFactorSecret, code, { time: Math.floor(now / 1000) })) return { ok: true }
+  if (normalizeRecoveryCode(code).length === 16 && user.recoveryCodes?.length) {
+    return consumeRecoveryCode(user, code) // throws a generic 401 on failure
+  }
+  throw invalid()
 }
