@@ -1735,6 +1735,12 @@ app.post('/api/lists/:id/move', limitMutations, wrap(async (req, res) => {
   res.json(await listStore.moveEntries(req.params.id, req.body?.to, req.body?.mediaIds))
 }))
 
+// Cover artwork selection (AV-129): 1–4 member titles; [] clears.
+app.put('/api/lists/:id/cover', limitMutations, wrap(async (req, res) => {
+  const list = await listStore.setCover(req.params.id, req.body?.mediaIds)
+  res.json({ ...list, entries: sortListEntries(list.entries, 'order', list.order), sort: 'order' })
+}))
+
 // Franchise grouping for a saved list (AV-133b): refetches RELATION data
 // (online relationship data, batched + cached) for the list's media ids —
 // never title matching.

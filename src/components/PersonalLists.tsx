@@ -4,7 +4,7 @@ import { GripVertical } from 'lucide-react'
 import type { Media } from '../types'
 import { saveSettings, useSettings } from '../lib/settings'
 
-type ListSummary = { id: string; name: string; count: number; description?: string }
+type ListSummary = { id: string; name: string; count: number; description?: string; cover?: number[] }
 type Entry = { mediaId: number; media: Media; status: string | null; note: string; priority: number | null; rating: number | null }
 type Overview = { statuses: ListSummary[]; lists: ListSummary[]; totalEntries: number; limits: { maxItems: number; maxLists: number } }
 type List = ListSummary & { entries: Entry[]; custom: boolean }
@@ -260,6 +260,18 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
         }} />
       </div>
       {list && <div className="mt-5">
+        {(list.cover ?? []).length > 0 ? (
+          <div className={`mb-3 grid max-w-48 gap-1 overflow-hidden rounded-xl ${(list.cover ?? []).length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
+            {(list.cover ?? []).map((mediaId) => {
+              const cover = list.entries.find((entry) => entry.mediaId === mediaId)?.media.cover ?? null
+              return cover ? (
+                <img key={mediaId} src={cover} alt="" className={`w-full object-cover ${(list.cover ?? []).length === 1 ? 'h-28' : 'h-20'}`} />
+              ) : (
+                <div key={mediaId} className="h-20 w-full bg-white/5" />
+              )
+            })}
+          </div>
+        ) : null}
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h3 className="font-medium text-white">{list.name}</h3>
@@ -307,7 +319,21 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
               <button type="button" className={`${button} text-red-300`} disabled={busy || selected.size === 0} onClick={() => void removeSelected()}>
                 Remove {selected.size > 0 ? `${selected.size} selected` : 'selected'}
               </button>
+              {list.custom && selected.size >= 1 && selected.size <= 4 ? (
+                <button type="button" className={button} disabled={busy} onClick={() => void perform(async () => {
+                  await request(`/api/lists/${encodeURIComponent(active)}/cover`, 'PUT', { mediaIds: [...selected] })
+                  setSelected(new Set())
+                  setSelectMode(false)
+                  setMessage('Cover updated.')
+                })}>Use as cover</button>
+              ) : null}
             </>
+          ) : null}
+          {list.custom && (list.cover ?? []).length > 0 ? (
+            <button type="button" className={button} disabled={busy} onClick={() => void perform(async () => {
+              await request(`/api/lists/${encodeURIComponent(active)}/cover`, 'PUT', { mediaIds: [] })
+              setMessage('Cover cleared.')
+            })}>Clear cover</button>
           ) : null}
           {list.custom && <button type="button" className={button} disabled={busy} onClick={() => {
             if (window.confirm(`Delete list “${list.name}”? Titles with a status will remain in their status lists.`)) void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}`, 'DELETE'); setActive('status:planned') })

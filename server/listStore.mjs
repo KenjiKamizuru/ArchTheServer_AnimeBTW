@@ -28,8 +28,12 @@ export async function init() {
       // Manual ordering (AV-128): optional `order` array of media ids; absent
       // in files from before AV-128 (fine — empty means "not ordered yet").
       if (list.order !== undefined && (!Array.isArray(list.order) || list.order.some((id) => !Number.isInteger(id) || id <= 0) || new Set(list.order).size !== list.order.length)) throw new Error('Invalid list order')
-      if (list.order === undefined) list.order = []
-      ids.add(list.id)
+  // AV-129 cover selection: optional array of ≤4 member media ids (mosaic
+  // sources); absent in files from before AV-129 (backfilled to []).
+  if (list.cover !== undefined && (!Array.isArray(list.cover) || list.cover.length > 4 || list.cover.some((id) => !Number.isInteger(id) || id <= 0) || new Set(list.cover).size !== list.cover.length)) throw new Error('Invalid list cover')
+  if (list.order === undefined) list.order = []
+  if (list.cover === undefined) list.cover = []
+  ids.add(list.id)
     }
     const mediaIds = new Set()
     for (const entry of parsed.entries) {
@@ -87,7 +91,7 @@ export async function createList(body = {}) {
   const description = typeof body?.description === 'string' ? body.description.trim() : ''
   if (!name || name.length > 80 || description.length > 500) throw error('Name must be 1–80 characters and description at most 500 characters')
   if (state.lists.length >= MAX_LISTS) throw error('List limit reached', 429)
-  const list = { id: `l_${crypto.randomBytes(12).toString('hex')}`, name, description, createdAt: Date.now(), order: [] }
+  const list = { id: `l_${crypto.randomBytes(12).toString('hex')}`, name, description, createdAt: Date.now(), order: [], cover: [] }
   state.lists.push(list)
   await persist()
   return list
@@ -312,6 +316,25 @@ export async function restoreEntries(id, rawRecords) {
   return { restored }
 }
 
+/** Cover artwork selection (AV-129): 1–4 member media ids whose covers are
+ * assembled into the list's mosaic; `[]` clears. Custom lists only. */
+export async function setCover(id, rawIds) {
+  const meta = info(id)
+  if (!meta.custom) throw error('Built-in lists cannot have a custom cover')
+  if (!Array.isArray(rawIds)) throw error('mediaIds must be an array of media ids')
+  const ids = rawIds.map((value) => Number(value))
+  if (ids.length > 4) throw error('Choose at most 4 titles for a cover')
+  if (ids.some((value) => !Number.isInteger(value) || value <= 0)) throw error('Invalid media id')
+  if (new Set(ids).size !== ids.length) throw error('Duplicate media id')
+  if (ids.some((mediaId) => !state.entries.some((entry) => entry.mediaId === mediaId && includes(entry, id)))) {
+    throw error('Every cover title must belong to the list')
+  }
+  const record = state.lists.find((item) => item.id === id)
+  record.cover = ids
+  await persist()
+  return readList(id)
+}
+
 export async function setNote(id, rawId, text) {
   info(id)
   const mediaId = Number(rawId)
@@ -349,7 +372,7 @@ export async function importList(document) {
   const existing = new Map(state.entries.map((entry) => [entry.mediaId, entry]))
   const newCount = parsed.entries.filter((entry) => !existing.has(entry.mediaId)).length
   if (state.entries.length + newCount > MAX_ITEMS) throw error('Entry limit reached', 429)
-  const list = { id: `l_${crypto.randomBytes(12).toString('hex')}`, name: parsed.name, description: parsed.description, createdAt: Date.now() }
+  const list = { id: `l_${crypto.randomBytes(12).toString('hex')}`, name: parsed.name, description: parsed.description, createdAt: Date.now(), order: parsed.entries.map((item) => item.mediaId), cover: [] }
   state.lists.push(list)
   for (const item of parsed.entries) {
     let entry = existing.get(item.mediaId)
