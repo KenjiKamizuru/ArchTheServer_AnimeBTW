@@ -47,6 +47,7 @@ import { normalizeShowActivity, buildActivitySummary } from './profileActivity.m
 import { buildAccountExport } from './accountExport.mjs'
 import { validateDeletionConfirmation, DELETION_ARTIFACTS } from './accountDeletion.mjs'
 import { listUserSessions, shouldRevoke, isSessionHash } from './sessionManagement.mjs'
+import { listGuests, addGuest, removeGuest } from './guestProfiles.mjs'
 import { atomicWriteFile } from './security.mjs'
 
 const EMAIL_VERIFY_TTL_MS = 24 * 60 * 60 * 1000
@@ -1368,6 +1369,41 @@ app.delete(
     await kv.remove(key)
     const token = readCookie(req, SESSION_COOKIE)
     if (token && hashToken(token) === hash) res.clearCookie(SESSION_COOKIE)
+    res.json({ ok: true })
+  }),
+)
+
+// Guest profiles (AV-122a): named selection labels for shared devices,
+// owned and managed by the account. Not accounts — no credentials, no
+// sessions of their own (profile switching is AV-123).
+app.get(
+  '/api/auth/guests',
+  wrap(async (req, res) => {
+    const { user } = await requireSessionUser(req)
+    res.json({ guests: listGuests(user) })
+  }),
+)
+
+app.post(
+  '/api/auth/guests',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user, users } = await requireSessionUser(req)
+    const result = addGuest(user, req.body?.name)
+    if (!result.ok) throw Object.assign(new Error(result.error), { status: 400 })
+    await kv.set('users', users)
+    res.json({ guest: result.value })
+  }),
+)
+
+app.delete(
+  '/api/auth/guests/:id',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user, users } = await requireSessionUser(req)
+    const result = removeGuest(user, req.params.id)
+    if (!result.ok) throw Object.assign(new Error(result.error), { status: 404 })
+    await kv.set('users', users)
     res.json({ ok: true })
   }),
 )
