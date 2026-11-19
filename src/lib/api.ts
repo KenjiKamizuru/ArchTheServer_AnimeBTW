@@ -547,6 +547,30 @@ export const api = {
     return send<{ ok: boolean }>(`/api/auth/sessions/${encodeURIComponent(hash)}`, 'DELETE')
   },
 
+  listGuests() {
+    return get<{ guests: { id: string; name: string; createdAt: number | null }[] }>('/api/auth/guests', false)
+  },
+
+  createGuest(name: string) {
+    return send<{ guest: { id: string; name: string; createdAt: number | null } }>('/api/auth/guests', 'POST', { name })
+  },
+
+  removeGuest(id: string) {
+    return send<{ ok: boolean }>(`/api/auth/guests/${encodeURIComponent(id)}`, 'DELETE')
+  },
+
+  selectGuest(id: string) {
+    return send<{ guest: { id: string; name: string } }>(`/api/auth/guests/${encodeURIComponent(id)}/select`, 'POST')
+  },
+
+  clearGuest() {
+    return send<{ ok: boolean }>('/api/auth/guests/clear', 'POST')
+  },
+
+  activeGuest() {
+    return get<{ guest: { id: string; name: string } | null }>('/api/auth/guests/active', false)
+  },
+
   setProfileVisibility(visibility: 'public' | 'private' | 'link-only') {
     return send<{ visibility: string }>('/api/auth/profile-visibility', 'PUT', { visibility })
   },

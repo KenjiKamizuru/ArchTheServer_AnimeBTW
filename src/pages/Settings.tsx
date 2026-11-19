@@ -119,6 +119,11 @@ function AccountsCard() {
   const [sessions, setSessions] = useState<{ hash: string; createdAt: number | null; expiresAt: number | null; current: boolean }[]>([])
   const [sessionsBusy, setSessionsBusy] = useState(false)
   const [sessionsError, setSessionsError] = useState<string | null>(null)
+  const [guests, setGuests] = useState<{ id: string; name: string; createdAt: number | null }[]>([])
+  const [activeGuestId, setActiveGuestId] = useState<string | null>(null)
+  const [guestName, setGuestName] = useState('')
+  const [guestBusy, setGuestBusy] = useState(false)
+  const [guestError, setGuestError] = useState<string | null>(null)
 
   useEffect(() => {
     setBioDraft(user?.bio ?? '')
@@ -191,6 +196,14 @@ function AccountsCard() {
       .listSessions()
       .then((res) => setSessions(res.sessions))
       .catch(() => setSessions([]))
+    api
+      .listGuests()
+      .then((res) => setGuests(res.guests))
+      .catch(() => setGuests([]))
+    api
+      .activeGuest()
+      .then((res) => setActiveGuestId(res.guest?.id ?? null))
+      .catch(() => setActiveGuestId(null))
   }, [user])
 
   async function signIn() {
@@ -486,6 +499,65 @@ function AccountsCard() {
       setSessionsError(err instanceof Error ? err.message : 'Could not sign out that session')
     } finally {
       setSessionsBusy(false)
+    }
+  }
+
+  async function createGuest() {
+    setGuestBusy(true)
+    setGuestError(null)
+    try {
+      const res = await api.createGuest(guestName)
+      setGuests((prev) => [...prev, res.guest])
+      setGuestName('')
+    } catch (err) {
+      setGuestError(err instanceof Error ? err.message : 'Could not add the guest')
+    } finally {
+      setGuestBusy(false)
+    }
+  }
+
+  async function removeGuest(id: string) {
+    setGuestBusy(true)
+    setGuestError(null)
+    try {
+      await api.removeGuest(id)
+      setGuests((prev) => prev.filter((item) => item.id !== id))
+      if (activeGuestId === id) {
+        await api.clearGuest()
+        setActiveGuestId(null)
+      }
+    } catch (err) {
+      setGuestError(err instanceof Error ? err.message : 'Could not remove the guest')
+    } finally {
+      setGuestBusy(false)
+    }
+  }
+
+  async function selectGuest(id: string) {
+    setGuestBusy(true)
+    setGuestError(null)
+    try {
+      const res = await api.selectGuest(id)
+      setActiveGuestId(res.guest.id)
+      toast(`Now using the ${res.guest.name} profile`)
+    } catch (err) {
+      setGuestError(err instanceof Error ? err.message : 'Could not select the guest')
+    } finally {
+      setGuestBusy(false)
+    }
+  }
+
+  async function clearGuest() {
+    setGuestBusy(true)
+    setGuestError(null)
+    try {
+      await api.clearGuest()
+      setActiveGuestId(null)
+      toast('Guest selection cleared')
+    } catch (err) {
+      setGuestError(err instanceof Error ? err.message : 'Could not clear the guest')
+    } finally {
+      setGuestBusy(false)
     }
   }
 
@@ -916,6 +988,73 @@ function AccountsCard() {
                 This device signs out with the Sign out button above; &quot;This device&quot; stays until then.
               </p>
               {sessionsError ? <p className="mt-2 text-[11px] text-red-300">{sessionsError}</p> : null}
+            </div>
+            <div className="mt-3 border-t border-white/5 pt-3">
+              <h3 className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-white/30">
+                <UserPlus size={11} /> Guest profiles
+              </h3>
+              <p className="mt-1 text-[11px] text-white/50">
+                Named profiles for household visitors on shared devices. Guests are not accounts — they share this
+                device&apos;s sign-in and only change which profile is selected.
+              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <input
+                  type="text"
+                  value={guestName}
+                  onChange={(event) => setGuestName(event.target.value.slice(0, 24))}
+                  placeholder="Guest name (e.g. Aki)"
+                  className="w-48 rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
+                />
+                <button
+                  type="button"
+                  onClick={() => void createGuest()}
+                  disabled={guestBusy || !guestName.trim()}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[11px] font-semibold text-black transition hover:bg-accent-600 disabled:opacity-40"
+                >
+                  {guestBusy ? <Loader2 size={12} className="animate-spin" /> : <UserPlus size={12} />} Add guest
+                </button>
+                {activeGuestId ? (
+                  <button
+                    type="button"
+                    onClick={() => void clearGuest()}
+                    disabled={guestBusy}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-white/5 px-3 py-1.5 text-[11px] font-semibold text-white ring-1 ring-white/10 transition hover:bg-white/10 disabled:opacity-40"
+                  >
+                    <LogOut size={12} /> Clear guest selection
+                  </button>
+                ) : null}
+              </div>
+              {guests.length > 0 ? (
+                <ul className="mt-2 space-y-1">
+                  {guests.map((item) => (
+                    <li key={item.id} className="flex items-center gap-2 text-[11px] text-white/70">
+                      <UserPlus size={11} className="shrink-0" />
+                      <span className="truncate">{item.name}</span>
+                      {activeGuestId === item.id ? (
+                        <span className="rounded bg-accent/20 px-1.5 py-0.5 text-[10px] font-semibold text-accent">Selected</span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => void selectGuest(item.id)}
+                          disabled={guestBusy}
+                          className="rounded-lg px-2 py-1 text-white/50 transition hover:bg-white/5 hover:text-white disabled:opacity-40"
+                        >
+                          Use
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => void removeGuest(item.id)}
+                        disabled={guestBusy}
+                        className="ml-auto inline-flex items-center gap-1 rounded-lg px-2 py-1 text-white/40 transition hover:bg-white/5 hover:text-red-300 disabled:opacity-40"
+                      >
+                        <Trash2 size={11} /> Remove
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {guestError ? <p className="mt-2 text-[11px] text-red-300">{guestError}</p> : null}
             </div>
             <div className="mt-3 border-t border-white/5 pt-3">
               <h3 className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-white/30">
