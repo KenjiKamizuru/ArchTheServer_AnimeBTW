@@ -125,3 +125,15 @@ test('episode state stores over the progress API (AV-154)', async () => {
   const entries = (await req('/api/progress')).body.entries
   assert.ok(entries.some((entry) => entry.mediaId === 502 && entry.episode === 2 && entry.state === 'manual'))
 })
+test('the completion threshold auto-finishes episodes over the progress API (AV-155)', async () => {
+  const done = await req('/api/progress', 'PUT', { mediaId: 505, season: 's1', episode: 1, positionSeconds: 950, runtimeSeconds: 1000 })
+  assert.equal(done.status, 200)
+  assert.equal(done.body.entry.state, 'completed', '95% of runtime crosses the default 90% threshold')
+  assert.equal(done.body.entry.runtimeSeconds, 1000)
+  const partial = await req('/api/progress', 'PUT', { mediaId: 505, season: 's1', episode: 2, positionSeconds: 100, runtimeSeconds: 1000 })
+  assert.equal(partial.body.entry.state, 'started', 'below the threshold')
+  const noRuntime = await req('/api/progress', 'PUT', { mediaId: 505, season: 's1', episode: 3, positionSeconds: 99_999 })
+  assert.equal(noRuntime.body.entry.state, 'started', 'an unknown runtime never auto-completes')
+  const kept = await req('/api/progress', 'PUT', { mediaId: 505, season: 's1', episode: 1, positionSeconds: 10 })
+  assert.equal(kept.body.entry.state, 'completed', 'a later position never downgrades')
+})

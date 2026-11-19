@@ -41,6 +41,7 @@ function editable(s: AppSettings) {
     resultIndex: s.resultIndex,
     libraryDir: s.libraryDir,
     maxConcurrentDownloads: s.maxConcurrentDownloads,
+    episodeCompletionThresholdPercent: s.episodeCompletionThresholdPercent,
     preferLocalPlayback: s.preferLocalPlayback,
     allowedHostsText: (s.allowedExternalHosts ?? []).join('\n'),
     theme: s.theme,
@@ -1587,6 +1588,7 @@ export default function SettingsPage() {
         dub: draft.dub,
         resultIndex: draft.resultIndex,
         maxConcurrentDownloads: draft.maxConcurrentDownloads,
+        episodeCompletionThresholdPercent: draft.episodeCompletionThresholdPercent,
         preferLocalPlayback: draft.preferLocalPlayback,
         allowedExternalHosts,
         theme: draft.theme,
@@ -1872,6 +1874,21 @@ export default function SettingsPage() {
             />
             <span className="mt-1 block text-[11px] text-white/35">
               How many episodes download in parallel (1–12). Each episode also fetches its HLS segments in parallel, so 2–4 is plenty for most connections.
+            </span>
+          </label>
+
+          <label className="block">
+            <span className="mb-1 block text-[11px] text-white/45">Episode completion threshold (%)</span>
+            <input
+              type="number"
+              min={50}
+              max={100}
+              value={draft.episodeCompletionThresholdPercent}
+              onChange={(event) => set('episodeCompletionThresholdPercent', Number(event.target.value))}
+              className="w-full rounded-lg bg-ink-800 px-2.5 py-2 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-accent/60"
+            />
+            <span className="mt-1 block text-[11px] text-white/35">
+              An episode counts as completed once playback reaches this percentage of its runtime (50–100). Applies only when the runtime is known.
             </span>
           </label>
 

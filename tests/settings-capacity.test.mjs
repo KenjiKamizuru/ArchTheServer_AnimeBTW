@@ -50,3 +50,17 @@ test('list summary exposes capacity limits (AV-140)', async () => {
   assert.equal(limits.maxItems, 2000)
   assert.equal(limits.maxLists, 50)
 })
+test('the episode completion threshold is configurable and survives restart (AV-155)', async () => {
+  assert.equal(settings.get().episodeCompletionThresholdPercent, 90, 'defaults to 90% of runtime')
+  await settings.save({ episodeCompletionThresholdPercent: 75 })
+  assert.equal(settings.get().episodeCompletionThresholdPercent, 75)
+  await settings.save({ episodeCompletionThresholdPercent: -5 })
+  assert.equal(settings.get().episodeCompletionThresholdPercent, 50, 'clamped to the 50–100 bound')
+  await settings.save({ episodeCompletionThresholdPercent: 130 })
+  assert.equal(settings.get().episodeCompletionThresholdPercent, 100, 'clamped at the top')
+  await settings.save({ episodeCompletionThresholdPercent: 80 })
+  const script = `import * as s from ${JSON.stringify(new URL('../server/settings.mjs', import.meta.url).href)}; await s.init(); console.log(JSON.stringify(s.get().episodeCompletionThresholdPercent))`
+  const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, ANIMEVAULT_DATA: dir }, encoding: 'utf8' })
+  assert.equal(run.status, 0, run.stderr)
+  assert.equal(JSON.parse(run.stdout), 80, 'the threshold survives a restart')
+})

@@ -38,6 +38,9 @@ export const MAX_ENTRIES_PER_PROFILE = 5000
 export const MAX_PROFILES = 200
 /** Episode states (AV-154): in progress, finished, or manually marked. */
 export const PROGRESS_STATES = ['started', 'completed', 'manual']
+/** Auto-completion threshold (AV-155): percent of KNOWN runtime, 50–100. */
+export const DEFAULT_COMPLETION_THRESHOLD_PERCENT = 90
+const MAX_RUNTIME_SECONDS = 100_000
 const PROFILE_PATTERN = /^[A-Za-z0-9_.:-]{1,64}$/
 const SEASON_PATTERN = /^.{1,40}$/
 const MAX_POSITION_SECONDS = 10_000_000
@@ -51,8 +54,10 @@ export async function init() {
     const parsed = JSON.parse(await fs.readFile(file, 'utf8'))
     if (parsed?.version !== 1 || !Array.isArray(parsed.entries)) throw new Error('Invalid progress data')
     for (const entry of parsed.entries) {
-      // AV-154: pre-state files stay valid — a missing state means 'started'.
+      // AV-154/155: pre-state files stay valid — a missing state means
+      // 'started' and a missing runtime means unknown.
       entry.state ??= 'started'
+      entry.runtimeSeconds ??= null
       validateRecord(entry)
     }
     state = parsed
@@ -80,10 +85,25 @@ function validateRecord(entry) {
     && typeof entry.season === 'string' && SEASON_PATTERN.test(entry.season)
     && Number.isInteger(entry.episode) && entry.episode > 0 && entry.episode <= 100_000
     && Number.isFinite(entry.positionSeconds) && entry.positionSeconds >= 0 && entry.positionSeconds <= MAX_POSITION_SECONDS
+    && (entry.runtimeSeconds === null || (Number.isInteger(entry.runtimeSeconds) && entry.runtimeSeconds >= 1 && entry.runtimeSeconds <= MAX_RUNTIME_SECONDS))
     && PROGRESS_STATES.includes(entry.state)
     && Number.isFinite(entry.updatedAt)
   if (!valid) throw new Error('Invalid progress entry')
   return entry
+}
+
+/** Pure derivation (AV-155): an episode auto-completes when its position
+ * crosses `thresholdPercent` of its KNOWN runtime. Rules (pinned): an
+ * existing 'completed' or 'manual' mark is never downgraded, and an unknown
+ * runtime means uncertain — no auto-derivation, ever. */
+export function deriveEpisodeState(positionSeconds, runtimeSeconds, previousState, thresholdPercent) {
+  if (PROGRESS_STATES.includes(previousState) && previousState !== 'started') return previousState
+  const percent = Number.isInteger(thresholdPercent) && thresholdPercent >= 50 && thresholdPercent <= 100
+    ? thresholdPercent
+    : DEFAULT_COMPLETION_THRESHOLD_PERCENT
+  const runtime = Number(runtimeSeconds)
+  if (!Number.isFinite(runtime) || runtime <= 0) return previousState ?? 'started'
+  return positionSeconds >= (runtime * percent) / 100 ? 'completed' : (previousState ?? 'started')
 }
 
 function view(entry) {
@@ -93,6 +113,7 @@ function view(entry) {
     season: entry.season,
     episode: entry.episode,
     positionSeconds: entry.positionSeconds,
+    runtimeSeconds: entry.runtimeSeconds ?? null,
     state: entry.state,
     updatedAt: entry.updatedAt,
   }
@@ -107,11 +128,15 @@ function matches(entry, profileId, scope = {}) {
 }
 
 /** Upsert one progress record for a profile (AV-151: profiles are isolated). */
-export async function saveProgress(profileId, record, { now = Date.now() } = {}) {
+export async function saveProgress(profileId, record, { now = Date.now(), completionThresholdPercent } = {}) {
   if (typeof profileId !== 'string' || !PROFILE_PATTERN.test(profileId)) throw error('Invalid profile id')
   const requestedState = record?.state === undefined ? undefined : String(record.state)
   if (requestedState !== undefined && !PROGRESS_STATES.includes(requestedState)) {
     throw error("Progress state must be 'started', 'completed', or 'manual'")
+  }
+  const runtimeSeconds = record?.runtimeSeconds === undefined || record?.runtimeSeconds === null ? null : Number(record.runtimeSeconds)
+  if (runtimeSeconds !== null && (!Number.isInteger(runtimeSeconds) || runtimeSeconds < 1 || runtimeSeconds > MAX_RUNTIME_SECONDS)) {
+    throw error('runtimeSeconds must be a positive integer from 1 to ' + MAX_RUNTIME_SECONDS)
   }
   const built = {
     profileId,
@@ -119,6 +144,7 @@ export async function saveProgress(profileId, record, { now = Date.now() } = {})
     season: String(record?.season ?? ''),
     episode: Number(record?.episode),
     positionSeconds: Number(record?.positionSeconds),
+    runtimeSeconds,
     state: requestedState ?? 'started',
     updatedAt: now,
   }
@@ -133,13 +159,26 @@ export async function saveProgress(profileId, record, { now = Date.now() } = {})
     if (!profiles.has(profileId) && profiles.size >= MAX_PROFILES) throw error('Progress profile limit reached', 429)
     const mine = state.entries.filter((entry) => entry.profileId === profileId)
     if (mine.length >= MAX_ENTRIES_PER_PROFILE) throw error('Progress entry limit reached', 429)
-    state.entries.push(built)
+    // AV-155: without an explicit state, a passed completion threshold
+    // derives one (an unknown runtime simply stays 'started'). No threshold
+    // option = no derivation (AV-154 behavior).
+    state.entries.push({
+      ...built,
+      state: requestedState ?? (completionThresholdPercent !== undefined
+        ? deriveEpisodeState(built.positionSeconds, built.runtimeSeconds, undefined, completionThresholdPercent)
+        : built.state),
+    })
   } else {
     existing.positionSeconds = built.positionSeconds
+    // An omitted runtime never wipes a known one; an omitted state follows
+    // AV-154 (preserve) and, with a threshold, AV-155 derivation instead.
+    if (runtimeSeconds !== null) existing.runtimeSeconds = runtimeSeconds
     existing.updatedAt = built.updatedAt
-    // Positional-only updates preserve the episode state (AV-154); a save
-    // that passes a state replaces it.
-    if (requestedState !== undefined) existing.state = built.state
+    if (requestedState !== undefined) {
+      existing.state = built.state
+    } else if (completionThresholdPercent !== undefined) {
+      existing.state = deriveEpisodeState(existing.positionSeconds, existing.runtimeSeconds ?? null, existing.state, completionThresholdPercent)
+    }
   }
   await persist()
   return view(state.entries.find((entry) => matches(entry, profileId, built)))

@@ -15,7 +15,7 @@ const rec = (mediaId, season, episode, positionSeconds) => ({ mediaId, season, e
 
 test('save returns the stored record', async () => {
   const saved = await store.saveProgress('u_kenji', rec(10, 's1', 3, 120.5), { now: 1000 })
-  assert.deepEqual(saved, { profileId: 'u_kenji', mediaId: 10, season: 's1', episode: 3, positionSeconds: 120.5, state: 'started', updatedAt: 1000 })
+  assert.deepEqual(saved, { profileId: 'u_kenji', mediaId: 10, season: 's1', episode: 3, positionSeconds: 120.5, runtimeSeconds: null, state: 'started', updatedAt: 1000 })
 })
 test('upsert updates position in place', async () => {
   await store.saveProgress('u_kenji', rec(10, 's1', 3, 200), { now: 2000 })
@@ -144,4 +144,61 @@ test('state survives restart; legacy records without state load as started', asy
   const parsed = JSON.parse(run.stdout)
   assert.equal(parsed.mine.state, 'manual', 'state survives a restart')
   assert.equal(parsed.legacy.state, 'started', 'pre-AV-154 records default to started instead of failing closed')
+})
+
+// ── Completion threshold (AV-155): percent of KNOWN runtime ─────────────
+test('deriveEpisodeState: unknown runtime never auto-completes (AV-155)', () => {
+  assert.equal(store.deriveEpisodeState(9_000, null, undefined, 90), 'started', 'a long position without runtime is uncertain')
+  assert.equal(store.deriveEpisodeState(9_000, 0, 'started', 90), 'started')
+  assert.equal(store.deriveEpisodeState(9_000, 'x', 'started', 90), 'started')
+})
+test('deriveEpisodeState: crossing the threshold completes; below stays started', () => {
+  assert.equal(store.deriveEpisodeState(899, 1000, 'started', 90), 'started', 'below 90%')
+  assert.equal(store.deriveEpisodeState(900, 1000, 'started', 90), 'completed', 'exactly at the threshold completes')
+  assert.equal(store.deriveEpisodeState(950, 1000, undefined, 90), 'completed')
+  assert.equal(store.deriveEpisodeState(500, 1000, 'started', 50), 'completed', 'threshold is configurable')
+})
+test('deriveEpisodeState: completed and manual marks are never downgraded', () => {
+  assert.equal(store.deriveEpisodeState(10, 1000, 'completed', 90), 'completed')
+  assert.equal(store.deriveEpisodeState(10, 1000, 'manual', 90), 'manual')
+})
+test('deriveEpisodeState: an invalid threshold falls back to the default', () => {
+  for (const bad of [undefined, null, 0, 49, 101, 'x', 2.5]) {
+    assert.equal(store.deriveEpisodeState(899, 1000, 'started', bad), 'started', `${String(bad)} → default 90%`)
+    assert.equal(store.deriveEpisodeState(901, 1000, 'started', bad), 'completed', `${String(bad)} → default 90%`)
+  }
+})
+test('the completion threshold drives saves through the store option', async () => {
+  await store.saveProgress('u_thr', { ...rec(80, 's1', 1, 950), runtimeSeconds: 1000 }, { now: 20, completionThresholdPercent: 90 })
+  assert.equal(store.getProgress('u_thr', 80, 's1', 1).state, 'completed', 'auto-completed at 90% of runtime')
+  await store.saveProgress('u_thr', { ...rec(80, 's1', 2, 100), runtimeSeconds: 1000 }, { now: 21, completionThresholdPercent: 90 })
+  assert.equal(store.getProgress('u_thr', 80, 's1', 2).state, 'started', 'below threshold')
+  await store.saveProgress('u_thr', rec(80, 's1', 2, 200), { now: 22, completionThresholdPercent: 90 })
+  assert.equal(store.getProgress('u_thr', 80, 's1', 2).state, 'started', 'the runtime is preserved and the threshold still applies')
+  await store.saveProgress('u_thr', rec(80, 's1', 2, 1000), { now: 23, completionThresholdPercent: 90 })
+  assert.equal(store.getProgress('u_thr', 80, 's1', 2).state, 'completed', 'a later crossing completes')
+  await store.saveProgress('u_thr', rec(80, 's1', 2, 10), { now: 24, completionThresholdPercent: 90 })
+  assert.equal(store.getProgress('u_thr', 80, 's1', 2).state, 'completed', 'never downgraded by a later position')
+  await store.saveProgress('u_thr', { ...rec(81, 's1', 1, 5000), runtimeSeconds: 1000 }, { now: 25 })
+  assert.equal(store.getProgress('u_thr', 81, 's1', 1).state, 'started', 'WITHOUT the option no derivation happens (AV-154 behavior)')
+})
+test('an explicit state beats the threshold; manual survives the auto path', async () => {
+  await store.saveProgress('u_thr', { ...rec(82, 's1', 1, 50), runtimeSeconds: 1000, state: 'manual' }, { now: 26, completionThresholdPercent: 90 })
+  assert.equal(store.getProgress('u_thr', 82, 's1', 1).state, 'manual')
+  await store.saveProgress('u_thr', rec(82, 's1', 1, 990), { now: 27, completionThresholdPercent: 90 })
+  assert.equal(store.getProgress('u_thr', 82, 's1', 1).state, 'manual', 'auto-derivation never clobbers a manual mark')
+  await store.saveProgress('u_thr', { ...rec(82, 's1', 1, 500), state: 'started' }, { now: 28, completionThresholdPercent: 90 })
+  assert.equal(store.getProgress('u_thr', 82, 's1', 1).state, 'started', 'an explicit state still wins')
+})
+test('runtimeSeconds validation and preservation', async () => {
+  for (const bad of [0, -5, 2.5, 'x', 100_001]) {
+    await assert.rejects(store.saveProgress('u_thr', { ...rec(83, 's1', 1, 5), runtimeSeconds: bad }, { now: 29 }), (err) => err.status === 400, `runtime=${String(bad)} rejected`)
+  }
+  await store.saveProgress('u_thr', { ...rec(84, 's1', 1, 5), runtimeSeconds: 1440 }, { now: 30 })
+  assert.equal(store.getProgress('u_thr', 84, 's1', 1).runtimeSeconds, 1440)
+  await store.saveProgress('u_thr', rec(84, 's1', 1, 20), { now: 31 })
+  assert.equal(store.getProgress('u_thr', 84, 's1', 1).runtimeSeconds, 1440, 'an omitted runtime never wipes a known one')
+  await store.saveProgress('u_thr', { ...rec(84, 's1', 1, 20), runtimeSeconds: 1500 }, { now: 32 })
+  assert.equal(store.getProgress('u_thr', 84, 's1', 1).runtimeSeconds, 1500, 'a provided runtime updates it')
+  assert.equal(store.getProgress('u_thr', 84, 's1', 1).state, 'started')
 })

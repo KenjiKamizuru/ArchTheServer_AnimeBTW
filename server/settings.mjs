@@ -38,6 +38,7 @@ const DEFAULTS = {
   theme: 'dark',
   systemTheme: false,
   hideListCapacityWarnings: false,
+  episodeCompletionThresholdPercent: 90,
   updatedAt: 0,
 }
 
@@ -83,6 +84,13 @@ export async function init() {
         systemTheme: Boolean(parsed.systemTheme),
         hideListCapacityWarnings:
           parsed.hideListCapacityWarnings === undefined ? false : Boolean(parsed.hideListCapacityWarnings),
+        // AV-155: episode auto-completion threshold (percent of known runtime).
+        episodeCompletionThresholdPercent: clampInt(
+          parsed.episodeCompletionThresholdPercent,
+          50,
+          100,
+          DEFAULTS.episodeCompletionThresholdPercent,
+        ),
         // Saved by save() but previously dropped here and never surfaced by
         // get(): registrationOpen/emailAccounts silently re-closed on every
         // restart (and could never open at all), and detailSectionOrder never
@@ -126,6 +134,7 @@ export function get() {
     theme: state.theme,
     systemTheme: state.systemTheme,
     hideListCapacityWarnings: state.hideListCapacityWarnings,
+    episodeCompletionThresholdPercent: state.episodeCompletionThresholdPercent,
     detailSectionOrder: state.detailSectionOrder,
     registrationOpen: state.registrationOpen === true,
     emailAccounts: state.emailAccounts === true,
@@ -150,6 +159,15 @@ export async function save(patch = {}) {
 
   if (patch.hideListCapacityWarnings !== undefined) {
     next.hideListCapacityWarnings = Boolean(patch.hideListCapacityWarnings)
+  }
+
+  if (patch.episodeCompletionThresholdPercent !== undefined) {
+    next.episodeCompletionThresholdPercent = clampInt(
+      patch.episodeCompletionThresholdPercent,
+      50,
+      100,
+      next.episodeCompletionThresholdPercent,
+    )
   }
 
   if (patch.registrationOpen !== undefined) {

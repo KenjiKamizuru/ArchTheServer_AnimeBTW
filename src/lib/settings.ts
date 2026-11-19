@@ -9,6 +9,7 @@ let state: AppSettings = {
   libraryDir: 'library',
   libraryDirLocked: false,
   maxConcurrentDownloads: 2,
+  episodeCompletionThresholdPercent: 90,
   preferLocalPlayback: true,
   allowedExternalHosts: [],
   envExternalHostsConfigured: false,

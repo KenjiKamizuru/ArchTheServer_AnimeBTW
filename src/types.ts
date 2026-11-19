@@ -421,6 +421,7 @@ export interface AppSettings {
   libraryDir: string
   libraryDirLocked: boolean
   maxConcurrentDownloads: number
+  episodeCompletionThresholdPercent: number
   preferLocalPlayback: boolean
   allowedExternalHosts: string[]
   envExternalHostsConfigured: boolean

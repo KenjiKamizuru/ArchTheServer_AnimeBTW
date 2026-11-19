@@ -1650,7 +1650,9 @@ app.put(
   limitMutations,
   wrap(async (req, res) => {
     const { user } = await requireSessionUser(req)
-    res.json({ entry: await progressStore.saveProgress(progressProfileId(user, req), req.body) })
+    res.json({ entry: await progressStore.saveProgress(progressProfileId(user, req), req.body, {
+      completionThresholdPercent: settings.get().episodeCompletionThresholdPercent,
+    }) })
   }),
 )
 
