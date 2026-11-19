@@ -6,6 +6,21 @@
 
 export const NATIVE_CONTROLS_ZONE_PX = 48
 
+// AV-188: the playback-speed ladder. Selection is from this list in both
+// UIs; values arriving from elsewhere snap to the nearest entry.
+export const PLAYBACK_SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] as const
+
+/** Clamp to the 0.25–4 range, then snap to the nearest ladder entry. */
+export function normalizePlaybackSpeed(value: number): number {
+  if (!Number.isFinite(value)) return 1
+  const clamped = Math.min(4, Math.max(0.25, value))
+  let best: number = PLAYBACK_SPEEDS[0]
+  for (const speed of PLAYBACK_SPEEDS) {
+    if (Math.abs(speed - clamped) < Math.abs(best - clamped)) best = speed
+  }
+  return best
+}
+
 /**
  * Whether a click at `offsetY` (relative to the video element's top edge,
  * in CSS pixels) should toggle play/pause. False inside the bottom

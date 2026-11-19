@@ -16,8 +16,9 @@ import { createProgressWriter } from '../lib/progressWriter'
 import { createWatchSession } from '../lib/watchSession'
 import { playerLoadingPhase, readinessLabels } from '../lib/playerLoading'
 import { recoveryActionLabel, recoveryActions } from '../lib/playerRecovery'
-import { shouldTogglePlayback } from '../lib/playerControls'
+import { normalizePlaybackSpeed, PLAYBACK_SPEEDS, shouldTogglePlayback } from '../lib/playerControls'
 import { actionForKey, effectiveShortcuts } from '../lib/playerShortcuts'
+import { saveSettings } from '../lib/settings'
 import { concatBytes, Mp4BoxTracker, selectMseMimeType } from '../lib/mp4'
 import type { LibraryItem } from '../types'
 
@@ -343,6 +344,13 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
     setBuffering(false)
   }, [videoSrc])
 
+  // AV-188: the remembered playback speed — applied to every element,
+  // including the keyed <video> remounts (deps mirror the remount keys).
+  useEffect(() => {
+    const video = videoRef.current
+    if (video) video.playbackRate = normalizePlaybackSpeed(settings.playbackSpeed)
+  }, [videoSrc, useMse, settings.playbackSpeed])
+
   // Auto-advance (AV-160): when the toggle is on, the next episode starts
   // after a short countdown the viewer can cancel — or take immediately.
   useEffect(() => {
@@ -655,6 +663,23 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
             <ChevronRight size={18} />
           </button>
         ) : null}
+
+        {/* AV-188: speed selection with a remembered preference. */}
+        <select
+          value={normalizePlaybackSpeed(settings.playbackSpeed)}
+          onChange={(event) => {
+            void saveSettings({ playbackSpeed: Number(event.target.value) })
+          }}
+          title="Playback speed"
+          aria-label="Playback speed"
+          className="shrink-0 rounded-lg bg-white/5 px-2 py-1.5 text-xs text-white/75 ring-1 ring-white/10 outline-none transition hover:bg-white/10"
+        >
+          {PLAYBACK_SPEEDS.map((speed) => (
+            <option key={speed} value={speed} className="bg-ink-800 text-white">
+              {speed}×
+            </option>
+          ))}
+        </select>
 
         {urls.download ? (
           <a

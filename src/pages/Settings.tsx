@@ -17,6 +17,7 @@ import { api } from '../lib/api'
 import { focusObjectClass, removeArtwork, useArtwork } from '../lib/artwork'
 import { refreshDownloads, refreshLibrary } from '../lib/downloads'
 import { saveSettings, useSettings } from '../lib/settings'
+import { normalizePlaybackSpeed, PLAYBACK_SPEEDS } from '../lib/playerControls'
 import {
   detectConflicts,
   effectiveShortcuts,
@@ -56,6 +57,7 @@ function editable(s: AppSettings) {
     playerShortcuts: s.playerShortcuts,
     skipForwardSeconds: s.skipForwardSeconds,
     skipBackwardSeconds: s.skipBackwardSeconds,
+    playbackSpeed: s.playbackSpeed,
     allowedHostsText: (s.allowedExternalHosts ?? []).join('\n'),
     theme: s.theme,
     systemTheme: s.systemTheme,
@@ -1655,6 +1657,7 @@ export default function SettingsPage() {
         playerShortcuts: draft.playerShortcuts,
         skipForwardSeconds: draft.skipForwardSeconds,
         skipBackwardSeconds: draft.skipBackwardSeconds,
+        playbackSpeed: draft.playbackSpeed,
         allowedExternalHosts,
         theme: draft.theme,
         systemTheme: draft.systemTheme,
@@ -1996,6 +1999,22 @@ export default function SettingsPage() {
               className="w-full rounded-lg bg-ink-800 px-2.5 py-2 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-accent/60"
             />
             <span className="mt-1 block text-[11px] text-white/35">How far the seek-backward shortcut jumps (5–600 seconds).</span>
+          </label>
+
+          <label className="block">
+            <span className="mb-1 block text-[11px] text-white/45">Playback speed</span>
+            <select
+              value={normalizePlaybackSpeed(draft.playbackSpeed)}
+              onChange={(event) => set('playbackSpeed', Number(event.target.value))}
+              className="w-full rounded-lg bg-ink-800 px-2.5 py-2 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-accent/60"
+            >
+              {PLAYBACK_SPEEDS.map((speed) => (
+                <option key={speed} value={speed}>
+                  {speed}×
+                </option>
+              ))}
+            </select>
+            <span className="mt-1 block text-[11px] text-white/35">Remembered across sessions and applied to every playback (AV-188).</span>
           </label>
 
           <label className="flex items-center gap-2 sm:col-span-2">

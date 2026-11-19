@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { NATIVE_CONTROLS_ZONE_PX, shouldTogglePlayback } from '../src/lib/playerControls.ts'
+import { NATIVE_CONTROLS_ZONE_PX, normalizePlaybackSpeed, shouldTogglePlayback } from '../src/lib/playerControls.ts'
 
 test('click-to-toggle covers the picture area only (AV-178)', () => {
   // a 400px-tall video: picture area is 0…352, controls strip 352…400
@@ -20,4 +20,13 @@ test('click-to-toggle covers the picture area only (AV-178)', () => {
   assert.equal(shouldTogglePlayback(Number.NaN, 400), false)
   assert.equal(shouldTogglePlayback(100, 400, 300), true)
   assert.equal(shouldTogglePlayback(150, 400, 300), false, 'custom zone respected')
+})
+
+test('playback speeds snap to the ladder within range (AV-188)', () => {
+  assert.equal(normalizePlaybackSpeed(1), 1)
+  assert.equal(normalizePlaybackSpeed(1.1), 1, 'snaps to the nearest entry')
+  assert.equal(normalizePlaybackSpeed(1.3), 1.25)
+  assert.equal(normalizePlaybackSpeed(99), 2, 'clamped to the range first')
+  assert.equal(normalizePlaybackSpeed(-5), 0.25)
+  assert.equal(normalizePlaybackSpeed(Number.NaN), 1, 'non-finite falls back to normal speed')
 })

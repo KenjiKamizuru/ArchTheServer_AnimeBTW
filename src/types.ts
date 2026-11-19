@@ -462,6 +462,7 @@ export interface AppSettings {
   playerShortcuts: Record<string, string>
   skipForwardSeconds: number
   skipBackwardSeconds: number
+  playbackSpeed: number
   allowedExternalHosts: string[]
   envExternalHostsConfigured: boolean
   theme: 'dark' | 'light'

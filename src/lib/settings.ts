@@ -17,6 +17,7 @@ let state: AppSettings = {
   playerShortcuts: {},
   skipForwardSeconds: 10,
   skipBackwardSeconds: 10,
+  playbackSpeed: 1,
   allowedExternalHosts: [],
   envExternalHostsConfigured: false,
   theme: 'dark',

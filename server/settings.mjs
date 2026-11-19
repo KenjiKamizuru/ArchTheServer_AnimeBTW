@@ -52,6 +52,12 @@ function sanitizeShortcuts(value, strict = false) {
   return out
 }
 
+function clampFloat(value, lo, hi, fallback) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(hi, Math.max(lo, n))
+}
+
 function clampInt(value, lo, hi, fallback) {
   const n = Number(value)
   if (!Number.isFinite(n)) return fallback
@@ -78,6 +84,7 @@ const DEFAULTS = {
   playerShortcuts: {},
   skipForwardSeconds: 10,
   skipBackwardSeconds: 10,
+  playbackSpeed: 1,
   allowedExternalHosts: [],
   theme: 'dark',
   systemTheme: false,
@@ -137,6 +144,9 @@ export async function init() {
         // AV-183/184: skip intervals for the seek actions (5–600 seconds).
         skipForwardSeconds: clampInt(parsed.skipForwardSeconds, 5, 600, 10),
         skipBackwardSeconds: clampInt(parsed.skipBackwardSeconds, 5, 600, 10),
+        // AV-188: remembered playback speed (0.25–4; the UIs snap to a
+        // fixed ladder of common values).
+        playbackSpeed: clampFloat(parsed.playbackSpeed, 0.25, 4, 1),
         allowedExternalHosts: Array.isArray(parsed.allowedExternalHosts)
           ? safeNormalizeHosts(parsed.allowedExternalHosts)
           : [],
@@ -201,6 +211,7 @@ export function get() {
     playerShortcuts: state.playerShortcuts,
     skipForwardSeconds: state.skipForwardSeconds,
     skipBackwardSeconds: state.skipBackwardSeconds,
+    playbackSpeed: state.playbackSpeed,
     allowedExternalHosts: [...state.allowedExternalHosts],
     envExternalHostsConfigured: Boolean(String(process.env.ALLOWED_SOURCE_HOSTS ?? '').trim()),
     theme: state.theme,
@@ -270,6 +281,10 @@ export async function save(patch = {}) {
 
   if (patch.skipBackwardSeconds !== undefined) {
     next.skipBackwardSeconds = clampInt(patch.skipBackwardSeconds, 5, 600, next.skipBackwardSeconds)
+  }
+
+  if (patch.playbackSpeed !== undefined) {
+    next.playbackSpeed = clampFloat(patch.playbackSpeed, 0.25, 4, next.playbackSpeed)
   }
 
   if (patch.registrationOpen !== undefined) {

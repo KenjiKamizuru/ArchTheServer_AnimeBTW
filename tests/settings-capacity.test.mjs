@@ -135,3 +135,19 @@ test('skip intervals are configurable within bounds (AV-183/184)', async () => {
   assert.equal(run.status, 0, run.stderr)
   assert.deepEqual(JSON.parse(run.stdout), [10, 10], 'intervals survive a restart')
 })
+
+test('playback speed is remembered within range (AV-188)', async () => {
+  assert.equal(settings.get().playbackSpeed, 1)
+  await settings.save({ playbackSpeed: 1.5 })
+  assert.equal(settings.get().playbackSpeed, 1.5)
+  // out-of-range values clamp to 0.25–4 at the boundary
+  await settings.save({ playbackSpeed: 9 })
+  assert.equal(settings.get().playbackSpeed, 4)
+  await settings.save({ playbackSpeed: 0 })
+  assert.equal(settings.get().playbackSpeed, 0.25)
+  await settings.save({ playbackSpeed: 1.25 })
+  const script = `import * as s from ${JSON.stringify(new URL('../server/settings.mjs', import.meta.url).href)}; await s.init(); console.log(JSON.stringify(s.get().playbackSpeed))`
+  const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, ANIMEVAULT_DATA: dir }, encoding: 'utf8' })
+  assert.equal(run.status, 0, run.stderr)
+  assert.equal(JSON.parse(run.stdout), 1.25, 'the speed survives a restart')
+})
