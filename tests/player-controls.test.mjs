@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { canUsePictureInPicture, escapeAction, NATIVE_CONTROLS_ZONE_PX, normalizePlaybackSpeed, shouldTogglePlayback } from '../src/lib/playerControls.ts'
+import { canUsePictureInPicture, escapeAction, formatClock, NATIVE_CONTROLS_ZONE_PX, normalizePlaybackSpeed, seekFractionToTime, shouldTogglePlayback } from '../src/lib/playerControls.ts'
 
 test('click-to-toggle covers the picture area only (AV-178)', () => {
   // a 400px-tall video: picture area is 0…352, controls strip 352…400
@@ -41,4 +41,20 @@ test('picture-in-picture is offered only where allowed (AV-189)', () => {
 test('escape exits fullscreen before closing the player (AV-190)', () => {
   assert.equal(escapeAction(true), 'exit-fullscreen', 'the one escape hatch must not close the player')
   assert.equal(escapeAction(false), 'close')
+})
+
+test('clock formatting and seek mapping are total (AV-180)', () => {
+  assert.equal(formatClock(0), '0:00')
+  assert.equal(formatClock(75), '1:15')
+  assert.equal(formatClock(3600), '1:00:00')
+  assert.equal(formatClock(3661), '1:01:01')
+  assert.equal(formatClock(-5), '0:00')
+  assert.equal(formatClock(Number.NaN), '0:00')
+  assert.equal(seekFractionToTime(0.5, 120), 60)
+  assert.equal(seekFractionToTime(0, 120), 0)
+  assert.equal(seekFractionToTime(1, 120), 120)
+  assert.equal(seekFractionToTime(1.5, 120), 120, 'clamped to the duration')
+  assert.equal(seekFractionToTime(-1, 120), 0)
+  assert.equal(seekFractionToTime(0.5, 0), 0, 'unknown duration seeks nowhere')
+  assert.equal(seekFractionToTime(Number.NaN, 120), 0)
 })

@@ -41,6 +41,31 @@ export function escapeAction(fullscreenActive: boolean): 'exit-fullscreen' | 'cl
   return fullscreenActive ? 'exit-fullscreen' : 'close'
 }
 
+// AV-180: the custom control bar's pure bits — clock formatting and the
+// seek-bar mapping. The bar replaces the native controls (see TODO's
+// subtask split) and keeps every function they provided.
+
+/** m:ss clock, h:mm:ss past an hour; non-finite → '0:00'. */
+export function formatClock(totalSeconds: number): string {
+  if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return '0:00'
+  const seconds = Math.floor(totalSeconds % 60)
+  const minutes = Math.floor((totalSeconds / 60) % 60)
+  const hours = Math.floor(totalSeconds / 3600)
+  const mm = hours > 0 ? String(minutes).padStart(2, '0') : String(minutes)
+  const ss = String(seconds).padStart(2, '0')
+  return hours > 0 ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`
+}
+
+/**
+ * Map a seek-bar fraction (0..1) to a playback time. Non-finite inputs
+ * and unknown/zero durations fall back to 0; the result is clamped to
+ * [0, duration].
+ */
+export function seekFractionToTime(fraction: number, durationSeconds: number): number {
+  if (!Number.isFinite(fraction) || !Number.isFinite(durationSeconds) || durationSeconds <= 0) return 0
+  return Math.min(durationSeconds, Math.max(0, fraction * durationSeconds))
+}
+
 /**
  * Whether a click at `offsetY` (relative to the video element's top edge,
  * in CSS pixels) should toggle play/pause. False inside the bottom

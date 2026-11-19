@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { AlertTriangle, ChevronLeft, ChevronRight, Download, HardDrive, Loader2, Maximize, Minimize, PictureInPicture2, Radio, RotateCw, X } from 'lucide-react'
+import { AlertTriangle, ChevronLeft, ChevronRight, Download, HardDrive, Loader2, Maximize, Minimize, Pause, PictureInPicture2, Play, Radio, RotateCw, Volume2, VolumeX, X } from 'lucide-react'
 import { api } from '../lib/api'
 import { formatEpisodeCode } from '../lib/format'
 import { useSettings } from '../lib/settings'
@@ -16,7 +16,7 @@ import { createProgressWriter } from '../lib/progressWriter'
 import { createWatchSession } from '../lib/watchSession'
 import { playerLoadingPhase, readinessLabels } from '../lib/playerLoading'
 import { recoveryActionLabel, recoveryActions } from '../lib/playerRecovery'
-import { canUsePictureInPicture, escapeAction, normalizePlaybackSpeed, PLAYBACK_SPEEDS, shouldTogglePlayback } from '../lib/playerControls'
+import { canUsePictureInPicture, escapeAction, formatClock, normalizePlaybackSpeed, PLAYBACK_SPEEDS, seekFractionToTime, shouldTogglePlayback } from '../lib/playerControls'
 import { actionForKey, effectiveShortcuts } from '../lib/playerShortcuts'
 import { saveSettings } from '../lib/settings'
 import { concatBytes, Mp4BoxTracker, selectMseMimeType } from '../lib/mp4'
@@ -172,6 +172,12 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
   const [pipActive, setPipActive] = useState(false)
   const [fsActive, setFsActive] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
+  // AV-180: the custom control bar's media state.
+  const [currentSeconds, setCurrentSeconds] = useState(0)
+  const [durationSeconds, setDurationSeconds] = useState(0)
+  const [paused, setPaused] = useState(true)
+  const [volume, setVolume] = useState(1)
+  const [muted, setMuted] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
   const autoPlayedRef = useRef(false)
   const settings = useSettings()
@@ -371,6 +377,40 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
     return () => {
       video.removeEventListener('enterpictureinpicture', onEnter)
       video.removeEventListener('leavepictureinpicture', onLeave)
+    }
+  }, [videoSrc, useMse])
+
+  // AV-180: the custom control bar's media state — time, duration, paused,
+  // volume — re-bound on every keyed remount like the other listeners.
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+    const sync = () => {
+      setCurrentSeconds(video.currentTime)
+      setDurationSeconds(Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0)
+    }
+    const onPlay = () => setPaused(false)
+    const onPause = () => setPaused(true)
+    const onVolume = () => {
+      setVolume(video.volume)
+      setMuted(video.muted)
+    }
+    sync()
+    onVolume()
+    setPaused(video.paused)
+    video.addEventListener('timeupdate', sync)
+    video.addEventListener('durationchange', sync)
+    video.addEventListener('play', onPlay)
+    video.addEventListener('pause', onPause)
+    video.addEventListener('ended', onPause)
+    video.addEventListener('volumechange', onVolume)
+    return () => {
+      video.removeEventListener('timeupdate', sync)
+      video.removeEventListener('durationchange', sync)
+      video.removeEventListener('play', onPlay)
+      video.removeEventListener('pause', onPause)
+      video.removeEventListener('ended', onPause)
+      video.removeEventListener('volumechange', onVolume)
     }
   }, [videoSrc, useMse])
 
@@ -791,7 +831,6 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
             key={`${videoSrc}${useMse ? '-mse' : ''}`}
             src={useMse ? undefined : videoSrc}
             disableRemotePlayback={useMse && mseSupport?.managed ? true : undefined}
-            controls
             autoPlay
             playsInline
             onClick={(event) => {
@@ -846,6 +885,79 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
               <track kind="subtitles" src={subtitleSrc} srcLang="en" default label="Subtitles" />
             ) : null}
           </video>
+
+          {/* AV-180: the custom control bar (replaces the native controls
+              per the TODO subtask split) — play/pause, seek + times, and
+              volume so nothing the native bar provided is lost. 186 adds
+              the fading centre button; 187 the pointer-movement
+              persistence. */}
+          {!error ? (
+            <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 rounded-b-xl bg-gradient-to-t from-black/85 via-black/45 to-transparent px-3 pb-2 pt-7 text-white/85">
+              <button
+                type="button"
+                onClick={() => {
+                  const video = videoRef.current
+                  if (!video) return
+                  if (video.paused) void video.play().catch(() => {})
+                  else video.pause()
+                }}
+                className="shrink-0 rounded-full bg-white/10 p-2 transition hover:bg-white/20 hover:text-white"
+                aria-label={paused ? 'Play' : 'Pause'}
+                title={paused ? 'Play' : 'Pause'}
+              >
+                {paused ? <Play size={16} /> : <Pause size={16} />}
+              </button>
+              <span className="w-12 shrink-0 text-right text-[11px] tabular-nums text-white/70">
+                {formatClock(currentSeconds)}
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.001}
+                value={durationSeconds > 0 ? Math.min(1, currentSeconds / durationSeconds) : 0}
+                onChange={(event) => {
+                  const video = videoRef.current
+                  if (!video) return
+                  video.currentTime = seekFractionToTime(Number(event.target.value), durationSeconds)
+                }}
+                aria-label="Seek"
+                className="h-1.5 flex-1 cursor-pointer accent-[var(--color-accent)]"
+              />
+              <span className="w-12 shrink-0 text-[11px] tabular-nums text-white/70">
+                {formatClock(durationSeconds)}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  const video = videoRef.current
+                  if (!video) return
+                  video.muted = !video.muted
+                }}
+                className="shrink-0 rounded-full p-2 text-white/70 transition hover:bg-white/10 hover:text-white"
+                aria-label={muted ? 'Unmute' : 'Mute'}
+                title={muted ? 'Unmute' : 'Mute'}
+              >
+                {muted || volume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={muted ? 0 : volume}
+                onChange={(event) => {
+                  const video = videoRef.current
+                  if (!video) return
+                  const next = Number(event.target.value)
+                  video.volume = next
+                  if (next > 0 && video.muted) video.muted = false
+                }}
+                aria-label="Volume"
+                className="h-1.5 w-16 shrink-0 cursor-pointer accent-[var(--color-accent)]"
+              />
+            </div>
+          ) : null}
 
           {/* AV-176: loading state with SEPARATE metadata and media
               readiness — the two signals are shown side by side, and the
