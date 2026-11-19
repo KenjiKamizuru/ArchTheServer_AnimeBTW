@@ -15,7 +15,7 @@ const rec = (mediaId, season, episode, positionSeconds) => ({ mediaId, season, e
 
 test('save returns the stored record', async () => {
   const saved = await store.saveProgress('u_kenji', rec(10, 's1', 3, 120.5), { now: 1000 })
-  assert.deepEqual(saved, { profileId: 'u_kenji', mediaId: 10, season: 's1', episode: 3, positionSeconds: 120.5, updatedAt: 1000 })
+  assert.deepEqual(saved, { profileId: 'u_kenji', mediaId: 10, season: 's1', episode: 3, positionSeconds: 120.5, state: 'started', updatedAt: 1000 })
 })
 test('upsert updates position in place', async () => {
   await store.saveProgress('u_kenji', rec(10, 's1', 3, 200), { now: 2000 })
@@ -92,4 +92,56 @@ test('corrupt file fails closed', async () => {
   const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, ANIMEVAULT_DATA: badDir }, encoding: 'utf8' })
   await rm(badDir, { recursive: true, force: true })
   assert.notEqual(run.status, 0)
+})
+
+// ── Episode state (AV-154): started / completed / manually marked ───────
+test('new records default to state started and views expose it (AV-154)', async () => {
+  const saved = await store.saveProgress('u_state', rec(60, 's1', 1, 10), { now: 1 })
+  assert.equal(saved.state, 'started')
+  assert.equal(store.getProgress('u_state', 60, 's1', 1).state, 'started')
+  assert.equal(store.listProgress('u_state')[0].state, 'started')
+})
+test('completed and manual states are stored', async () => {
+  assert.equal((await store.saveProgress('u_state', { ...rec(61, 's1', 1, 1400), state: 'completed' }, { now: 2 })).state, 'completed')
+  assert.equal((await store.saveProgress('u_state', { ...rec(62, 's1', 1, 0), state: 'manual' }, { now: 3 })).state, 'manual')
+})
+test('invalid states are rejected and never stored', async () => {
+  for (const bad of ['finished', '', 'STARTED', 'watching', null, 3, 'manual ']) {
+    await assert.rejects(store.saveProgress('u_state', { ...rec(63, 's1', 1, 5), state: bad }, { now: 4 }), (err) => err.status === 400, `state=${JSON.stringify(bad)} rejected`)
+  }
+  assert.equal(store.getProgress('u_state', 63, 's1', 1), null, 'nothing was stored')
+})
+test('positional upserts preserve state; explicit state replaces it', async () => {
+  await store.saveProgress('u_state', { ...rec(64, 's1', 2, 100), state: 'completed' }, { now: 5 })
+  await store.saveProgress('u_state', rec(64, 's1', 2, 250), { now: 6 })
+  assert.equal(store.getProgress('u_state', 64, 's1', 2).state, 'completed', 'a position update never downgrades a completed mark')
+  assert.equal(store.getProgress('u_state', 64, 's1', 2).positionSeconds, 250)
+  await store.saveProgress('u_state', { ...rec(64, 's1', 2, 260), state: 'started' }, { now: 7 })
+  assert.equal(store.getProgress('u_state', 64, 's1', 2).state, 'started', 'an explicit state replaces')
+})
+test('episode states are independent per key and per profile', async () => {
+  await store.saveProgress('u_state', { ...rec(65, 's1', 1, 0), state: 'manual' }, { now: 8 })
+  await store.saveProgress('u_state', rec(65, 's1', 2, 0), { now: 9 })
+  await store.saveProgress('u_other', { ...rec(65, 's1', 1, 0), state: 'completed' }, { now: 10 })
+  assert.equal(store.getProgress('u_state', 65, 's1', 1).state, 'manual')
+  assert.equal(store.getProgress('u_state', 65, 's1', 2).state, 'started', 'other keys default independently')
+  assert.equal(store.getProgress('u_other', 65, 's1', 1).state, 'completed', 'profiles never share state')
+})
+test('state survives restart; legacy records without state load as started', async () => {
+  await store.saveProgress('u_state', { ...rec(66, 's1', 1, 5), state: 'manual' }, { now: 11 })
+  await store.flush()
+  const script = `import * as s from ${JSON.stringify(new URL('../server/progressStore.mjs', import.meta.url).href)}; await s.init(); console.log(JSON.stringify({ mine: s.getProgress('u_state', 66, 's1', 1), legacy: s.getProgress('u_legacy', 70, 's1', 1) }))`
+  // A pre-AV-154 file: records with no `state` field must load as 'started'.
+  await writeFile(path.join(dir, 'progress.json'), JSON.stringify({
+    version: 1,
+    entries: [
+      { profileId: 'u_state', mediaId: 66, season: 's1', episode: 1, positionSeconds: 5, state: 'manual', updatedAt: 11 },
+      { profileId: 'u_legacy', mediaId: 70, season: 's1', episode: 1, positionSeconds: 42, updatedAt: 99 },
+    ],
+  }))
+  const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, ANIMEVAULT_DATA: dir }, encoding: 'utf8' })
+  assert.equal(run.status, 0, run.stderr)
+  const parsed = JSON.parse(run.stdout)
+  assert.equal(parsed.mine.state, 'manual', 'state survives a restart')
+  assert.equal(parsed.legacy.state, 'started', 'pre-AV-154 records default to started instead of failing closed')
 })

@@ -114,3 +114,14 @@ test('the new-episodes route requires sign-in and answers with its payload shape
   assert.equal(typeof r.body.unavailable, 'boolean')
   if (r.body.unavailable) assert.equal(r.body.entries.length, 0)
 })
+test('episode state stores over the progress API (AV-154)', async () => {
+  const saved = await req('/api/progress', 'PUT', { mediaId: 502, season: 's1', episode: 2, positionSeconds: 0, state: 'manual' })
+  assert.equal(saved.status, 200)
+  assert.equal(saved.body.entry.state, 'manual')
+  const kept = await req('/api/progress', 'PUT', { mediaId: 502, season: 's1', episode: 2, positionSeconds: 30 })
+  assert.equal(kept.body.entry.state, 'manual', 'positional updates preserve the state')
+  const bad = await req('/api/progress', 'PUT', { mediaId: 502, season: 's1', episode: 2, positionSeconds: 30, state: 'finished' })
+  assert.equal(bad.status, 400)
+  const entries = (await req('/api/progress')).body.entries
+  assert.ok(entries.some((entry) => entry.mediaId === 502 && entry.episode === 2 && entry.state === 'manual'))
+})

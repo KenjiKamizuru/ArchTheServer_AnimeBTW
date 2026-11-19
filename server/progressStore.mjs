@@ -14,9 +14,11 @@
 //   callers pass the canonical key they already use; open vocabulary (like
 //   beta codes), bounded length. `episode` is a positive integer for now;
 //   specials/absolute numbering (AV-171/172) extend this later.
-// - `positionSeconds` is the playback position (finite, ≥ 0, capped); the
-//   started/completed state machine (AV-154) and completion threshold
-//   (AV-155) are deliberately NOT modeled yet.
+// - `positionSeconds` is the playback position (finite, ≥ 0, capped); each
+//   record also stores its episode `state` (AV-154): 'started', 'completed',
+//   or 'manual' (manually marked) — default 'started', preserved across
+//   positional-only upserts, replaced when a save passes a new state. The
+//   completion threshold (AV-155) is deliberately NOT modeled yet.
 // - Storage is a shared installation file (data/progress.json) but every
 //   operation is scoped by profileId — profiles never see each other's
 //   entries (the AV-151 acceptance, pinned by tests).
@@ -34,6 +36,8 @@ const file = path.join(process.env.ANIMEVAULT_DATA ? path.resolve(process.env.AN
 
 export const MAX_ENTRIES_PER_PROFILE = 5000
 export const MAX_PROFILES = 200
+/** Episode states (AV-154): in progress, finished, or manually marked. */
+export const PROGRESS_STATES = ['started', 'completed', 'manual']
 const PROFILE_PATTERN = /^[A-Za-z0-9_.:-]{1,64}$/
 const SEASON_PATTERN = /^.{1,40}$/
 const MAX_POSITION_SECONDS = 10_000_000
@@ -46,7 +50,11 @@ export async function init() {
   try {
     const parsed = JSON.parse(await fs.readFile(file, 'utf8'))
     if (parsed?.version !== 1 || !Array.isArray(parsed.entries)) throw new Error('Invalid progress data')
-    for (const entry of parsed.entries) validateRecord(entry)
+    for (const entry of parsed.entries) {
+      // AV-154: pre-state files stay valid — a missing state means 'started'.
+      entry.state ??= 'started'
+      validateRecord(entry)
+    }
     state = parsed
   } catch (err) {
     if (err.code !== 'ENOENT') throw err
@@ -72,6 +80,7 @@ function validateRecord(entry) {
     && typeof entry.season === 'string' && SEASON_PATTERN.test(entry.season)
     && Number.isInteger(entry.episode) && entry.episode > 0 && entry.episode <= 100_000
     && Number.isFinite(entry.positionSeconds) && entry.positionSeconds >= 0 && entry.positionSeconds <= MAX_POSITION_SECONDS
+    && PROGRESS_STATES.includes(entry.state)
     && Number.isFinite(entry.updatedAt)
   if (!valid) throw new Error('Invalid progress entry')
   return entry
@@ -84,6 +93,7 @@ function view(entry) {
     season: entry.season,
     episode: entry.episode,
     positionSeconds: entry.positionSeconds,
+    state: entry.state,
     updatedAt: entry.updatedAt,
   }
 }
@@ -99,12 +109,17 @@ function matches(entry, profileId, scope = {}) {
 /** Upsert one progress record for a profile (AV-151: profiles are isolated). */
 export async function saveProgress(profileId, record, { now = Date.now() } = {}) {
   if (typeof profileId !== 'string' || !PROFILE_PATTERN.test(profileId)) throw error('Invalid profile id')
+  const requestedState = record?.state === undefined ? undefined : String(record.state)
+  if (requestedState !== undefined && !PROGRESS_STATES.includes(requestedState)) {
+    throw error("Progress state must be 'started', 'completed', or 'manual'")
+  }
   const built = {
     profileId,
     mediaId: Number(record?.mediaId),
     season: String(record?.season ?? ''),
     episode: Number(record?.episode),
     positionSeconds: Number(record?.positionSeconds),
+    state: requestedState ?? 'started',
     updatedAt: now,
   }
   try {
@@ -122,6 +137,9 @@ export async function saveProgress(profileId, record, { now = Date.now() } = {})
   } else {
     existing.positionSeconds = built.positionSeconds
     existing.updatedAt = built.updatedAt
+    // Positional-only updates preserve the episode state (AV-154); a save
+    // that passes a state replaces it.
+    if (requestedState !== undefined) existing.state = built.state
   }
   await persist()
   return view(state.entries.find((entry) => matches(entry, profileId, built)))
