@@ -16,7 +16,7 @@ import { createProgressWriter } from '../lib/progressWriter'
 import { createWatchSession } from '../lib/watchSession'
 import { playerLoadingPhase, readinessLabels } from '../lib/playerLoading'
 import { recoveryActionLabel, recoveryActions } from '../lib/playerRecovery'
-import { CENTER_BUTTON_IDLE_MS, canUsePictureInPicture, centerButtonVisible, escapeAction, formatClock, normalizePlaybackSpeed, PLAYBACK_SPEEDS, seekFractionToTime, shouldTogglePlayback } from '../lib/playerControls'
+import { CENTER_BUTTON_IDLE_MS, canUsePictureInPicture, centerButtonVisible, controlBarVisible, escapeAction, formatClock, normalizePlaybackSpeed, PLAYBACK_SPEEDS, seekFractionToTime, shouldTogglePlayback } from '../lib/playerControls'
 import { actionForKey, effectiveShortcuts } from '../lib/playerShortcuts'
 import { saveSettings } from '../lib/settings'
 import { concatBytes, Mp4BoxTracker, selectMseMimeType } from '../lib/mp4'
@@ -905,11 +905,17 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
 
           {/* AV-180: the custom control bar (replaces the native controls
               per the TODO subtask split) — play/pause, seek + times, and
-              volume so nothing the native bar provided is lost. 186 adds
-              the fading centre button; 187 the pointer-movement
-              persistence. */}
+              volume so nothing the native bar provided is lost. AV-186's
+              centre button and AV-187's pointer-movement persistence
+              share one chrome-visibility policy: the whole surface fades
+              when idle while playing and reappears on movement (paused
+              keeps it up). */}
           {!error ? (
-            <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 rounded-b-xl bg-gradient-to-t from-black/85 via-black/45 to-transparent px-3 pb-2 pt-7 text-white/85">
+            <div
+              className={`absolute inset-x-0 bottom-0 flex items-center gap-2 rounded-b-xl bg-gradient-to-t from-black/85 via-black/45 to-transparent px-3 pb-2 pt-7 text-white/85 transition-opacity duration-300 ${
+                controlBarVisible(paused, idle) ? 'opacity-100' : 'pointer-events-none opacity-0'
+              }`}
+            >
               <button
                 type="button"
                 onClick={() => {

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { canUsePictureInPicture, CENTER_BUTTON_IDLE_MS, centerButtonVisible, escapeAction, formatClock, NATIVE_CONTROLS_ZONE_PX, normalizePlaybackSpeed, seekFractionToTime, shouldTogglePlayback } from '../src/lib/playerControls.ts'
+import { canUsePictureInPicture, CENTER_BUTTON_IDLE_MS, centerButtonVisible, controlBarVisible, escapeAction, formatClock, NATIVE_CONTROLS_ZONE_PX, normalizePlaybackSpeed, seekFractionToTime, shouldTogglePlayback } from '../src/lib/playerControls.ts'
 
 test('click-to-toggle covers the picture area only (AV-178)', () => {
   // a 400px-tall video: picture area is 0…352, controls strip 352…400
@@ -65,4 +65,15 @@ test('the central button shows when paused and fades when idle (AV-186)', () => 
   assert.equal(centerButtonVisible(false, false), true, 'playing with recent activity')
   assert.equal(centerButtonVisible(false, true), false, 'playing and idle — fades out')
   assert.equal(CENTER_BUTTON_IDLE_MS, 2000, 'the idle window is a shared constant')
+})
+
+test('the bar and centre button share one chrome policy (AV-187)', () => {
+  for (const paused of [true, false]) {
+    for (const idle of [true, false]) {
+      assert.equal(controlBarVisible(paused, idle), centerButtonVisible(paused, idle), `paused=${paused} idle=${idle} — one surface, one policy`)
+    }
+  }
+  assert.equal(controlBarVisible(false, true), false, 'bar hides when idle while playing')
+  assert.equal(controlBarVisible(false, false), true, 'bar reappears on pointer movement')
+  assert.equal(controlBarVisible(true, true), true, 'paused keeps the bar up')
 })

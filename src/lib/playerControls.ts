@@ -74,6 +74,13 @@ export function centerButtonVisible(paused: boolean, idle: boolean): boolean {
   return paused || !idle
 }
 
+// AV-187: the control bar follows the SAME chrome-visibility policy —
+// 186 and 187 are one shared surface that fades together on idle and
+// reappears on pointer movement (paused always keeps the chrome up).
+export function controlBarVisible(paused: boolean, idle: boolean): boolean {
+  return centerButtonVisible(paused, idle)
+}
+
 /**
  * Whether a click at `offsetY` (relative to the video element's top edge,
  * in CSS pixels) should toggle play/pause. False inside the bottom
