@@ -46,6 +46,7 @@ import { normalizePreferencesUpdate } from './userPreferences.mjs'
 import { normalizeShowActivity, buildActivitySummary } from './profileActivity.mjs'
 import { buildAccountExport } from './accountExport.mjs'
 import { validateDeletionConfirmation, DELETION_ARTIFACTS } from './accountDeletion.mjs'
+import { listUserSessions, shouldRevoke, isSessionHash } from './sessionManagement.mjs'
 import { atomicWriteFile } from './security.mjs'
 
 const EMAIL_VERIFY_TTL_MS = 24 * 60 * 60 * 1000
@@ -1301,6 +1302,60 @@ app.delete(
     )
     res.clearCookie(SESSION_COOKIE)
     res.json({ ok: true, ...DELETION_ARTIFACTS })
+  }),
+)
+
+// Device/session management (AV-119): list your live sessions and sign out
+// remotely. The `hash` values are the STORED sha256s (never usable to sign
+// in); every operation is owner-scoped.
+app.get(
+  '/api/auth/sessions',
+  wrap(async (req, res) => {
+    const { user } = await requireSessionUser(req)
+    const token = readCookie(req, SESSION_COOKIE)
+    const currentHash = token ? hashToken(token) : null
+    const entries = []
+    for (const key of await kv.list('session:', { limit: 10_000 })) {
+      entries.push([key.slice('session:'.length), await kv.get(key, null)])
+    }
+    res.json({ sessions: listUserSessions(entries, { userId: user.id, currentHash }) })
+  }),
+)
+
+app.delete(
+  '/api/auth/sessions/others',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user } = await requireSessionUser(req)
+    const token = readCookie(req, SESSION_COOKIE)
+    const currentHash = token ? hashToken(token) : null
+    let revoked = 0
+    for (const key of await kv.list('session:', { limit: 10_000 })) {
+      const record = await kv.get(key, null)
+      const hash = key.slice('session:'.length)
+      if (shouldRevoke(hash, record, { userId: user.id, currentHash })) {
+        await kv.remove(key)
+        revoked += 1
+      }
+    }
+    res.json({ ok: true, revoked })
+  }),
+)
+
+app.delete(
+  '/api/auth/sessions/:hash',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user } = await requireSessionUser(req)
+    const hash = String(req.params.hash ?? '')
+    if (!isSessionHash(hash)) throw Object.assign(new Error('Invalid session id'), { status: 400 })
+    const key = `session:${hash}`
+    const record = await kv.get(key, null)
+    if (!record || record.userId !== user.id) throw Object.assign(new Error('Session not found'), { status: 404 })
+    await kv.remove(key)
+    const token = readCookie(req, SESSION_COOKIE)
+    if (token && hashToken(token) === hash) res.clearCookie(SESSION_COOKIE)
+    res.json({ ok: true })
   }),
 )
 
