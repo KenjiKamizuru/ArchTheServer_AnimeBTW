@@ -15,7 +15,9 @@ async function ensureLoaded() {
   started = true
   try {
     const res = await api.bookmarks()
-    items = res.items
+    // Guard against a malformed payload: a bad response must not leave the
+    // store holding `undefined`, which would crash every MediaCard.
+    items = Array.isArray(res?.items) ? res.items : []
     emit()
   } catch {
     started = false

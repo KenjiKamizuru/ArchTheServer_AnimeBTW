@@ -98,7 +98,19 @@ async function gql(query, variables) {
       if (attempt < 2) await sleep(400 * (attempt + 1))
     }
   }
-  throw lastError ?? new Error('Metadata request failed')
+  // Surface upstream trouble as a 502 so clients can distinguish "AniList is
+  // down" from a bug in our own handlers (which stays a 500).
+  const failure =
+    lastError instanceof Error ? lastError : new Error('Metadata request failed')
+  if (failure.status === undefined) failure.status = 502
+  if (failure.code === undefined) failure.code = 'UPSTREAM_UNAVAILABLE'
+  // Raw undici messages ("fetch failed") are useless to a viewer; the error
+  // middleware sanitizes, so give it something human to pass through.
+  if (!failure.upstreamSafe) {
+    failure.message = 'Anime metadata service is unreachable right now. Please try again shortly.'
+    failure.upstreamSafe = true
+  }
+  throw failure
 }
 
 /** TTL + LRU cache so repeat views are instant and we stay far under rate limits. */
@@ -242,6 +254,86 @@ export async function getSeason({ season, year, sort = 'popular', page = 1, perP
 }
 
 /** Shows still releasing, sorted by their next broadcast (soonest first). */
+/**
+ * Executes a browse query built by `browse.mjs` and applies the filters AniList
+ * cannot express locally. Returns per-item match reasons so the UI can explain
+ * results.
+ */
+export async function browse(filters, browseModule) {
+  const { query, variables } = browseModule.buildBrowseQuery(filters)
+  const key = `browse:${JSON.stringify(variables)}`
+  return cached(key, async () => {
+    const data = await gql(query, variables)
+    const pageInfo = data.Page?.pageInfo ?? {}
+    const raw = data.Page?.media ?? []
+    const matched = []
+    const rejected = []
+    for (const entry of raw) {
+      const media = normalize(entry)
+      if (!media) continue
+      const verdict = browseModule.matchMediaLocally(media, filters)
+      if (verdict.ok) {
+        media.matchReasons = verdict.reasons
+        matched.push(media)
+      } else {
+        rejected.push(media.id)
+      }
+    }
+    return {
+      media: matched,
+      rejectedCount: rejected.length,
+      total: pageInfo.total ?? 0,
+      hasNextPage: Boolean(pageInfo.hasNextPage),
+      page: filters.page,
+      perPage: filters.perPage,
+      filters: browseModule.describeFilters(filters),
+      params: browseModule.filtersToParams(filters).toString(),
+    }
+  })
+}
+
+/**
+ * Discovery picks: a deterministic "spotlight" for the day, a random pick with
+ * optional filter awareness, and a hidden-gems collection.
+ */
+export async function discover(kind, filters, browseModule) {
+  if (kind === 'random') {
+    // Random page within a bounded depth keeps the request cheap while still
+    // feeling unpredictable.
+    const page = 1 + Math.floor(Math.random() * 12)
+    const result = await browse({ ...filters, page, perPage: 50 }, browseModule)
+    if (result.media.length === 0) return { kind, media: null, page }
+    const pick = result.media[Math.floor(Math.random() * result.media.length)]
+    return { kind, media: pick, page }
+  }
+
+  if (kind === 'spotlight') {
+    const result = await browse({ ...filters, page: 1, perPage: 50, sort: 'popular' }, browseModule)
+    if (result.media.length === 0) return { kind, media: null }
+    // Stable per-day index: same pick all day, changes at midnight.
+    const day = Math.floor(Date.now() / 86_400_000)
+    return { kind, media: result.media[day % result.media.length] }
+  }
+
+  if (kind === 'hidden-gems') {
+    const gems = await browse(
+      {
+        ...filters,
+        // Low popularity + strong rating is the classic hidden-gem signal.
+        maxPopularity: filters.maxPopularity ?? 25_000,
+        minScore: Math.max(filters.minScore ?? 0, 72),
+        sort: 'rated',
+        page: 1,
+        perPage: 30,
+      },
+      browseModule,
+    )
+    return { kind, items: gems.media, total: gems.total }
+  }
+
+  throw Object.assign(new Error('Unknown discovery kind'), { status: 400 })
+}
+
 export async function getAiring({ page = 1, perPage = 50 } = {}) {
   const key = `airing:${page}:${perPage}`
   return cached(key, async () => {

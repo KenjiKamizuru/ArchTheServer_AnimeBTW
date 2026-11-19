@@ -28,6 +28,48 @@ import type {
   WatchResult,
 } from '../types'
 
+export interface BrowseFilters {
+  season?: string | null
+  year?: number | null
+  includeOlderSeasons?: boolean
+  formats?: string[]
+  statuses?: string[]
+  sources?: string[]
+  countries?: string[]
+  genres?: string[]
+  genresExclude?: string[]
+  tags?: string[]
+  tagMode?: 'and' | 'or'
+  years?: { min?: number; max?: number }
+  episodes?: { min?: number; max?: number }
+  duration?: { min?: number; max?: number }
+  minScore?: number | null
+  maxPopularity?: number | null
+  sort?: string
+  page?: number
+  perPage?: number
+  query?: string | null
+}
+
+export interface BrowseResponse {
+  media: Media[]
+  rejectedCount: number
+  total: number
+  hasNextPage: boolean
+  page: number
+  perPage: number
+  filters: string
+  params: string
+  activeFilters: number
+}
+
+export interface DiscoverPick {
+  kind: string
+  media: Media | null
+  items?: Media[]
+  total?: number
+}
+
 export interface SeasonResponse {
   season: string
   year: number
@@ -80,6 +122,26 @@ export const api = {
     if (params.page && params.page > 1) qs.set('page', String(params.page))
     const query = qs.toString()
     return get<SeasonResponse>(`/api/season${query ? `?${query}` : ''}`)
+  },
+
+  browse(filters: Record<string, string | number | boolean | undefined | null>) {
+    const qs = new URLSearchParams()
+    for (const [key, value] of Object.entries(filters)) {
+      if (value === undefined || value === null || value === '' || value === false) continue
+      qs.set(key, value === true ? '1' : String(value))
+    }
+    const query = qs.toString()
+    return get<BrowseResponse>(`/api/browse${query ? `?${query}` : ''}`)
+  },
+
+  discover(kind: 'spotlight' | 'random' | 'hidden-gems', filters: Record<string, string | number | boolean | undefined | null> = {}) {
+    const qs = new URLSearchParams()
+    for (const [key, value] of Object.entries(filters)) {
+      if (value === undefined || value === null || value === '' || value === false) continue
+      qs.set(key, value === true ? '1' : String(value))
+    }
+    const query = qs.toString()
+    return get<DiscoverPick>(`/api/discover/${kind}${query ? `?${query}` : ''}`, false)
   },
 
   airing() {

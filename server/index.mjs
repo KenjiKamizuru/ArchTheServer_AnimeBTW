@@ -5,6 +5,7 @@ import { brotliCompressSync, constants as zlibConstants, gzipSync } from 'node:z
 import { existsSync, lstatSync, createReadStream } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import * as anilist from './anilist.mjs'
+import * as browse from './browse.mjs'
 import * as store from './store.mjs'
 import * as settings from './settings.mjs'
 import * as resolver from './resolver.mjs'
@@ -298,6 +299,43 @@ app.get(
     const page = clamp(Number(req.query.page) || 1, 1, 25)
     const data = await anilist.getSeason({ season, year, sort, page })
     res.json({ season, year, sort, page, hasNextPage: data.hasNextPage, total: data.total, media: data.media })
+  }),
+)
+
+// Rich browse: server-side filtering that AniList cannot express is applied
+// locally, and the response carries shareable params for the current filters.
+app.get(
+  '/api/browse',
+  limitOutbound,
+  wrap(async (req, res) => {
+    const filters = browse.parseBrowseFilters(req.query)
+    const data = await anilist.browse(filters, browse)
+    res.json({ ...data, activeFilters: browse.activeFilterCount(filters) })
+  }),
+)
+
+app.get(
+  '/api/browse/options',
+  wrap(async (_req, res) => {
+    res.json({
+      formats: browse.BROWSE_FORMATS,
+      statuses: browse.BROWSE_STATUSES,
+      sorts: Object.keys(browse.BROWSE_SORTS),
+      sources: browse.BROWSE_SOURCES,
+      countries: browse.BROWSE_COUNTRIES,
+    })
+  }),
+)
+
+// Spotlight / random / hidden-gems discovery picks.
+app.get(
+  '/api/discover/:kind',
+  limitOutbound,
+  wrap(async (req, res) => {
+    const kind = String(req.params.kind ?? '')
+    const filters = browse.parseBrowseFilters(req.query)
+    const data = await anilist.discover(kind, filters, browse)
+    res.json(data)
   }),
 )
 
