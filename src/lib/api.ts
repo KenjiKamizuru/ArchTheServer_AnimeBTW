@@ -19,6 +19,7 @@ import type {
   LibraryResponse,
   Media,
   MediaDetail,
+  ProgressEntry,
   ProviderEpisodesResult,
   ProviderMatch,
   ProviderSearchResult,
@@ -381,6 +382,14 @@ export const api = {
 
   watchOrderNote(id: number) {
     return get<WatchOrderNote>(`/api/anime/${id}/watch-order`, false)
+  },
+
+  getProgress() {
+    return get<{ entries: ProgressEntry[] }>('/api/progress', false)
+  },
+
+  saveProgress(record: { mediaId: number; season: string; episode: number; positionSeconds: number; state?: string; runtimeSeconds?: number }) {
+    return send<{ entry: ProgressEntry }>('/api/progress', 'PUT', record)
   },
 
   saveWatchOrderNote(id: number, note: string) {

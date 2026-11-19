@@ -187,6 +187,17 @@ export interface RelatedSeason {
   cover: string | null
 }
 
+export interface ProgressEntry {
+  profileId: string
+  mediaId: number
+  season: string
+  episode: number
+  positionSeconds: number
+  runtimeSeconds: number | null
+  state: 'started' | 'completed' | 'manual'
+  updatedAt: number
+}
+
 export interface EpisodeEntry {
   number: number
   title: string | null

@@ -137,3 +137,20 @@ test('the completion threshold auto-finishes episodes over the progress API (AV-
   const kept = await req('/api/progress', 'PUT', { mediaId: 505, season: 's1', episode: 1, positionSeconds: 10 })
   assert.equal(kept.body.entry.state, 'completed', 'a later position never downgrades')
 })
+test('mark-as-watched and mark-as-unwatched payloads land correctly (AV-156)', async () => {
+  // The exact contract src/lib/progress.ts builds for the episode-row
+  // controls: watched = manual at position 0 (runtime rides along);
+  // unwatched = started at position 0 (the record is kept — AV-157 owns
+  // destructive resets).
+  const watched = await req('/api/progress', 'PUT', { mediaId: 506, season: 'fall-2026', episode: 3, positionSeconds: 0, state: 'manual', runtimeSeconds: 1440 })
+  assert.equal(watched.status, 200)
+  assert.equal(watched.body.entry.state, 'manual')
+  assert.equal(watched.body.entry.positionSeconds, 0)
+  assert.equal(watched.body.entry.runtimeSeconds, 1440)
+  const unwatched = await req('/api/progress', 'PUT', { mediaId: 506, season: 'fall-2026', episode: 3, positionSeconds: 0, state: 'started' })
+  assert.equal(unwatched.body.entry.state, 'started')
+  assert.equal(unwatched.body.entry.positionSeconds, 0)
+  assert.equal(unwatched.body.entry.runtimeSeconds, 1440, 'marking unwatched keeps the known runtime')
+  const entries = (await req('/api/progress')).body.entries
+  assert.equal(entries.filter((entry) => entry.mediaId === 506 && entry.season === 'fall-2026' && entry.episode === 3).length, 1, 'marks upsert, never duplicate')
+})

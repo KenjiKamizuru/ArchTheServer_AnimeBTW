@@ -18,6 +18,8 @@ import {
   Play,
   Printer,
   Save,
+  Undo2,
+  Check,
   ShieldAlert,
   Sparkles,
   Star,
@@ -37,6 +39,7 @@ import { useDetail } from '../components/MediaModal'
 import { useToast } from '../components/Toasts'
 import { useBookmarks, toggleBookmark } from '../lib/bookmarks'
 import { formatEpisodeCode, formatMediaType, formatSeason, inferSeasonFromTitle, relativeTime } from '../lib/format'
+import { isWatchedState, markUnwatchedPayload, markWatchedPayload, seasonKeyFor } from '../lib/progress'
 
 
 
@@ -76,11 +79,15 @@ function EpisodeRow({
   canPlay,
   onPlay,
   onDownload,
+  watched,
+  onToggleWatched,
 }: {
   episode: EpisodeEntry
   canPlay: boolean
   onPlay: () => void
   onDownload: () => void
+  watched: boolean
+  onToggleWatched: () => void
 }) {
   const [imgFailed, setImgFailed] = useState(false)
   const date = episode.airDate ? new Date(episode.airDate) : null
@@ -111,6 +118,7 @@ function EpisodeRow({
           {episode.runtimeMinutes ? <span>{episode.runtimeMinutes} min</span> : null}
           {valid ? <span>{date.toLocaleDateString()}</span> : <span className="text-white/20">air date unknown</span>}
           {episode.site ? <span>{episode.site}</span> : null}
+          {watched ? <span className="text-accent/80">watched</span> : null}
         </p>
         {episode.synopsis ? (
           <p className="mt-1 line-clamp-2 text-[10px] leading-relaxed text-white/35">{episode.synopsis}</p>
@@ -133,6 +141,19 @@ function EpisodeRow({
           className="rounded-md bg-white/6 p-1.5 text-white/60 transition hover:bg-white/12 hover:text-white"
         >
           <Download size={12} />
+        </button>
+        <button
+          type="button"
+          onClick={onToggleWatched}
+          aria-label={watched ? `Mark episode ${episode.number} as not watched` : `Mark episode ${episode.number} as watched`}
+          title={watched ? 'Mark as not watched' : 'Mark as watched'}
+          className={
+            watched
+              ? 'rounded-md bg-accent/15 p-1.5 text-accent transition hover:bg-accent hover:text-black'
+              : 'rounded-md bg-white/6 p-1.5 text-white/60 transition hover:bg-accent hover:text-black'
+          }
+        >
+          {watched ? <Undo2 size={12} /> : <Check size={12} />}
         </button>
       </div>
     </li>
@@ -308,6 +329,40 @@ export default function AnimeDetailPage() {
       alive = false
     }
   }, [mediaId])
+
+  // Episode watch marks (AV-156): per-episode state from the viewer's
+  // progress records; signed-out viewers simply see no marks.
+  const [episodeProgress, setEpisodeProgress] = useState<Map<number, string>>(new Map())
+  useEffect(() => {
+    let alive = true
+    api.getProgress()
+      .then(({ entries }) => {
+        if (!alive) return
+        const map = new Map<number, string>()
+        for (const entry of entries) if (entry.mediaId === mediaId) map.set(entry.episode, entry.state)
+        setEpisodeProgress(map)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [mediaId])
+
+  async function toggleEpisodeWatched(episode: EpisodeEntry) {
+    const season = seasonKeyFor(detail?.season, detail?.seasonYear)
+    const watched = isWatchedState(episodeProgress.get(episode.number))
+    try {
+      const res = await api.saveProgress(
+        watched
+          ? markUnwatchedPayload(mediaId, season, episode.number)
+          : markWatchedPayload(mediaId, season, episode.number, episode.runtimeMinutes),
+      )
+      setEpisodeProgress((prev) => new Map(prev).set(episode.number, res.entry.state))
+      toast(watched ? `Episode ${episode.number} marked as not watched` : `Episode ${episode.number} marked as watched`)
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not update episode progress', 'err')
+    }
+  }
 
   async function saveOrderNote() {
     setOrderNoteSaving(true)
@@ -676,6 +731,8 @@ export default function AnimeDetailPage() {
                     key={episode.number}
                     episode={episode}
                     canPlay={Boolean(detail.airedEpisodes >= episode.number || detail.status === 'FINISHED')}
+                    watched={isWatchedState(episodeProgress.get(episode.number))}
+                    onToggleWatched={() => void toggleEpisodeWatched(episode)}
                     onPlay={() => openDetail(detail, { watch: true })}
                     onDownload={() => openDetail(detail)}
                   />
