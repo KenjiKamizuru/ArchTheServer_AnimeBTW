@@ -8,6 +8,7 @@ type ListSummary = { id: string; name: string; count: number; description?: stri
 type Entry = { mediaId: number; media: Media; status: string | null; note: string; priority: number | null; rating: number | null }
 type Overview = { statuses: ListSummary[]; lists: ListSummary[]; totalEntries: number; limits: { maxItems: number; maxLists: number } }
 type List = ListSummary & { entries: Entry[]; custom: boolean }
+type UndoRecord = { media: Media; status: string | null; addedAt: number; note: string; priority: number | null; rating: number | null; orderIndex: number | null }
 
 async function request<T>(url: string, method = 'GET', body?: unknown): Promise<T> {
   const response = await fetch(url, { method, headers: body === undefined ? undefined : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
@@ -56,6 +57,7 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState<Set<number>>(() => new Set())
   const [moveTarget, setMoveTarget] = useState('')
+  const [undo, setUndo] = useState<{ listId: string; records: UndoRecord[]; count: number } | null>(null)
   useEffect(() => {
     let cancelled = false
     setList(null)
@@ -94,6 +96,33 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
       setMessage(`Moved ${result.moved} entr${result.moved === 1 ? 'y' : 'ies'}.`)
     })
   }
+  // Bulk removal + undo window (AV-135): the server returns exact removal
+  // snapshots; Undo re-inserts them within 10 seconds.
+  async function removeSelected() {
+    if (selected.size === 0) return
+    const ids = [...selected]
+    setSelected(new Set())
+    setSelectMode(false)
+    await perform(async () => {
+      const result = await request<{ removed: number; records: UndoRecord[] }>(`/api/lists/${encodeURIComponent(active)}/remove`, 'POST', { mediaIds: ids })
+      setMessage(`Removed ${result.removed} entr${result.removed === 1 ? 'y' : 'ies'}.`)
+      setUndo({ listId: active, records: result.records, count: result.removed })
+    })
+  }
+  async function undoRemoval() {
+    if (!undo) return
+    const { listId, records, count } = undo
+    setUndo(null)
+    await perform(async () => {
+      const result = await request<{ restored: number }>(`/api/lists/${encodeURIComponent(listId)}/restore`, 'POST', { records })
+      setMessage(`Restored ${result.restored} of ${count}.`)
+    })
+  }
+  useEffect(() => {
+    if (!undo) return
+    const timer = setTimeout(() => setUndo(null), 10_000)
+    return () => clearTimeout(timer)
+  }, [undo])
   const button = 'rounded-lg bg-white/10 px-3 py-2 text-xs text-white hover:bg-white/20 disabled:opacity-50'
   // Capacity warnings (AV-140): surface at 90% of the installation caps so
   // users can clean up before adds start failing; users can disable them.
@@ -123,6 +152,13 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
       ) : null}
       {error && <p role="alert" className="mt-2 text-sm text-red-300">{error}</p>}
       {message && <p role="status" className="mt-2 text-sm text-white/70">{message}</p>}
+      {undo ? (
+        <p role="status" className="mt-2 flex items-center gap-2 rounded-lg bg-white/5 px-3 py-2 text-xs text-white/70">
+          Removed {undo.count} entr{undo.count === 1 ? 'y' : 'ies'}.
+          <button type="button" className="text-accent underline" disabled={busy} onClick={() => void undoRemoval()}>Undo</button>
+          <span className="text-white/40">(10 seconds)</span>
+        </p>
+      ) : null}
       <div className="mt-4 flex flex-wrap gap-2" aria-label="Lists">
         {[...(overview?.statuses ?? []), ...(overview?.lists ?? [])].map((item) => (
           <button type="button" key={item.id} onClick={() => setActive(item.id)} aria-pressed={active === item.id} className={`${button} ${active === item.id ? 'ring-2 ring-accent' : ''}`}>
@@ -204,6 +240,9 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
               </select>
               <button type="button" className={button} disabled={busy || !moveTarget || selected.size === 0} onClick={() => void moveSelected()}>
                 Move {selected.size > 0 ? `${selected.size} selected` : 'selected'}
+              </button>
+              <button type="button" className={`${button} text-red-300`} disabled={busy || selected.size === 0} onClick={() => void removeSelected()}>
+                Remove {selected.size > 0 ? `${selected.size} selected` : 'selected'}
               </button>
             </>
           ) : null}

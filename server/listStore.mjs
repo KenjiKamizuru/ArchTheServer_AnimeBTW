@@ -209,6 +209,109 @@ export async function moveEntries(fromId, toId, rawIds) {
   return { moved: moving.length }
 }
 
+function contextOf(entry, id, key) {
+  const list = entry[key]
+  if (!Array.isArray(list)) return null
+  return list.find((item) => item.listId === id) ?? null
+}
+
+/** Bulk removal (AV-135) returning exact snapshots for undo. Applies the
+ * same semantics as remove() per entry; one persist for the whole batch. */
+export async function removeEntries(id, rawIds) {
+  const list = info(id)
+  if (!Array.isArray(rawIds) || rawIds.length === 0) throw error('mediaIds must be a non-empty array of media ids')
+  if (rawIds.length > 500) throw error('Remove at most 500 entries at a time')
+  const ids = rawIds.map((value) => Number(value))
+  if (ids.some((value) => !Number.isInteger(value) || value <= 0)) throw error('Invalid media id')
+  if (new Set(ids).size !== ids.length) throw error('Duplicate media id')
+  const removing = state.entries.filter((item) => ids.includes(item.mediaId))
+  if (removing.length !== ids.length || removing.some((entry) => !includes(entry, id))) {
+    throw error('Every entry must belong to the list')
+  }
+  const records = removing.map((entry) => ({
+    media: entry.media,
+    status: entry.status,
+    addedAt: entry.addedAt,
+    note: contextOf(entry, id, 'notes')?.text ?? '',
+    priority: contextOf(entry, id, 'ratings')?.priority ?? null,
+    rating: contextOf(entry, id, 'ratings')?.rating ?? null,
+    orderIndex: list.custom ? Math.max(0, (state.lists.find((item) => item.id === id)?.order ?? []).indexOf(entry.mediaId)) : null,
+  }))
+  for (const entry of removing) {
+    if (entry.notes) entry.notes = entry.notes.filter((note) => note.listId !== id)
+    if (entry.ratings) entry.ratings = entry.ratings.filter((r) => r.listId !== id)
+    if (list.custom) {
+      entry.listIds = entry.listIds.filter((item) => item !== id)
+      const record = state.lists.find((item) => item.id === id)
+      if (record) record.order = record.order.filter((item) => item !== entry.mediaId)
+    } else {
+      entry.status = null
+    }
+    if (!entry.status && !entry.listIds.length) state.entries = state.entries.filter((item) => item !== entry)
+  }
+  await persist()
+  return { removed: removing.length, records }
+}
+
+/** Undo counterpart to removeEntries (AV-135): reinsert exact snapshots.
+ * Records whose membership already exists are skipped (double-undo safe). */
+export async function restoreEntries(id, rawRecords) {
+  const list = info(id)
+  if (!Array.isArray(rawRecords) || rawRecords.length === 0) throw error('records must be a non-empty array')
+  if (rawRecords.length > 500) throw error('Restore at most 500 entries at a time')
+  const parsed = rawRecords.map((raw) => {
+    const media = sanitizeBookmarkMedia(raw?.media)
+    if (!media) throw error('Invalid media object')
+    const status = raw?.status ?? null
+    if (status !== null && !STATUSES.includes(status)) throw error('Invalid status')
+    if (list.custom === false && status !== id.slice(7)) throw error('Status snapshots must match the target status list')
+    if (!Number.isFinite(raw?.addedAt) || raw.addedAt < 0 || raw.addedAt > 8.64e15) throw error('Invalid added date')
+    const note = raw?.note ?? ''
+    if (typeof note !== 'string' || note.length > 1000) throw error('Invalid note')
+    const priority = raw?.priority ?? null
+    const rating = raw?.rating ?? null
+    if (priority !== null && (!Number.isInteger(priority) || priority < 1 || priority > 5)) throw error('Invalid priority')
+    if (rating !== null && (!Number.isInteger(rating) || rating < 1 || rating > 10)) throw error('Invalid rating')
+    const orderIndex = raw?.orderIndex ?? null
+    if (orderIndex !== null && (!Number.isInteger(orderIndex) || orderIndex < 0)) throw error('Invalid order index')
+    return { media, status, addedAt: raw.addedAt, note, priority, rating, orderIndex }
+  })
+  let restored = 0
+  // Reinsert in ascending original order position so splices reconstruct the
+  // removed sequence exactly (records without a position append at the end).
+  const sequenced = [...parsed].sort((a, b) => (a.orderIndex ?? Number.POSITIVE_INFINITY) - (b.orderIndex ?? Number.POSITIVE_INFINITY))
+  for (const record of sequenced) {
+    let entry = state.entries.find((item) => item.mediaId === record.media.id)
+    const member = entry ? includes(entry, id) : false
+    if (member) continue // already restored (or re-added) — idempotent undo
+    if (!entry) {
+      if (state.entries.length >= MAX_ITEMS) throw error('Entry limit reached', 429)
+      entry = { mediaId: record.media.id, media: record.media, status: record.status, listIds: [], addedAt: record.addedAt }
+      state.entries.push(entry)
+    } else {
+      entry.media = record.media
+      if (list.custom === false) entry.status = record.status
+    }
+    if (list.custom) {
+      entry.listIds.push(id)
+      const listRecord = state.lists.find((item) => item.id === id)
+      if (listRecord && !listRecord.order.includes(entry.mediaId)) {
+        const at = record.orderIndex === null ? listRecord.order.length : Math.min(record.orderIndex, listRecord.order.length)
+        listRecord.order.splice(at, 0, entry.mediaId)
+      }
+    } else {
+      entry.status = record.status
+    }
+    if (record.note) (entry.notes ??= []).push({ listId: id, text: record.note })
+    if (record.priority !== null || record.rating !== null) {
+      (entry.ratings ??= []).push({ listId: id, priority: record.priority, rating: record.rating })
+    }
+    restored += 1
+  }
+  await persist()
+  return { restored }
+}
+
 export async function setNote(id, rawId, text) {
   info(id)
   const mediaId = Number(rawId)

@@ -1734,6 +1734,15 @@ app.put('/api/lists/:id/order', limitMutations, wrap(async (req, res) => {
 app.post('/api/lists/:id/move', limitMutations, wrap(async (req, res) => {
   res.json(await listStore.moveEntries(req.params.id, req.body?.to, req.body?.mediaIds))
 }))
+
+// Bulk removal with undo snapshots + restore (AV-135).
+app.post('/api/lists/:id/remove', limitMutations, wrap(async (req, res) => {
+  res.json(await listStore.removeEntries(req.params.id, req.body?.mediaIds))
+}))
+
+app.post('/api/lists/:id/restore', limitMutations, wrap(async (req, res) => {
+  res.json(await listStore.restoreEntries(req.params.id, req.body?.records))
+}))
 app.delete('/api/lists/:id', limitMutations, wrap(async (req, res) => {
   res.json(await listStore.deleteList(req.params.id))
 }))
