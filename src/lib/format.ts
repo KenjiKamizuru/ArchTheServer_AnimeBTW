@@ -69,22 +69,114 @@ export function formatQualityLabel(quality: string | null | undefined, resolvedH
   return quality
 }
 
-const SEASON_TITLE_RES = [
-  /^(.*?)[\s:–—-]+season\s+(\d{1,2})\s*$/i,
-  /^(.*?)[\s:–—-]+(\d{1,2})(?:st|nd|rd|th)\s+season\s*$/i,
-  /^(.*?)[\s:–—-]+s(\d{1,2})\s*$/i,
+// Mirrors `server/seasons.mjs` so the client and server agree on which folder a
+// title belongs to. Keep both in sync when adding rules.
+const WORD_NUMBERS: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
+  seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
+}
+const ROMAN_NUMERALS: Record<string, number> = {
+  i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10, xi: 11, xii: 12,
+}
+const FINAL_SEASON = 99
+
+interface SeasonRule {
+  re: RegExp
+  kind: 'season' | 'final' | 'part' | 'roman'
+}
+
+const SEASON_RULES: SeasonRule[] = [
+  { re: /^(.*?)[\s:–—-]+season[\s._-]*([0-9]{1,2}|[a-z]+)\b.*$/i, kind: 'season' },
+  { re: /^(.*?)[\s:–—-]+([0-9]{1,2})(?:st|nd|rd|th)[\s._-]*season\b.*$/i, kind: 'season' },
+  { re: /^(.*?)[\s:–—-]+final[\s._-]*season\b.*$/i, kind: 'final' },
+  { re: /^(.*?)[\s:–—-]+(?:cour|part)[\s._-]*([0-9]{1,2})\b.*$/i, kind: 'part' },
+  { re: /^(.*?)[\s:–—-]+s(?:eason)?[\s._-]*([0-9]{1,2})\s*$/i, kind: 'season' },
+  { re: /^(.*\S)\s+([ivx]{1,4})$/i, kind: 'roman' },
+  { re: /^(.*[a-z][^0-9]*?)[\s:–—-]+([0-9]{1,2})$/i, kind: 'season' },
 ]
 
+const SXXEXX_RE = /^(.*?)[\s._-]*s([0-9]{1,2})[\s._-]*e([0-9]{1,4})\b.*$/i
+const RELEASE_NOISE_RE =
+  /[\s._-]+(?:1080p|720p|480p|2160p|4k|bluray|bd|bdrip|web-?dl|webrip|hdrip|dvdrip|x264|x265|h\.?264|h\.?265|hevc|av1|aac|flac|dual[.\s-]?audio|multi[.\s-]?sub|uncensored|batch|complete)\b.*$/i
+
+function cleanBaseTitle(value: string): string {
+  return String(value ?? '')
+    .replace(/[\s._-]+$/g, '')
+    .replace(/[([{]+$/g, '')
+    .replace(/[\s:–—,\-]+$/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
+/**
+ * Splits a release title into base series name and season number, understanding
+ * `Season 2`, `2nd Season`, `S02`, `S02E05`, `Season Two`, `Show II`,
+ * `Final Season`, `Part 2`/`Cour 2`, trailing years and release-group noise.
+ */
 export function inferSeasonFromTitle(title: string | null | undefined): { seriesTitle: string; season: number } {
-  const clean = String(title ?? '').trim()
-  for (const re of SEASON_TITLE_RES) {
-    const match = clean.match(re)
-    if (match && match[1]?.trim()) {
-      const n = Number(match[2])
-      if (n >= 1 && n <= 99) return { seriesTitle: match[1].trim(), season: n }
-    }
+  let clean = String(title ?? '')
+    .replace(/\[[^\]]*]/g, ' ')
+    .replace(/\{[^}]*\}/g, ' ')
+    .replace(/_/g, ' ')
+    .replace(RELEASE_NOISE_RE, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+  if (!clean) clean = String(title ?? '').trim()
+
+  let codeSeason: number | null = null
+  const code = clean.match(SXXEXX_RE)
+  if (code && /[a-z\u00c0-\uffff]/i.test(code[1] ?? '')) {
+    codeSeason = Number(code[2])
+    clean = code[1].trim()
   }
+
+  clean = clean
+    .replace(/[([{]\s*(?:19|20)[0-9]{2}\s*[)\]}]/g, ' ')
+    .replace(/[\s._-]*\(?(?:19|20)[0-9]{2}\)?$/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+
+  if (codeSeason && codeSeason >= 1 && codeSeason <= FINAL_SEASON) {
+    return { seriesTitle: cleanBaseTitle(clean) || clean, season: codeSeason }
+  }
+
+  for (const rule of SEASON_RULES) {
+    const match = clean.match(rule.re)
+    if (!match) continue
+    const base = cleanBaseTitle(match[1] ?? '')
+    if (!base || base.length < 2 || !/[a-z\u00c0-\uffff]/i.test(base)) continue
+
+    if (rule.kind === 'part') return { seriesTitle: base, season: 1 }
+    if (rule.kind === 'final') return { seriesTitle: base, season: FINAL_SEASON }
+    if (rule.kind === 'roman') {
+      const n = ROMAN_NUMERALS[String(match[2]).toLowerCase()]
+      if (n) return { seriesTitle: base, season: n }
+      continue
+    }
+    const token = String(match[2]).toLowerCase()
+    const n = /^[0-9]{1,2}$/.test(token) ? Number(token) : WORD_NUMBERS[token]
+    if (n && n >= 1 && n <= FINAL_SEASON) return { seriesTitle: base, season: n }
+  }
+
   return { seriesTitle: clean, season: 1 }
+}
+
+/**
+ * Chooses the cleanest shared base title across a franchise's known titles
+ * (e.g. ["Show", "Show Season 2", "Show II"] -> "Show").
+ */
+export function pickSharedSeriesTitle(titles: string[]): string {
+  const counts = new Map<string, number>()
+  for (const title of titles) {
+    const base = inferSeasonFromTitle(title).seriesTitle.trim()
+    if (!base) continue
+    counts.set(base, (counts.get(base) ?? 0) + 1)
+  }
+  if (counts.size === 0) return ''
+  // Most frequent base wins; ties break toward the shortest (least decorated) name.
+  return [...counts.entries()].sort(
+    (a, b) => b[1] - a[1] || a[0].length - b[0].length || a[0].localeCompare(b[0]),
+  )[0][0]
 }
 
 export function relativeTime(timestamp: number): string {

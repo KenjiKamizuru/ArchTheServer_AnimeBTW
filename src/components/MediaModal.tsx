@@ -63,6 +63,7 @@ import {
   formatSeason,
   formatSpeed,
   inferSeasonFromTitle,
+  pickSharedSeriesTitle,
   relativeTime,
   safeExternalHref,
 } from '../lib/format'
@@ -213,6 +214,8 @@ function DetailSheet({
   useEffect(() => {
     let alive = true
     api
+      // Fetch the same enriched payload the standalone page uses so the modal
+      // and the route never disagree about episodes or relations.
       .detail(id)
       .then((data) => {
         if (!alive) return
@@ -564,7 +567,10 @@ function DetailSheet({
             a.id - b.id,
         )
 
-        const sharedSeries = inferSeasonFromTitle(all[0].title).seriesTitle
+        // Derive the shared series base from every known title so a franchise that
+        // names seasons inconsistently ("… S2", "… II", "… Final Season) still
+        // lands in one folder tree. Then number seasons by release order.
+        const sharedSeries = pickSharedSeriesTitle(all.map((entry) => entry.title)) || inferSeasonFromTitle(all[0].title).seriesTitle
         const seasons: BulkSeasonSpec[] = all.map((entry, idx) => ({
           mediaId: entry.id,
           animeTitle: entry.title,
@@ -696,6 +702,19 @@ function DetailSheet({
               />
             ) : null}
             <div className="absolute inset-0 bg-gradient-to-t from-ink-900 via-ink-900/40 to-transparent" />
+            {media ? (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose()
+                  window.location.assign(`/anime/${media.id}`)
+                }}
+                title="Open the full detail page with episode guide, relations and notes"
+                className="absolute top-3 right-40 inline-flex items-center gap-1.5 rounded-full bg-black/65 px-3 py-1.5 text-[11px] font-medium text-white/90 ring-1 ring-white/15 backdrop-blur transition hover:bg-black/85 hover:text-accent"
+              >
+                Full page
+              </button>
+            ) : null}
             {media ? (
               <button
                 type="button"

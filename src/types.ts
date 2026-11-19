@@ -55,9 +55,112 @@ export interface RelatedSeason {
   cover: string | null
 }
 
+export interface EpisodeEntry {
+  number: number
+  title: string | null
+  thumbnail: string | null
+  url: string | null
+  site: string | null
+  runtimeMinutes: number | null
+  airDate: string | null
+  hasMetadata: boolean
+  synopsis: string | null
+}
+
+export interface RelatedItem {
+  id: number
+  type: string
+  title: string
+  romaji: string | null
+  native: string | null
+  format: string | null
+  status: string
+  episodes: number | null
+  chapters?: number | null
+  season: MediaSeason | null
+  seasonYear: number | null
+  startDate: { year: number | null; month: number | null; day: number | null } | null
+  cover: string | null
+  averageScore: number | null
+  relationType: string
+}
+
+export interface RelationGroup {
+  key: string
+  label: string
+  items: RelatedItem[]
+}
+
+export interface TimelineEntry {
+  id: number
+  title: string
+  format: string | null
+  episodes: number | null
+  year: number | null
+  season: MediaSeason | null
+  cover: string | null
+  position: number
+  uncertain: boolean
+}
+
+export interface ScoreBucket {
+  score: number
+  amount: number
+  percent: number
+}
+
+export interface CharacterEntry {
+  id: number
+  name: string
+  nativeName: string | null
+  image: string | null
+  siteUrl: string | null
+  role: string
+  voiceActors: { id: number; name: string; image: string | null; language: string; siteUrl: string | null }[]
+}
+
+export interface StaffEntry {
+  id: number
+  name: string
+  nativeName: string | null
+  image: string | null
+  role: string | null
+  occupations: string[]
+  siteUrl: string | null
+}
+
+export interface DetailSection {
+  id: string
+  label: string
+  always?: boolean
+}
+
 export interface MediaDetail extends Media {
   streamingEpisodes: StreamingEpisode[]
   relatedSeasons?: RelatedSeason[]
+  startDate?: { year: number | null; month: number | null; day: number | null } | null
+  endDate?: { year: number | null; month: number | null; day: number | null } | null
+  rankings?: { rank: number; type: string; context: string; year: number | null; season: MediaSeason | null; allTime: boolean }[]
+  /** Server-computed detail sections. */
+  episodesGuide?: EpisodeEntry[]
+  relations?: RelationGroup[]
+  timeline?: TimelineEntry[]
+  scores?: { total: number; buckets: ScoreBucket[] } | null
+  scoreMean?: number | null
+  scoreMode?: { score: number; amount: number; percent: number } | null
+  statusTimeline?: { label: string; detail: string | null; display: string }[]
+  synopsis?: { text: string; hiddenCount: number }
+  overview?: string
+  hasSpoilers?: boolean
+  sections?: DetailSection[]
+  characters?: CharacterEntry[]
+  staff?: StaffEntry[]
+}
+
+export interface AnimeNote {
+  mediaId: number
+  note: string
+  updatedAt: number | null
 }
 
 export interface Bookmark {

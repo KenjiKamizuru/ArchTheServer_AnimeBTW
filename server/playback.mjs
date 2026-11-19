@@ -828,6 +828,99 @@ function buildFileDownloadArgs({
 }
 
 /**
+ * Remuxes an already-downloaded local HLS playlist into MP4. Used by the
+ * parallel segment downloader: all network I/O already happened, so FFmpeg
+ * only touches local files (`file:` whitelist, no remote protocols).
+ */
+export function remuxLocalHlsToFile({
+  playlistPath,
+  outputPath,
+  durationSec = null,
+  signal,
+  onProgress,
+}) {
+  return new Promise((resolve, reject) => {
+    const ffmpeg = resolveFfmpeg()
+    if (!ffmpeg) {
+      reject(Object.assign(new Error('ffmpeg is required to finish HLS downloads'), { status: 503 }))
+      return
+    }
+    const caps = getFfmpegCapabilities(ffmpeg)
+    const args = ['-y', '-hide_banner', '-loglevel', 'error', '-nostdin', '-progress', 'pipe:1']
+    if (caps.statsPeriod) args.push('-stats_period', '0.5')
+    if (caps.protocolWhitelist) args.push('-protocol_whitelist', 'file,pipe,crypto')
+    if (caps.allowedExtensions) args.push('-allowed_extensions', 'ALL')
+    args.push('-f', 'hls', '-i', toFfmpegLocalPath(playlistPath))
+    appendMappingAndCodecArgs(args, {
+      hasSecondAudioInput: false,
+      needsAacBsf: true,
+      transcodeAudio: false,
+    })
+    args.push('-movflags', '+faststart', '-f', 'mp4', toFfmpegLocalPath(outputPath))
+
+    const child = spawn(ffmpeg, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    let stderr = ''
+    let settled = false
+    const onAbort = () => kill(child)
+    signal?.addEventListener('abort', onAbort, { once: true })
+
+    child.stderr?.on('data', (chunk) => {
+      stderr = (stderr + chunk.toString('utf8')).slice(-4_000)
+    })
+    let stdoutRemainder = ''
+    let currentBlock = {}
+    const flush = () => {
+      const size = Number(currentBlock.total_size)
+      const outTime = Number(currentBlock.out_time_us)
+      if (Number.isFinite(size) || Number.isFinite(outTime)) {
+        onProgress?.({
+          downloadedBytes: Number.isFinite(size) ? size : 0,
+          downloadedSec: Number.isFinite(outTime) ? outTime / 1_000_000 : 0,
+          progress:
+            Number.isFinite(outTime) && durationSec && durationSec > 0
+              ? Math.min(0.99, outTime / 1_000_000 / durationSec)
+              : null,
+          speedBps: null,
+        })
+      }
+      currentBlock = {}
+    }
+    child.stdout?.on('data', (chunk) => {
+      stdoutRemainder += chunk.toString('utf8')
+      const lines = stdoutRemainder.split(/\r?\n/)
+      stdoutRemainder = lines.pop() ?? ''
+      for (const line of lines) {
+        const eq = line.indexOf('=')
+        if (eq <= 0) continue
+        currentBlock[line.slice(0, eq).trim()] = line.slice(eq + 1).trim()
+        if (line.startsWith('progress=')) flush()
+      }
+    })
+    child.once('error', (err) => {
+      if (settled) return
+      settled = true
+      signal?.removeEventListener('abort', onAbort)
+      reject(err)
+    })
+    child.once('close', (code) => {
+      if (settled) return
+      settled = true
+      signal?.removeEventListener('abort', onAbort)
+      if (signal?.aborted) {
+        reject(Object.assign(new Error('Download cancelled'), { name: 'AbortError' }))
+        return
+      }
+      if (code === 0) {
+        onProgress?.({ downloadedBytes: 0, downloadedSec: 0, progress: 1, speedBps: null })
+        resolve()
+        return
+      }
+      reject(Object.assign(new Error(lastError(stderr) || `ffmpeg exited with code ${code}`), { status: 502 }))
+    })
+  })
+}
+
+/**
  * Downloads and muxes a remote HLS/media stream into a temporary MP4 file at
  * `outputPath`, emitting real-time progress and supporting pause/resume/cancel.
  */

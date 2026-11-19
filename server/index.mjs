@@ -1,10 +1,19 @@
 import crypto from 'node:crypto'
 import express from 'express'
 import path from 'node:path'
-import { gzipSync } from 'node:zlib'
+import { brotliCompressSync, constants as zlibConstants, gzipSync } from 'node:zlib'
 import { existsSync, lstatSync, createReadStream } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import * as anilist from './anilist.mjs'
+import * as browse from './browse.mjs'
+import * as explore from './explore.mjs'
+import * as searchEngine from './search.mjs'
+import * as detailEngine from './detail.mjs'
+import * as kv from './kv.mjs'
+import * as listStore from './listStore.mjs'
+import { exportListJson, exportListCsv } from './listExport.mjs'
+import { pickListEntry } from './listRandom.mjs'
+import { sortListEntries } from './listSort.mjs'
 import * as store from './store.mjs'
 import * as settings from './settings.mjs'
 import * as resolver from './resolver.mjs'
@@ -43,7 +52,7 @@ const APP_CSP = [
   "form-action 'self'",
 ].join('; ')
 
-await Promise.all([store.init(), settings.init(), resolver.init(), imdb.init()])
+await Promise.all([store.init(), settings.init(), resolver.init(), imdb.init(), kv.init(), listStore.init()])
 await library.init()
 await downloads.init()
 
@@ -179,8 +188,17 @@ app.use((req, res, next) => {
 
 // Compress JSON API responses >= 512 bytes for gzip-capable clients.
 // Streaming routes (video, subtitle proxy, artwork) write directly and are untouched.
+const BROTLI_JSON_OPTIONS = {
+  params: {
+    [zlibConstants.BROTLI_PARAM_QUALITY]: 5,
+    [zlibConstants.BROTLI_PARAM_LGWIN]: 20,
+  },
+}
 app.use((req, res, next) => {
-  if (!/\bgzip\b/.test(String(req.headers['accept-encoding'] ?? ''))) return next()
+  const acceptEncoding = String(req.headers['accept-encoding'] ?? '')
+  const wantsBrotli = /\bbr\b/.test(acceptEncoding)
+  const wantsGzip = /\bgzip\b/.test(acceptEncoding)
+  if (!wantsBrotli && !wantsGzip) return next()
   const origJson = res.json.bind(res)
   res.json = (payload) => {
     const serialized = JSON.stringify(payload === undefined ? null : payload)
@@ -188,12 +206,33 @@ app.use((req, res, next) => {
       res.set('Vary', 'Accept-Encoding')
       return origJson(payload)
     }
-    const gz = gzipSync(Buffer.from(serialized, 'utf8'), { level: 6 })
-    res.set('Content-Encoding', 'gzip')
+    const raw = Buffer.from(serialized, 'utf8')
+    let body = null
+    let encoding = null
+    if (wantsBrotli) {
+      try {
+        body = brotliCompressSync(raw, {
+          ...BROTLI_JSON_OPTIONS,
+          params: { ...BROTLI_JSON_OPTIONS.params, [zlibConstants.BROTLI_PARAM_SIZE_HINT]: raw.length },
+        })
+        encoding = 'br'
+      } catch {
+        /* fall through to gzip */
+      }
+    }
+    if (!body && wantsGzip) {
+      body = gzipSync(raw, { level: 6 })
+      encoding = 'gzip'
+    }
+    if (!body) {
+      res.set('Vary', 'Accept-Encoding')
+      return origJson(payload)
+    }
+    res.set('Content-Encoding', encoding)
     res.set('Content-Type', 'application/json; charset=utf-8')
     res.set('Vary', 'Accept-Encoding')
-    res.setHeader('Content-Length', String(gz.length))
-    res.end(gz)
+    res.setHeader('Content-Length', String(body.length))
+    res.end(body)
     return res
   }
   next()
@@ -271,6 +310,211 @@ app.get(
   }),
 )
 
+// Rich browse: server-side filtering that AniList cannot express is applied
+// locally, and the response carries shareable params for the current filters.
+app.get(
+  '/api/browse',
+  limitOutbound,
+  wrap(async (req, res) => {
+    const filters = browse.parseBrowseFilters(req.query)
+    const data = await anilist.browse(filters, browse)
+    res.json({ ...data, activeFilters: browse.activeFilterCount(filters) })
+  }),
+)
+
+app.get(
+  '/api/browse/options',
+  wrap(async (_req, res) => {
+    res.json({
+      formats: browse.BROWSE_FORMATS,
+      statuses: browse.BROWSE_STATUSES,
+      sorts: Object.keys(browse.BROWSE_SORTS),
+      sources: browse.BROWSE_SOURCES,
+      countries: browse.BROWSE_COUNTRIES,
+    })
+  }),
+)
+
+// Spotlight / random / hidden-gems discovery picks.
+app.get(
+  '/api/discover/:kind',
+  limitOutbound,
+  wrap(async (req, res) => {
+    const kind = String(req.params.kind ?? '')
+    const filters = browse.parseBrowseFilters(req.query)
+    const data = await anilist.discover(kind, filters, browse)
+    res.json(data)
+  }),
+)
+
+// ── Studio / producer browsing, alphabetical index, franchises ──────────────
+
+app.get(
+  '/api/studios',
+  limitOutbound,
+  wrap(async (req, res) => {
+    const page = clamp(Number(req.query.page) || 1, 1, 10)
+    const search = String(req.query.q ?? '').trim().slice(0, 60)
+    const sort = String(req.query.sort ?? '')
+    const data = await anilist.studios({ page, search, sort })
+    res.json(data)
+  }),
+)
+
+app.get(
+  '/api/studios/:id',
+  limitOutbound,
+  wrap(async (req, res) => {
+    const id = Number(req.params.id)
+    if (!Number.isInteger(id) || id <= 0) throw Object.assign(new Error('Invalid studio id'), { status: 400 })
+    const page = clamp(Number(req.query.page) || 1, 1, 20)
+    const sort = browse.BROWSE_SORTS[String(req.query.sort ?? '')] ? String(req.query.sort) : 'popular'
+    const data = await anilist.studioFilmography(id, { page, sort })
+    res.json({
+      ...data,
+      byYear: explore.groupByYear(data.media),
+      decades: explore.decadesPresent(data.media),
+    })
+  }),
+)
+
+// Alphabetical catalog index (AV-046). Buckets are computed server-side so
+// clients do not need to reimplement the kana row mapping.
+app.get(
+  '/api/index',
+  limitOutbound,
+  wrap(async (req, res) => {
+    const sort = ['title', 'popular', 'rated'].includes(String(req.query.sort)) ? String(req.query.sort) : 'title'
+    const kana = String(req.query.kana ?? '1') !== '0'
+    const page = clamp(Number(req.query.page) || 1, 1, 10)
+    const data = await anilist.catalogIndex({ page, sort })
+    res.json({
+      buckets: explore.buildAlphabetIndex(data.media, { kana }),
+      bucketsAvailable: kana ? [...explore.LATIN_BUCKETS, ...explore.KANA_ROWS] : explore.LATIN_BUCKETS,
+      page,
+      hasNextPage: data.hasNextPage,
+      total: data.total,
+    })
+  }),
+)
+
+// Franchise grouping for the current season (AV-045).
+app.get(
+  '/api/franchises',
+  limitOutbound,
+  wrap(async (req, res) => {
+    const season = String(req.query.season ?? '')
+    const year = Number(req.query.year) || undefined
+    const data = await anilist.seasonFranchises({ season, year })
+    res.json({
+      season: data.season,
+      year: data.year,
+      groups: explore.buildFranchiseGroups(data.media),
+      considered: data.media.length,
+    })
+  }),
+)
+
+// Recently added to catalog (AV-047): newest IDs are the closest signal.
+app.get(
+  '/api/recent',
+  limitOutbound,
+  wrap(async (req, res) => {
+    const limit = clamp(Number(req.query.limit) || 24, 1, 50)
+    const media = await anilist.recentlyAdded(limit)
+    res.json({ media, count: media.length })
+  }),
+)
+
+// Recently updated metadata (AV-048).
+app.get(
+  '/api/updated',
+  limitOutbound,
+  wrap(async (req, res) => {
+    const limit = clamp(Number(req.query.limit) || 24, 1, 50)
+    const media = await anilist.recentlyUpdated(limit)
+    res.json({ media, count: media.length })
+  }),
+)
+
+// ── Search intelligence ─────────────────────────────────────────────────────
+
+// Instant suggestions for the type-ahead dropdown (AV-051).
+app.get(
+  '/api/search/suggest',
+  limitOutbound,
+  wrap(async (req, res) => {
+    const q = String(req.query.q ?? '')
+    const data = await anilist.suggest(q, searchEngine)
+    // Typing is bursty: let the browser reuse a suggestion list briefly.
+    res.setHeader('Cache-Control', 'private, max-age=20')
+    res.json(data)
+  }),
+)
+
+// Structured search with field filters live here rather than on /api/search so
+// the plain title endpoint keeps its simple response shape.
+app.get(
+  '/api/search/advanced',
+  limitOutbound,
+  wrap(async (req, res) => {
+    const q = String(req.query.q ?? '')
+    const page = clamp(Number(req.query.page) || 1, 1, 25)
+    const perPage = searchEngine.clampResultCap(req.query.perPage)
+    const data = await anilist.searchAdvanced(q, page, searchEngine)
+    res.json({
+      ...data,
+      page,
+      perPage,
+      cappedAt: perPage,
+      groups: searchEngine.groupResults(data.media),
+      alternatives: data.media.length === 0 ? searchEngine.alternativeQueries(data.text || q) : [],
+    })
+  }),
+)
+
+// Search only the local library (AV-063).
+app.get(
+  '/api/search/library',
+  wrap(async (req, res) => {
+    const q = String(req.query.q ?? '').trim()
+    const { items } = await library.list()
+    const needle = searchEngine.normalizeForSearch(q)
+    const matches = needle
+      ? items.filter((item) => {
+          const haystack = searchEngine.normalizeForSearch(
+            [item.animeTitle, item.seriesTitle, item.fileName, item.folder, item.quality].filter(Boolean).join(' '),
+          )
+          return haystack.includes(needle)
+        })
+      : []
+    res.json({
+      query: q,
+      count: matches.length,
+      // Pre-computed fragments so the client can highlight without shipping the
+      // matcher (and without a second pass over every row).
+      items: matches.slice(0, 200).map((item) => ({
+        ...item,
+        highlight: searchEngine.highlightSegments(item.animeTitle || item.seriesTitle || item.fileName || '', q),
+      })),
+      totalLibrary: items.length,
+    })
+  }),
+)
+
+app.get(
+  '/api/search/options',
+  wrap(async (_req, res) => {
+    res.json({
+      fields: Object.keys(searchEngine.SEARCH_FIELDS),
+      aliases: Object.keys(searchEngine.SEARCH_FIELDS).length,
+      resultCap: searchEngine.RESULT_CAP,
+      statuses: ['airing', 'finished', 'upcoming', 'cancelled', 'hiatus'],
+      formats: ['tv', 'movie', 'ova', 'ona', 'special', 'music', 'tv_short'],
+    })
+  }),
+)
+
 app.get(
   '/api/airing',
   wrap(async (req, res) => {
@@ -307,9 +551,137 @@ app.get(
   '/api/anime/:id',
   wrap(async (req, res) => {
     const media = await anilist.getDetail(req.params.id)
-    res.json(media)
+    const reveal = String(req.query.spoilers ?? '') === '1'
+    const synopsis = detailEngine.redactSpoilers(media.description, { reveal })
+    res.json({
+      ...media,
+      // Pre-computed sections keep the client free of ranking/grouping logic.
+      episodes: detailEngine.buildEpisodeGuide(media, media.streamingEpisodes),
+      relations: detailEngine.groupRelations(
+        (media.rawRelations ?? media.relations ?? []),
+      ),
+      timeline: detailEngine.buildTimeline(media.timelineNodes ?? [], String(req.query.order ?? 'release')),
+      scores: detailEngine.scoreDistribution(media.scoreBuckets),
+      scoreMean: detailEngine.distributionMean(media.scoreBuckets),
+      scoreMode: detailEngine.distributionMode(media.scoreBuckets),
+      statusTimeline: detailEngine.buildStatusTimeline(media),
+      synopsis,
+      overview: detailEngine.spoilerFreeOverview(media.description),
+      hasSpoilers: detailEngine.hasSpoilers(media.description),
+      sections: detailEngine.DETAIL_SECTIONS,
+    })
   }),
 )
+
+// Per-anime private notes (AV-099). Notes live in the settings store so they
+// survive restarts without a database, and are namespaced by media id.
+app.get(
+  '/api/anime/:id/notes',
+  wrap(async (req, res) => {
+    const id = Number(req.params.id)
+    if (!Number.isInteger(id) || id <= 0) throw Object.assign(new Error('Invalid anime id'), { status: 400 })
+    const notes = await kv.get(`notes:${id}`, null)
+    res.json({ mediaId: id, note: typeof notes?.note === 'string' ? notes.note : '', updatedAt: notes?.updatedAt ?? null })
+  }),
+)
+
+app.put(
+  '/api/anime/:id/notes',
+  wrap(async (req, res) => {
+    const id = Number(req.params.id)
+    if (!Number.isInteger(id) || id <= 0) throw Object.assign(new Error('Invalid anime id'), { status: 400 })
+    const note = String(req.body?.note ?? '').slice(0, 4000)
+    const payload = note.trim() ? { note, updatedAt: Date.now() } : null
+    if (payload) await kv.set(`notes:${id}`, payload)
+    else await kv.remove(`notes:${id}`)
+    res.json({ mediaId: id, note: payload?.note ?? '', updatedAt: payload?.updatedAt ?? null })
+  }),
+)
+
+// Metadata correction suggestions (AV-096), queued for review.
+app.post(
+  '/api/anime/:id/report',
+  wrap(async (req, res) => {
+    const id = Number(req.params.id)
+    if (!Number.isInteger(id) || id <= 0) throw Object.assign(new Error('Invalid anime id'), { status: 400 })
+    const field = String(req.body?.field ?? '').slice(0, 40)
+    const message = String(req.body?.message ?? '').trim().slice(0, 1000)
+    const kind = req.body?.kind === 'episode-order' ? 'episode-order' : 'metadata'
+    if (!message) throw Object.assign(new Error('Please describe the problem'), { status: 400 })
+    const allowed = new Set([
+      'title', 'episodes', 'season', 'year', 'format', 'status', 'score',
+      'synopsis', 'studio', 'relations', 'episode-order', 'other',
+    ])
+    const report = {
+      id: `r_${crypto.randomBytes(8).toString('hex')}`,
+      mediaId: id,
+      kind,
+      field: allowed.has(field) ? field : 'other',
+      message,
+      createdAt: Date.now(),
+      status: 'open',
+    }
+    const existing = (await kv.get('reports', [])) ?? []
+    const reports = [report, ...(Array.isArray(existing) ? existing : [])].slice(0, 500)
+    await kv.set('reports', reports)
+    res.status(201).json({ report, pending: reports.length })
+  }),
+)
+
+app.get(
+  '/api/reports',
+  wrap(async (_req, res) => {
+    const reports = (await kv.get('reports', [])) ?? []
+    res.json({ reports: Array.isArray(reports) ? reports : [] })
+  }),
+)
+
+
+// Installation-wide lists. These are not individual user accounts.
+app.get('/api/lists', wrap(async (_req, res) => res.json(listStore.summary())))
+app.post('/api/lists', limitMutations, wrap(async (req, res) => {
+  res.status(201).json({ list: await listStore.createList(req.body) })
+}))
+app.post('/api/lists/import', limitMutations, wrap(async (req, res) => {
+  res.status(201).json(await listStore.importList(req.body))
+}))
+app.post('/api/lists/migrate', limitMutations, wrap(async (_req, res) => {
+  res.json(await listStore.migrateBookmarks(store.list()))
+}))
+app.get('/api/lists/:id/random', wrap(async (req, res) => {
+  const list = listStore.readList(req.params.id)
+  res.setHeader('Cache-Control', 'no-store')
+  res.json({ pick: pickListEntry(list.entries) })
+}))
+app.get('/api/lists/:id/export', wrap(async (req, res) => {
+  const format = String(req.query.format ?? 'json').toLowerCase()
+  if (format !== 'json' && format !== 'csv') throw Object.assign(new Error('Unsupported export format'), { status: 400 })
+  const list = listStore.readList(req.params.id)
+  res.setHeader('Cache-Control', 'no-store')
+  res.setHeader('Content-Disposition', `attachment; filename="animevault-list.${format}"`)
+  res.type(format === 'csv' ? 'text/csv' : 'application/json')
+  res.send(format === 'csv' ? exportListCsv(list) : exportListJson(list))
+}))
+app.get('/api/lists/:id', wrap(async (req, res) => {
+  const list = listStore.readList(req.params.id)
+  const sort = String(req.query.sort ?? 'added')
+  res.json({ ...list, entries: sortListEntries(list.entries, sort), sort })
+}))
+app.delete('/api/lists/:id', limitMutations, wrap(async (req, res) => {
+  res.json(await listStore.deleteList(req.params.id))
+}))
+app.post('/api/lists/:id/entries', limitMutations, wrap(async (req, res) => {
+  res.json({ entry: await listStore.add(req.params.id, req.body?.media) })
+}))
+app.put('/api/lists/:id/entries/:mediaId/rating', limitMutations, wrap(async (req, res) => {
+  res.json(await listStore.setRating(req.params.id, req.params.mediaId, req.body))
+}))
+app.put('/api/lists/:id/entries/:mediaId/note', limitMutations, wrap(async (req, res) => {
+  res.json(await listStore.setNote(req.params.id, req.params.mediaId, req.body?.note))
+}))
+app.delete('/api/lists/:id/entries/:mediaId', limitMutations, wrap(async (req, res) => {
+  res.json(await listStore.remove(req.params.id, req.params.mediaId))
+}))
 
 app.get('/api/settings', (req, res) => {
   res.json(settings.get())
@@ -987,35 +1359,41 @@ if (isProd) {
   const dist = path.join(ROOT, 'dist')
   const assetsDir = path.join(dist, 'assets')
   const MIME = { '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' }
-  // Hashed asset names never change, so serve pre-gzipped twins and cache forever.
+  /** Picks the smallest precompressed twin the client actually accepts. */
+  const precompressedVariants = (baseName, acceptEncoding) => {
+    const accepts = String(acceptEncoding ?? '').toLowerCase()
+    const variants = []
+    if (/\bbr\b/.test(accepts)) variants.push({ file: `${baseName}.br`, enc: 'br' })
+    if (/\bgzip\b/.test(accepts)) variants.push({ file: `${baseName}.gz`, enc: 'gzip' })
+    return variants
+  }
+  // Hashed asset names never change, so serve precompressed twins and cache forever.
   app.use((req, res, next) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') return next()
-    if (req.path.endsWith('.gz')) {
+    // Never expose compression twins as directly addressable files.
+    if (req.path.endsWith('.gz') || req.path.endsWith('.br')) {
       res.status(404).end()
       return
     }
     const ext = path.extname(req.path)
-    if (
-      (ext === '.js' || ext === '.css') &&
-      req.path.startsWith('/assets/') &&
-      /\bgzip\b/.test(String(req.headers['accept-encoding'] ?? ''))
-    ) {
+    if ((ext === '.js' || ext === '.css') && req.path.startsWith('/assets/')) {
       const baseName = path.basename(req.path)
-      const gz = path.join(assetsDir, `${baseName}.gz`)
-      if (path.dirname(gz) === assetsDir && existsSync(gz)) {
+      for (const variant of precompressedVariants(baseName, req.headers['accept-encoding'])) {
+        const target = path.join(assetsDir, variant.file)
+        if (path.dirname(target) !== assetsDir || !existsSync(target)) continue
         try {
-          const st = lstatSync(gz)
+          const st = lstatSync(target)
           if (st.isFile() && !st.isSymbolicLink()) {
             res.setHeader('Content-Type', MIME[ext])
-            res.setHeader('Content-Encoding', 'gzip')
+            res.setHeader('Content-Encoding', variant.enc)
             res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
             res.setHeader('Vary', 'Accept-Encoding')
             res.setHeader('Content-Length', String(st.size))
-            pipeFileSafely(req, res, gz)
+            pipeFileSafely(req, res, target)
             return
           }
         } catch {
-          /* fall through to static */
+          /* try the next variant / fall through to static */
         }
       }
     }
@@ -1066,6 +1444,6 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     if (shuttingDownServer) return
     shuttingDownServer = true
-    void Promise.allSettled([downloads.shutdown(), store.flush()]).finally(() => process.exit(0))
+    void Promise.allSettled([downloads.shutdown(), store.flush(), listStore.flush()]).finally(() => process.exit(0))
   })
 }

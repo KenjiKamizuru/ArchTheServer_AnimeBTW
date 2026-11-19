@@ -26,7 +26,172 @@ import type {
   UploadSessionInfo,
   UploadSessionSpec,
   WatchResult,
+  AnimeNote,
 } from '../types'
+
+export interface BrowseFilters {
+  season?: string | null
+  year?: number | null
+  includeOlderSeasons?: boolean
+  formats?: string[]
+  statuses?: string[]
+  sources?: string[]
+  countries?: string[]
+  genres?: string[]
+  genresExclude?: string[]
+  tags?: string[]
+  tagMode?: 'and' | 'or'
+  years?: { min?: number; max?: number }
+  episodes?: { min?: number; max?: number }
+  duration?: { min?: number; max?: number }
+  minScore?: number | null
+  maxPopularity?: number | null
+  sort?: string
+  page?: number
+  perPage?: number
+  query?: string | null
+}
+
+export interface BrowseResponse {
+  media: Media[]
+  rejectedCount: number
+  total: number
+  hasNextPage: boolean
+  page: number
+  perPage: number
+  filters: string
+  params: string
+  activeFilters: number
+}
+
+export interface DiscoverPick {
+  kind: string
+  media: Media | null
+  items?: Media[]
+  total?: number
+}
+
+export interface StudioSummary {
+  id: number | null
+  name: string
+  isAnimationStudio: boolean
+  favourites: number | null
+  siteUrl: string | null
+  bucket: string
+}
+
+export interface StudioListResponse {
+  studios: StudioSummary[]
+  page: number
+  hasNextPage: boolean
+  total: number
+}
+
+export interface StudioFilmographyResponse {
+  studio: Omit<StudioSummary, 'bucket'>
+  media: Media[]
+  page: number
+  hasNextPage: boolean
+  total: number
+  byYear: { year: number | 'Unknown'; count: number; items: Media[] }[]
+  decades: number[]
+}
+
+export interface IndexBucket {
+  bucket: string
+  count: number
+  items: Media[]
+}
+
+export interface CatalogIndexResponse {
+  buckets: IndexBucket[]
+  bucketsAvailable: string[]
+  page: number
+  hasNextPage: boolean
+  total: number
+}
+
+export interface FranchiseGroup {
+  key: string
+  count: number
+  title: string
+  media: Media[]
+}
+
+export interface FranchiseResponse {
+  season: string
+  year: number
+  groups: FranchiseGroup[]
+  considered: number
+}
+
+export interface HighlightSegment {
+  text: string
+  match: boolean
+}
+
+export interface SearchSuggestion {
+  id: number
+  title: string
+  sub: string
+  cover: string | null
+  reason: string
+  score: number
+  hintText: HighlightSegment[]
+}
+
+export interface SuggestResponse {
+  query: string
+  suggestions: SearchSuggestion[]
+  correction: { suggestion: string; original: string; reason: string; score: number } | null
+}
+
+export interface SearchFilterState {
+  studio: string[]
+  genre: string[]
+  tag: string[]
+  year: { min: number; max: number } | null
+  status: string[]
+  format: string[]
+  score: { min?: number; max?: number } | null
+  episodes: { min?: number; max?: number } | null
+}
+
+export interface AdvancedSearchResponse {
+  query: string
+  text: string
+  filters: SearchFilterState
+  media: Media[]
+  hasNextPage: boolean
+  removed: number
+  correction: { suggestion: string; original: string; reason: string; score: number } | null
+  page: number
+  perPage: number
+  cappedAt: number
+  groups: { format: string; items: Media[] }[]
+  alternatives: { label: string; query: string; kind: string }[]
+}
+
+export interface SearchLibraryItem {
+  id: string
+  fileName: string
+  folder: string | null
+  animeTitle: string | null
+  seriesTitle: string | null
+  season: number | null
+  episode: number | null
+  quality: string | null
+  size: number
+  modifiedAt: number
+  highlight: HighlightSegment[]
+}
+
+export interface SearchLibraryResponse {
+  query: string
+  count: number
+  items: SearchLibraryItem[]
+  totalLibrary: number
+}
 
 export interface SeasonResponse {
   season: string
@@ -82,6 +247,68 @@ export const api = {
     return get<SeasonResponse>(`/api/season${query ? `?${query}` : ''}`)
   },
 
+  browse(filters: Record<string, string | number | boolean | undefined | null>) {
+    const qs = new URLSearchParams()
+    for (const [key, value] of Object.entries(filters)) {
+      if (value === undefined || value === null || value === '' || value === false) continue
+      qs.set(key, value === true ? '1' : String(value))
+    }
+    const query = qs.toString()
+    return get<BrowseResponse>(`/api/browse${query ? `?${query}` : ''}`)
+  },
+
+  discover(kind: 'spotlight' | 'random' | 'hidden-gems', filters: Record<string, string | number | boolean | undefined | null> = {}) {
+    const qs = new URLSearchParams()
+    for (const [key, value] of Object.entries(filters)) {
+      if (value === undefined || value === null || value === '' || value === false) continue
+      qs.set(key, value === true ? '1' : String(value))
+    }
+    const query = qs.toString()
+    return get<DiscoverPick>(`/api/discover/${kind}${query ? `?${query}` : ''}`, false)
+  },
+
+  studios(params: { page?: number; q?: string; sort?: 'favourites' | 'name' } = {}) {
+    const qs = new URLSearchParams()
+    if (params.page && params.page > 1) qs.set('page', String(params.page))
+    if (params.q) qs.set('q', params.q)
+    if (params.sort) qs.set('sort', params.sort)
+    const query = qs.toString()
+    return get<StudioListResponse>(`/api/studios${query ? `?${query}` : ''}`)
+  },
+
+  studio(id: number, params: { page?: number; sort?: string } = {}) {
+    const qs = new URLSearchParams()
+    if (params.page && params.page > 1) qs.set('page', String(params.page))
+    if (params.sort) qs.set('sort', params.sort)
+    const query = qs.toString()
+    return get<StudioFilmographyResponse>(`/api/studios/${id}${query ? `?${query}` : ''}`)
+  },
+
+  catalogIndex(params: { page?: number; sort?: 'title' | 'popular' | 'rated'; kana?: boolean } = {}) {
+    const qs = new URLSearchParams()
+    if (params.page && params.page > 1) qs.set('page', String(params.page))
+    if (params.sort) qs.set('sort', params.sort)
+    if (params.kana === false) qs.set('kana', '0')
+    const query = qs.toString()
+    return get<CatalogIndexResponse>(`/api/index${query ? `?${query}` : ''}`)
+  },
+
+  franchises(params: { season?: string; year?: number } = {}) {
+    const qs = new URLSearchParams()
+    if (params.season) qs.set('season', params.season)
+    if (params.year) qs.set('year', String(params.year))
+    const query = qs.toString()
+    return get<FranchiseResponse>(`/api/franchises${query ? `?${query}` : ''}`)
+  },
+
+  recentlyAdded(limit = 24) {
+    return get<{ media: Media[]; count: number }>(`/api/recent?limit=${limit}`, false)
+  },
+
+  recentlyUpdated(limit = 24) {
+    return get<{ media: Media[]; count: number }>(`/api/updated?limit=${limit}`, false)
+  },
+
   airing() {
     return get<{ media: Media[]; hasNextPage: boolean }>('/api/airing')
   },
@@ -90,8 +317,59 @@ export const api = {
     return get<{ media: Media[]; hasNextPage: boolean }>(`/api/search?q=${encodeURIComponent(q)}&page=${page}`)
   },
 
-  detail(id: number) {
-    return get<MediaDetail>(`/api/anime/${id}`)
+  suggest(q: string) {
+    return get<SuggestResponse>(`/api/search/suggest?q=${encodeURIComponent(q)}`, false)
+  },
+
+  searchAdvanced(q: string, params: { page?: number; perPage?: number } = {}) {
+    const qs = new URLSearchParams({ q })
+    if (params.page && params.page > 1) qs.set('page', String(params.page))
+    if (params.perPage) qs.set('perPage', String(params.perPage))
+    return get<AdvancedSearchResponse>(`/api/search/advanced?${qs.toString()}`, false)
+  },
+
+  searchLibrary(q: string) {
+    return get<SearchLibraryResponse>(`/api/search/library?q=${encodeURIComponent(q)}`, false)
+  },
+
+  searchOptions() {
+    return get<{ fields: string[]; resultCap: { max: number; defaultPerPage: number; min: number }; statuses: string[]; formats: string[] }>(
+      '/api/search/options',
+    )
+  },
+
+  detail(id: number, opts: { spoilers?: boolean; order?: 'release' | 'chronological' } = {}) {
+    const qs = new URLSearchParams()
+    if (opts.spoilers) qs.set('spoilers', '1')
+    if (opts.order) qs.set('order', opts.order)
+    const query = qs.toString()
+    return get<MediaDetail>(`/api/anime/${id}${query ? `?${query}` : ''}`, !query)
+  },
+
+  animeNotes(id: number) {
+    return get<AnimeNote>(`/api/anime/${id}/notes`, false)
+  },
+
+  saveAnimeNotes(id: number, note: string) {
+    return send<AnimeNote>(`/api/anime/${id}/notes`, 'PUT', { note })
+  },
+
+  reportAnimeIssue(
+    id: number,
+    payload: { field?: string; message: string; kind?: 'metadata' | 'episode-order' },
+  ) {
+    return send<{ report: { id: string; field: string; status: string }; pending: number }>(
+      `/api/anime/${id}/report`,
+      'POST',
+      payload,
+    )
+  },
+
+  reports() {
+    return get<{ reports: { id: string; mediaId: number; field: string; message: string; createdAt: number; status: string }[] }>(
+      '/api/reports',
+      false,
+    )
   },
 
   mediaMany(ids: number[]) {

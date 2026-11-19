@@ -369,13 +369,13 @@ export default function SettingsPage() {
             <input
               type="number"
               min={1}
-              max={6}
+              max={12}
               value={draft.maxConcurrentDownloads}
               onChange={(event) => set('maxConcurrentDownloads', Number(event.target.value))}
               className="w-full rounded-lg bg-ink-800 px-2.5 py-2 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-accent/60"
             />
             <span className="mt-1 block text-[11px] text-white/35">
-              How many episodes download in parallel (1–6). Remaining jobs stay in the persistent queue.
+              How many episodes download in parallel (1–12). Each episode also fetches its HLS segments in parallel, so 2–4 is plenty for most connections.
             </span>
           </label>
 

@@ -6,6 +6,8 @@
 // surfaces as metadata references.
 
 import { readResponseTextLimited, sanitizeCoverUrl, sanitizePublicHttpUrl } from './security.mjs'
+import { parseBrowseFilters } from './browse.mjs'
+import { createAnimeRecord } from './catalog.mjs'
 
 const ENDPOINT = 'https://graphql.anilist.co'
 const MAX_GQL_BYTES = 6 * 1024 * 1024
@@ -28,7 +30,11 @@ const MEDIA_FIELDS = `
   seasonYear
   averageScore
   popularity
+  favourites
   genres
+  tags { name rank isMediaSpoiler }
+  source
+  countryOfOrigin
   siteUrl
   nextAiringEpisode { episode airingAt }
   studios(isMain: true) { nodes { name } }
@@ -98,7 +104,19 @@ async function gql(query, variables) {
       if (attempt < 2) await sleep(400 * (attempt + 1))
     }
   }
-  throw lastError ?? new Error('Metadata request failed')
+  // Surface upstream trouble as a 502 so clients can distinguish "AniList is
+  // down" from a bug in our own handlers (which stays a 500).
+  const failure =
+    lastError instanceof Error ? lastError : new Error('Metadata request failed')
+  if (failure.status === undefined) failure.status = 502
+  if (failure.code === undefined) failure.code = 'UPSTREAM_UNAVAILABLE'
+  // Raw undici messages ("fetch failed") are useless to a viewer; the error
+  // middleware sanitizes, so give it something human to pass through.
+  if (!failure.upstreamSafe) {
+    failure.message = 'Anime metadata service is unreachable right now. Please try again shortly.'
+    failure.upstreamSafe = true
+  }
+  throw failure
 }
 
 /** TTL + LRU cache so repeat views are instant and we stay far under rate limits. */
@@ -162,7 +180,7 @@ function normalize(media) {
   const rawColor = typeof media.coverImage?.color === 'string' ? media.coverImage.color.trim() : ''
   const color = /^#[0-9a-fA-F]{3,8}$/.test(rawColor) ? rawColor : null
 
-  return {
+  return createAnimeRecord({
     id: media.id,
     title,
     romaji: media.title?.romaji ?? null,
@@ -181,7 +199,18 @@ function normalize(media) {
     seasonYear: media.seasonYear ?? null,
     score: media.averageScore ?? null,
     popularity: media.popularity ?? 0,
+    favourites: media.favourites ?? null,
     genres: media.genres ?? [],
+    // Rank-sorted, spoiler-flagged tags drive tag search and discovery filters.
+    tags: (media.tags ?? [])
+      .filter((tag) => tag && typeof tag.name === 'string')
+      .map((tag) => ({
+        name: tag.name.slice(0, 60),
+        rank: Number.isFinite(tag.rank) ? tag.rank : 0,
+        isMediaSpoiler: Boolean(tag.isMediaSpoiler),
+      })),
+    source: media.source ?? null,
+    countryOfOrigin: media.countryOfOrigin ?? null,
     nextEpisode: media.nextAiringEpisode
       ? { episode: media.nextAiringEpisode.episode, airingAt: media.nextAiringEpisode.airingAt }
       : null,
@@ -191,7 +220,7 @@ function normalize(media) {
     anidb,
     anidbSearch: !directAnidb,
     siteUrl: sanitizePublicHttpUrl(media.siteUrl, { httpsOnly: false, maxLen: 512 }),
-  }
+  })
 }
 
 export function currentSeason(date = new Date()) {
@@ -242,6 +271,264 @@ export async function getSeason({ season, year, sort = 'popular', page = 1, perP
 }
 
 /** Shows still releasing, sorted by their next broadcast (soonest first). */
+/**
+ * Executes a browse query built by `browse.mjs` and applies the filters AniList
+ * cannot express locally. Returns per-item match reasons so the UI can explain
+ * results.
+ */
+export async function browse(filters, browseModule) {
+  const { query, variables } = browseModule.buildBrowseQuery(filters)
+  const key = `browse:${JSON.stringify(variables)}`
+  return cached(key, async () => {
+    const data = await gql(query, variables)
+    const pageInfo = data.Page?.pageInfo ?? {}
+    const raw = data.Page?.media ?? []
+    const matched = []
+    const rejected = []
+    for (const entry of raw) {
+      const media = normalize(entry)
+      if (!media) continue
+      const verdict = browseModule.matchMediaLocally(media, filters)
+      if (verdict.ok) {
+        media.matchReasons = verdict.reasons
+        matched.push(media)
+      } else {
+        rejected.push(media.id)
+      }
+    }
+    return {
+      media: matched,
+      rejectedCount: rejected.length,
+      total: pageInfo.total ?? 0,
+      hasNextPage: Boolean(pageInfo.hasNextPage),
+      page: filters.page,
+      perPage: filters.perPage,
+      filters: browseModule.describeFilters(filters),
+      params: browseModule.filtersToParams(filters).toString(),
+    }
+  })
+}
+
+/**
+ * Discovery picks: a deterministic "spotlight" for the day, a random pick with
+ * optional filter awareness, and a hidden-gems collection.
+ */
+export async function discover(kind, filters, browseModule) {
+  if (kind === 'random') {
+    // Random page within a bounded depth keeps the request cheap while still
+    // feeling unpredictable.
+    const page = 1 + Math.floor(Math.random() * 12)
+    const result = await browse({ ...filters, page, perPage: 50 }, browseModule)
+    if (result.media.length === 0) return { kind, media: null, page }
+    const pick = result.media[Math.floor(Math.random() * result.media.length)]
+    return { kind, media: pick, page }
+  }
+
+  if (kind === 'spotlight') {
+    const result = await browse({ ...filters, page: 1, perPage: 50, sort: 'popular' }, browseModule)
+    if (result.media.length === 0) return { kind, media: null }
+    // Stable per-day index: same pick all day, changes at midnight.
+    const day = Math.floor(Date.now() / 86_400_000)
+    return { kind, media: result.media[day % result.media.length] }
+  }
+
+  if (kind === 'hidden-gems') {
+    const gems = await browse(
+      {
+        ...filters,
+        // Low popularity + strong rating is the classic hidden-gem signal.
+        maxPopularity: filters.maxPopularity ?? 25_000,
+        minScore: Math.max(filters.minScore ?? 0, 72),
+        sort: 'rated',
+        page: 1,
+        perPage: 30,
+      },
+      browseModule,
+    )
+    return { kind, items: gems.media, total: gems.total }
+  }
+
+  throw Object.assign(new Error('Unknown discovery kind'), { status: 400 })
+}
+
+/**
+ * Studio search/listing for the studio explorer. Sorted by favourites so the
+ * landing page opens on recognisable names.
+ */
+export async function studios({ page = 1, search = '', sort = '' } = {}) {
+  const allowed = new Set(['favourites', 'name'])
+  const studioSort = allowed.has(sort) ? sort : 'favourites'
+  const key = `studios:${page}:${search}:${studioSort}`
+  return cached(key, async () => {
+    const data = await gql(
+      `query Studios($page: Int, $perPage: Int, $search: String, $sort: [StudioSort]) {
+        Page(page: $page, perPage: $perPage) {
+          pageInfo { hasNextPage total }
+          studios(search: $search, sort: $sort) {
+            id
+            name
+            isAnimationStudio
+            favourites
+            siteUrl
+          }
+        }
+      }`,
+      {
+        page,
+        perPage: 30,
+        search: search.trim() || undefined,
+        // AniList reads StudioSort values as an enum list.
+        sort: studioSort === 'name' ? ['NAME'] : ['FAVOURITES_DESC'],
+      },
+    )
+    const raw = data.Page?.studios ?? []
+    const media = raw
+      .map((node) =>
+        node
+          ? {
+              id: node.id,
+              name: node.name,
+              isAnimationStudio: Boolean(node.isAnimationStudio),
+              favourites: node.favourites ?? null,
+              siteUrl: typeof node.siteUrl === 'string' && /^https:\/\//.test(node.siteUrl) ? node.siteUrl : null,
+              bucket: node.name ? String(node.name).charAt(0).toUpperCase() : '#',
+            }
+          : null,
+      )
+      .filter(Boolean)
+    return {
+      studios: media,
+      page,
+      hasNextPage: Boolean(data.Page?.pageInfo?.hasNextPage),
+      total: data.Page?.pageInfo?.total ?? media.length,
+    }
+  })
+}
+
+/** A studio's filmography, newest-first by popularity within the page. */
+export async function studioFilmography(id, { page = 1, sort = 'popular' } = {}) {
+  const sortEnum = {
+    popular: 'POPULARITY_DESC',
+    rated: 'SCORE_DESC',
+    newest: 'START_DATE_DESC',
+    oldest: 'START_DATE_ASC',
+  }[sort] ?? 'POPULARITY_DESC'
+  const key = `studio:${id}:${page}:${sortEnum}`
+  return cached(key, async () => {
+    const data = await gql(
+      `query Studio($id: Int, $page: Int, $perPage: Int, $sort: [MediaSort]) {
+        Studio(id: $id) {
+          id
+          name
+          isAnimationStudio
+          favourites
+          siteUrl
+          media(page: $page, perPage: $perPage, sort: $sort, isMain: true) {
+            pageInfo { hasNextPage total }
+            nodes {
+              ${MEDIA_FIELDS}
+            }
+          }
+        }
+      }`,
+      { id, page, perPage: 24, sort: [sortEnum] },
+    )
+    const studio = data.Studio
+    if (!studio) throw Object.assign(new Error('Studio not found'), { status: 404 })
+    const media = (studio.media?.nodes ?? []).map(normalize).filter(Boolean)
+    return {
+      studio: {
+        id: studio.id,
+        name: studio.name,
+        isAnimationStudio: Boolean(studio.isAnimationStudio),
+        favourites: studio.favourites ?? null,
+        siteUrl: typeof studio.siteUrl === 'string' && /^https:\/\//.test(studio.siteUrl) ? studio.siteUrl : null,
+      },
+      media,
+      page,
+      hasNextPage: Boolean(studio.media?.pageInfo?.hasNextPage),
+      total: studio.media?.pageInfo?.total ?? media.length,
+    }
+  })
+}
+
+/** Catalog page used to build the A–Z index. */
+export async function catalogIndex({ page = 1, sort = 'title' } = {}) {
+  const sortEnum = { title: 'TITLE_ROMAJI', popular: 'POPULARITY_DESC', rated: 'SCORE_DESC' }[sort] ?? 'TITLE_ROMAJI'
+  const key = `index:${page}:${sortEnum}`
+  return cached(key, async () => {
+    const data = await gql(
+      `query Index($page: Int, $perPage: Int, $sort: [MediaSort]) {
+        Page(page: $page, perPage: $perPage) {
+          pageInfo { hasNextPage total }
+          media(type: ANIME, sort: $sort, isAdult: false) { ${MEDIA_FIELDS} }
+        }
+      }`,
+      { page, perPage: 50, sort: [sortEnum] },
+    )
+    const media = (data.Page?.media ?? []).map(normalize).filter(Boolean)
+    return {
+      media,
+      page,
+      hasNextPage: Boolean(data.Page?.pageInfo?.hasNextPage),
+      total: data.Page?.pageInfo?.total ?? media.length,
+    }
+  })
+}
+
+/** Current-season media with relations, for franchise grouping. */
+export async function seasonFranchises({ season = '', year } = {}) {
+  const resolved = resolveSeason(season || undefined, year)
+  const key = `franchises:${resolved.season}:${resolved.year}`
+  return cached(key, async () => {
+    const data = await gql(
+      `query Franchises($season: MediaSeason, $seasonYear: Int, $page: Int) {
+        Page(page: $page, perPage: 50) {
+          media(season: $season, seasonYear: $seasonYear, type: ANIME, sort: POPULARITY_DESC, isAdult: false) {
+            ${MEDIA_FIELDS}
+            relations { relationType nodes { id title { romaji english } seasonYear } }
+          }
+        }
+      }`,
+      { season: resolved.season, seasonYear: resolved.year, page: 1 },
+    )
+    const media = (data.Page?.media ?? []).map(normalize).filter(Boolean)
+    return { season: resolved.season, year: resolved.year, media }
+  })
+}
+
+/** Newest catalog entries (highest IDs first). */
+export async function recentlyAdded(limit = 24) {
+  const key = `recent:added:${limit}`
+  return cached(key, async () => {
+    const data = await gql(
+      `query Recent($perPage: Int, $sort: [MediaSort]) {
+        Page(page: 1, perPage: $perPage) {
+          media(type: ANIME, sort: $sort, isAdult: false) { ${MEDIA_FIELDS} }
+        }
+      }`,
+      { perPage: Math.min(50, Math.max(1, limit)), sort: ['ID_DESC'] },
+    )
+    return (data.Page?.media ?? []).map(normalize).filter(Boolean)
+  })
+}
+
+/** Recently updated metadata — useful to spot refreshed artwork/synopses. */
+export async function recentlyUpdated(limit = 24) {
+  const key = `recent:updated:${limit}`
+  return cached(key, async () => {
+    const data = await gql(
+      `query Updated($perPage: Int, $sort: [MediaSort]) {
+        Page(page: 1, perPage: $perPage) {
+          media(type: ANIME, sort: $sort, isAdult: false) { ${MEDIA_FIELDS} }
+        }
+      }`,
+      { perPage: Math.min(50, Math.max(1, limit)), sort: ['UPDATED_AT_DESC'] },
+    )
+    return (data.Page?.media ?? []).map(normalize).filter(Boolean)
+  })
+}
+
 export async function getAiring({ page = 1, perPage = 50 } = {}) {
   const key = `airing:${page}:${perPage}`
   return cached(key, async () => {
@@ -285,6 +572,156 @@ export async function searchAnime(term, page = 1) {
   })
 }
 
+/**
+ * Instant search suggestions (AV-051/053/056). Returns a small, cheap page of
+ * candidate titles plus ranked + highlighted entries so the client can show a
+ * dropdown without a second round trip.
+ */
+export async function suggest(term, searchModule) {
+  const q = String(term ?? '').trim().slice(0, 80)
+  if (q.length < 2) return { query: q, suggestions: [], correction: null }
+  const data = await searchAnime(q, 1)
+  const candidates = data.media.map((item) => ({
+    id: item.id,
+    label: item.title,
+    sub: [item.format, item.seasonYear].filter(Boolean).join(' · '),
+    cover: item.cover,
+    aliases: [item.romaji, item.english].filter((t) => typeof t === 'string'),
+  }))
+  const ranked = searchModule.rankTitles(candidates, q, { limit: 8 })
+  // Offer a correction both when nothing matched *and* when the best hit was
+  // only approximate — a typo should always be visibly fixable.
+  const approximate = ranked.length === 0 || !/exact title match|starts with|word match|contains your search/.test(ranked[0].reason)
+  return {
+    query: q,
+    suggestions: ranked.map((entry) => ({
+      id: entry.id,
+      title: entry.label,
+      sub: entry.sub,
+      cover: entry.cover,
+      reason: entry.reason,
+      score: Number(entry.score.toFixed(2)),
+      hintText: searchModule.highlightSegments(entry.label, q),
+    })),
+    correction: approximate ? searchModule.suggestCorrection(candidates, q) : null,
+  }
+}
+
+/**
+ * Full search with structured `field:value` filters applied on top of AniList's
+ * title search. Filters are matched locally so a partially correct query still
+ * returns something rather than an empty page.
+ */
+export async function searchAdvanced(rawQuery, page, searchModule) {
+  const parsed = searchModule.parseSearchQuery(rawQuery)
+  const { text, filters } = parsed
+  const structured = searchModule.hasStructuredFilters(filters)
+  if (!text && !structured) {
+    return { query: rawQuery, text, filters, media: [], hasNextPage: false, removed: 0, correction: null }
+  }
+
+  // A pure filter query (no free text) still needs a candidate set: borrow the
+  // popular catalog page so filters have something to act on.
+  const base = text
+    ? await searchAnime(text, page)
+    : await browse(
+        parseBrowseFilters({
+          sort: 'popular',
+          page: String(page),
+          genres: filters.genre.join(','),
+        }),
+        await import('./browse.mjs'),
+      )
+
+  const kept = []
+  let removed = 0
+  for (const media of base.media) {
+    const reasons = []
+    let ok = true
+
+    for (const studio of filters.studio) {
+      const hit = (media.studios ?? []).some((name) => String(name).toLowerCase().includes(studio))
+      if (!hit) ok = false
+      else reasons.push(`studio ${studio}`)
+    }
+    if (ok) {
+      for (const genre of filters.genre) {
+        const hit = (media.genres ?? []).some((g) => String(g).toLowerCase() === genre)
+        if (!hit) ok = false
+        else reasons.push(`genre ${genre}`)
+      }
+    }
+    if (ok) {
+      for (const tag of filters.tag) {
+        const hit = (media.tags ?? []).some(
+          (t) => !t.isMediaSpoiler && String(t.name).toLowerCase() === tag,
+        )
+        if (!hit) ok = false
+        else reasons.push(`tag ${tag}`)
+      }
+    }
+    if (ok && filters.year) {
+      const year = media.seasonYear
+      ok = Number.isFinite(year) && year >= filters.year.min && year <= filters.year.max
+      if (ok) reasons.push(`year ${year}`)
+    }
+    if (ok && filters.status.length) {
+      const status = String(media.status ?? '').toLowerCase()
+      ok = filters.status.includes(status)
+      if (ok) reasons.push(status)
+    }
+    if (ok && filters.format.length) {
+      const format = String(media.format ?? '').toLowerCase()
+      ok = filters.format.includes(format)
+      if (ok) reasons.push(format)
+    }
+    if (ok && filters.score) {
+      const score = media.score
+      ok =
+        Number.isFinite(score) &&
+        (filters.score.min === undefined || score >= filters.score.min) &&
+        (filters.score.max === undefined || score <= filters.score.max)
+      if (ok) reasons.push(`score ${score}`)
+    }
+    if (ok && filters.episodes) {
+      const eps = media.episodes
+      ok =
+        Number.isFinite(eps) &&
+        (filters.episodes.min === undefined || eps >= filters.episodes.min) &&
+        (filters.episodes.max === undefined || eps <= filters.episodes.max)
+      if (ok) reasons.push(`episodes ${eps}`)
+    }
+
+    if (ok) {
+      kept.push({ ...media, matchReasons: reasons })
+    } else {
+      removed += 1
+    }
+  }
+
+  const correction =
+    text
+      ? searchModule.suggestCorrection(
+          base.media.map((m) => ({
+            id: m.id,
+            label: m.title,
+            aliases: [m.romaji, m.english].filter((t) => typeof t === 'string'),
+          })),
+          text,
+        )
+      : null
+
+  return {
+    query: rawQuery,
+    text,
+    filters,
+    media: kept,
+    hasNextPage: Boolean(base.hasNextPage),
+    removed,
+    correction,
+  }
+}
+
 export async function getDetail(id) {
   const numeric = Number(id)
   if (!Number.isInteger(numeric) || numeric <= 0) {
@@ -297,7 +734,26 @@ export async function getDetail(id) {
         Media(id: $id, type: ANIME) {
           ${MEDIA_FIELDS}
           trailer { id site }
+          startDate { year month day }
+          endDate { year month day }
           streamingEpisodes { title thumbnail url site }
+          scoreDistribution { score amount }
+          rankings { rank type context year season allTime }
+          characters(perPage: 12, sort: [ROLE, RELEVANCE, ID]) {
+            edges {
+              role
+              node { id name { full native } image { large } siteUrl }
+              voiceActors(language: JAPANESE, sort: [RELEVANCE, ID]) {
+                id name { full native } image { large } languageV2 siteUrl
+              }
+            }
+          }
+          staff(perPage: 10, sort: [RELEVANCE, ID]) {
+            edges {
+              role
+              node { id name { full native } image { large } siteUrl primaryOccupations }
+            }
+          }
           relations {
             edges {
               relationType
@@ -307,10 +763,13 @@ export async function getDetail(id) {
                 format
                 status
                 episodes
+                chapters
+                averageScore
                 season
                 seasonYear
+                startDate { year month day }
                 title { romaji english native }
-                coverImage { large }
+                coverImage { large extraLarge }
                 nextAiringEpisode { episode airingAt }
               }
             }
@@ -320,6 +779,13 @@ export async function getDetail(id) {
       { id: numeric },
     )
     const base = normalize(data.Media)
+    const relationEdges = (data.Media.relations?.edges ?? []).map((edge) => ({
+      relationType: edge?.relationType,
+      node: {
+        ...(edge?.node ?? {}),
+        coverImage: edge?.node?.coverImage ?? null,
+      },
+    }))
     const seasonOrder = { WINTER: 0, SPRING: 1, SUMMER: 2, FALL: 3 }
     const relatedSeasons = (data.Media.relations?.edges ?? [])
       .filter(
@@ -366,6 +832,76 @@ export async function getDetail(id) {
         })
         .filter(Boolean),
       relatedSeasons,
+      // Raw graph data for the detail engine (grouping, timeline).
+      rawRelations: relationEdges,
+      timelineNodes: [
+        {
+          id: base.id,
+          title: { romaji: base.romaji, english: base.english, native: base.native },
+          format: base.format,
+          episodes: base.episodes,
+          season: base.season,
+          seasonYear: base.seasonYear,
+          startDate: data.Media.startDate ?? null,
+          coverImage: { large: base.cover },
+        },
+        ...(data.Media.relations?.edges ?? [])
+          .filter((edge) => edge?.node?.type === 'ANIME')
+          .map((edge) => edge.node),
+      ],
+      startDate: data.Media.startDate ?? null,
+      endDate: data.Media.endDate ?? null,
+      rankings: (data.Media.rankings ?? [])
+        .filter((r) => r && Number.isFinite(r.rank))
+        .slice(0, 8)
+        .map((r) => ({
+          rank: r.rank,
+          type: r.type ?? 'RATED',
+          context: String(r.context ?? '').slice(0, 80),
+          year: r.year ?? null,
+          season: r.season ?? null,
+          allTime: Boolean(r.allTime),
+        })),
+      scoreBuckets: data.Media.scoreDistribution ?? [],
+      characters: (data.Media.characters?.edges ?? [])
+        .map((edge) => {
+          const node = edge?.node
+          if (!node?.id) return null
+          return {
+            id: node.id,
+            name: node.name?.full || node.name?.native || `Character #${node.id}`,
+            nativeName: node.name?.native ?? null,
+            image: sanitizeCoverUrl(node.image?.large ?? null),
+            siteUrl: sanitizePublicHttpUrl(node.siteUrl, { httpsOnly: false, maxLen: 512 }),
+            role: edge.role ?? 'SUPPORTING',
+            voiceActors: (edge.voiceActors ?? [])
+              .filter((va) => va?.id)
+              .slice(0, 3)
+              .map((va) => ({
+                id: va.id,
+                name: va.name?.full || va.name?.native || `Staff #${va.id}`,
+                image: sanitizeCoverUrl(va.image?.large ?? null),
+                language: va.languageV2 ?? 'JAPANESE',
+                siteUrl: sanitizePublicHttpUrl(va.siteUrl, { httpsOnly: false, maxLen: 512 }),
+              })),
+          }
+        })
+        .filter(Boolean),
+      staff: (data.Media.staff?.edges ?? [])
+        .map((edge) => {
+          const node = edge?.node
+          if (!node?.id) return null
+          return {
+            id: node.id,
+            name: node.name?.full || node.name?.native || `Staff #${node.id}`,
+            nativeName: node.name?.native ?? null,
+            image: sanitizeCoverUrl(node.image?.large ?? null),
+            role: String(edge.role ?? '').slice(0, 120) || null,
+            occupations: (node.primaryOccupations ?? []).slice(0, 4),
+            siteUrl: sanitizePublicHttpUrl(node.siteUrl, { httpsOnly: false, maxLen: 512 }),
+          }
+        })
+        .filter(Boolean),
     }
   })
 }

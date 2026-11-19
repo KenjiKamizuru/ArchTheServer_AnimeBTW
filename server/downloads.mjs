@@ -18,6 +18,7 @@ import * as settings from './settings.mjs'
 import * as resolver from './resolver.mjs'
 import * as playback from './playback.mjs'
 import * as library from './library.mjs'
+import { downloadSegmentsParallel, segmentConcurrency } from './hlsParallel.mjs'
 import {
   atomicWriteFile,
   inspectHlsPlaylist,
@@ -884,6 +885,15 @@ async function fetchTextSafe(url, { headers, signal, requireApprovedHost, extraA
   return { text, finalUrl, contentType: String(response.headers.get('content-type') || '') }
 }
 
+/** True for a live/sliding-window playlist (no ENDLIST, no media sequence growth). */
+function isLivePlaylist(text) {
+  const body = String(text ?? '')
+  if (/^#EXT-X-ENDLIST/im.test(body)) return false
+  if (/^#EXT-X-PLAYLIST-TYPE:\s*VOD/im.test(body)) return false
+  if (/^#EXT-X-PLAYLIST-TYPE:\s*EVENT/im.test(body)) return true
+  return true
+}
+
 async function runHlsDownload(job, rt, { videoUrl, audioUrl, referer, headers, requireApprovedHost, allowedHosts }) {
   const reqHeaders = {
     ...(headers ?? {}),
@@ -907,6 +917,8 @@ async function runHlsDownload(job, rt, { videoUrl, audioUrl, referer, headers, r
     requireApprovedHost: false,
   })
 
+  // Keep the resolved media playlist body so the parallel path does not refetch it.
+  let mediaPlaylistText = null
   if (firstCheck.isMaster) {
     const selected = resolver.parseMasterPlaylist(first.text, first.finalUrl, {
       quality: job.quality,
@@ -931,9 +943,11 @@ async function runHlsDownload(job, rt, { videoUrl, audioUrl, referer, headers, r
       requireApprovedHost: false,
     })
     finalVideoUrl = mediaPlaylist.finalUrl
+    mediaPlaylistText = mediaPlaylist.text
     if (mediaCheck.durationSec) durationSec = mediaCheck.durationSec
   } else {
     finalVideoUrl = first.finalUrl
+    mediaPlaylistText = first.text
     if (firstCheck.durationSec) durationSec = firstCheck.durationSec
   }
 
@@ -976,7 +990,78 @@ async function runHlsDownload(job, rt, { videoUrl, audioUrl, referer, headers, r
   await persistNow()
   emitNow('jobs')
 
-  try {
+  // Fast path: pull the media playlist's segments over a parallel pool, then
+  // remux locally. This is typically several times faster than FFmpeg's
+  // strictly sequential HLS demuxer. On any failure we fall back to the
+  // sequential pipeline, which has the same security guarantees.
+  const useParallel = !isLivePlaylist(mediaPlaylistText) && segmentConcurrency() > 1
+  if (useParallel) {
+    try {
+      const mediaText = mediaPlaylistText ?? ''
+      const workDir = await library.allocateTempPath(`${job.id}.segments`)
+      const sep = path.sep
+      const segmentsDir = workDir.endsWith(sep) ? workDir : `${workDir}`
+      const result = await downloadSegmentsParallel({
+        playlistText: mediaText,
+        playlistUrl: finalVideoUrl,
+        workDir: segmentsDir,
+        concurrency: segmentConcurrency(),
+        signal: rt.controller.signal,
+        headers: reqHeaders,
+        validateUrl: (segmentUrl) =>
+          validateRemoteUrl(segmentUrl, {
+            requireApprovedHost: false,
+            extraApprovedHosts: allowedHosts,
+            dnsLookup: networkOverrides.dnsLookup,
+          }),
+        safeFetchFn: (segmentUrl, init) =>
+          safeFetch(segmentUrl, {
+            ...init,
+            requireApprovedHost: false,
+            extraApprovedHosts: allowedHosts,
+            dnsLookup: networkOverrides.dnsLookup,
+            fetchImpl: networkOverrides.fetchImpl,
+          }),
+        onProgress(done, total) {
+          if (job.status !== 'downloading') return
+          job.progress = total > 0 ? Math.min(0.99, done / total) : 0
+          job.updatedAt = Date.now()
+          persistThrottled()
+          emitThrottled()
+        },
+      })
+      rt.kind = 'ffmpeg'
+      rt.tempPath = tempPath
+      await playback.remuxLocalHlsToFile({
+        playlistPath: result.playlistPath,
+        outputPath: tempPath,
+        durationSec: job.durationSec,
+        signal: rt.controller.signal,
+        onProgress(update) {
+          if (job.status !== 'downloading') return
+          job.downloadedBytes = update.downloadedBytes
+          job.downloadedSec = update.downloadedSec
+          if (update.progress != null) job.progress = update.progress
+          job.speedBps = update.speedBps
+          job.updatedAt = Date.now()
+          persistThrottled()
+          emitThrottled()
+        },
+      })
+      await fsp.rm(segmentsDir, { recursive: true, force: true }).catch(() => {})
+    } catch (err) {
+      if (err?.name === 'AbortError' || rt.controller.signal.aborted) throw err
+      if (err?.status === 422 || err?.status === 403 || err?.status === 413) throw err
+      // Parallel path unavailable (CDN oddities, byte-range playlists): use the
+      // proven sequential pipeline instead of failing the download.
+      await fsp.rm(`${tempPath}.segments`, { recursive: true, force: true }).catch(() => {})
+      await runSequentialFfmpegDownload()
+    }
+  } else {
+    await runSequentialFfmpegDownload()
+  }
+
+  async function runSequentialFfmpegDownload() {
     await playback.downloadStreamToFile({
       url: finalVideoUrl,
       audioUrl: finalAudioUrl,
@@ -1000,10 +1085,8 @@ async function runHlsDownload(job, rt, { videoUrl, audioUrl, referer, headers, r
         emitThrottled()
       },
     })
-  } catch (err) {
-    await fsp.rm(tempPath, { force: true }).catch(() => {})
-    throw err
   }
+
 
   // Validate MP4 integrity and check for CENC/DRM boxes before atomic commit.
   const verification = await inspectMp4File(tempPath)

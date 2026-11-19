@@ -14,6 +14,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as settings from './settings.mjs'
 import * as playback from './playback.mjs'
+import { compareSeasons, normalizeSeriesKey, parseSeasonInfo, seasonLabel } from './seasons.mjs'
 import {
   atomicWriteFile,
   ensureSafeLibraryParentDir,
@@ -190,40 +191,23 @@ function normalizeLookupKey(title) {
     .replace(/[^a-z0-9\u00c0-\uffff]+/g, '')
 }
 
-const SEASON_SUFFIX_PATTERNS = [
-  /^(.*?)[\s:–—-]+season\s+(\d{1,2})\s*$/i,
-  /^(.*?)[\s:–—-]+(\d{1,2})(?:st|nd|rd|th)\s+season\s*$/i,
-  /^(.*?)[\s:–—-]+s(\d{1,2})\s*$/i,
-]
-
 /**
  * Extracts a clean base series name and season number from an anime title so
  * multi-season shows share one `<Anime Name>/Season XX/` folder tree.
+ *
+ * Delegates to `seasons.mjs`, which understands `Season 2`, `2nd Season`,
+ * `S02`, `S02E05`, `Season Two`, roman numerals (`Show II`), `Final Season`,
+ * `Part 2` / `Cour 2`, trailing years, and release-group noise.
  */
 export function inferSeriesAndSeason(rawTitle, explicitSeason) {
-  const cleaned = String(rawTitle ?? '').trim() || 'Anime'
-  let baseTitle = cleaned
-  let detectedSeason = 1
-
-  for (const re of SEASON_SUFFIX_PATTERNS) {
-    const match = cleaned.match(re)
-    if (match && match[1]?.trim() && Number(match[2]) >= 1 && Number(match[2]) <= 99) {
-      baseTitle = match[1].trim()
-      detectedSeason = Number(match[2])
-      break
-    }
-  }
-
-  const parsedExplicit = Number(explicitSeason)
-  const season =
-    Number.isFinite(parsedExplicit) && parsedExplicit >= 1
-      ? Math.min(99, Math.floor(parsedExplicit))
-      : detectedSeason
-
+  const info = parseSeasonInfo(rawTitle, explicitSeason)
   return {
-    seriesTitle: baseTitle,
-    seriesFolder: sanitizeFileSegment(baseTitle, 'Anime', 80),
-    season,
+    seriesTitle: info.seriesTitle,
+    seriesFolder: sanitizeFileSegment(info.seriesTitle, 'Anime', 80),
+    season: info.season,
+    seasonLabel: info.label,
+    confidence: info.confidence,
+    detectedEpisode: info.episode,
   }
 }
 

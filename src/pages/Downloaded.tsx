@@ -3,6 +3,10 @@ import { Link, useSearchParams } from 'react-router-dom'
 import {
   Captions,
   CheckSquare,
+  ChevronDown,
+  ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   Download,
   FileVideo,
   Film,
@@ -34,6 +38,7 @@ import {
   useLibrary,
 } from '../lib/downloads'
 import { exactDate, formatBytes, formatEpisodeCode, formatQualityLabel } from '../lib/format'
+import { useCollapseState } from '../lib/collapse'
 import { DownloadsTabs } from '../components/DownloadsTabs'
 import { ImdbArtworkModal } from '../components/ImdbArtworkModal'
 import { useDetail } from '../components/MediaModal'
@@ -60,6 +65,7 @@ export default function DownloadedPage() {
   const openDetail = useDetail()
   const toast = useToast()
   const [searchParams, setSearchParams] = useSearchParams()
+  const collapse = useCollapseState()
 
   const [kind, setKind] = useState<KindFilter>('all')
   const [query, setQuery] = useState('')
@@ -446,6 +452,30 @@ export default function DownloadedPage() {
         </div>
 
         {items.length > 0 ? (
+          <div className="mr-2 flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => collapse.collapseAll(seriesGroups.map((g) => g.key))}
+              title="Collapse all series"
+              aria-label="Collapse all series"
+              className="inline-flex items-center gap-1 rounded-lg bg-ink-900 px-2 py-1.5 text-[11px] text-white/60 ring-1 ring-white/10 transition hover:text-white"
+            >
+              <ChevronsDownUp size={13} />
+              <span className="hidden sm:inline">Collapse</span>
+            </button>
+            <button
+              type="button"
+              onClick={collapse.expandAll}
+              title="Expand all series and seasons"
+              aria-label="Expand all series and seasons"
+              className="inline-flex items-center gap-1 rounded-lg bg-ink-900 px-2 py-1.5 text-[11px] text-white/60 ring-1 ring-white/10 transition hover:text-white"
+            >
+              <ChevronsUpDown size={13} />
+              <span className="hidden sm:inline">Expand</span>
+            </button>
+          </div>
+        ) : null}
+        {items.length > 0 ? (
           <div className="relative w-full max-w-xs">
             <Search
               size={14}
@@ -549,6 +579,12 @@ export default function DownloadedPage() {
             const iconSlot = groupArt?.icon ?? null
             const groupImdbId =
               groupArt?.imdbId || allGroupItems.find((i) => i.imdbId)?.imdbId || null
+            const seriesKey = `series:${group.key}`
+            const seriesCollapsed = collapse.isHidden(group.key)
+            const totalSize = group.seasons.reduce(
+              (sum, s) => sum + s.items.reduce((n, i) => n + i.size, 0),
+              0,
+            )
 
             return (
               <section
@@ -562,6 +598,7 @@ export default function DownloadedPage() {
                         src={`${bannerSlot.url}?v=${bannerSlot.updatedAt}`}
                         alt=""
                         loading="lazy"
+                        decoding="async"
                         className={`h-full w-full object-cover ${focusObjectClass(bannerSlot.focus)}`}
                       />
                       <div className="absolute inset-0 bg-gradient-to-t from-ink-900 via-ink-900/55 to-black/15" />
@@ -583,6 +620,9 @@ export default function DownloadedPage() {
                           src={posterSrc}
                           alt=""
                           loading="lazy"
+                          decoding="async"
+                          width={40}
+                          height={56}
                           className={`h-full w-full object-cover ${focusObjectClass(groupArt?.poster?.focus)}`}
                         />
                       ) : (
@@ -598,9 +638,23 @@ export default function DownloadedPage() {
                           <img
                             src={`${iconSlot.url}?v=${iconSlot.updatedAt}`}
                             alt=""
+                            loading="lazy"
+                            decoding="async"
+                            width={24}
+                            height={24}
                             className={`h-6 w-6 shrink-0 rounded-md object-cover ring-1 ring-white/20 ${focusObjectClass(iconSlot.focus)}`}
                           />
                         ) : null}
+                        <button
+                          type="button"
+                          onClick={() => collapse.toggle(seriesKey)}
+                          aria-expanded={!seriesCollapsed}
+                          aria-controls={`series-panel-${group.key}`}
+                          aria-label={`${seriesCollapsed ? 'Expand' : 'Collapse'} ${group.title}`}
+                          className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-white/45 transition hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-accent/60 focus:outline-none"
+                        >
+                          {seriesCollapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+                        </button>
                         {group.mediaId ? (
                           <button
                             type="button"
@@ -626,7 +680,12 @@ export default function DownloadedPage() {
                       <p className="mt-0.5 text-[11px] text-white/45">
                         {group.isMovieGroup
                           ? `${totalEps} movie file${totalEps === 1 ? '' : 's'} · ${formatBytes(group.totalBytes)}`
-                          : `${group.seasons.length} season${group.seasons.length === 1 ? '' : 's'} · ${totalEps} file${totalEps === 1 ? '' : 's'} · ${formatBytes(group.totalBytes)}`}
+                          : `${group.seasons.length} season${group.seasons.length === 1 ? '' : 's'} · ${totalEps} episode${totalEps === 1 ? '' : 's'} · ${formatBytes(totalSize || group.totalBytes)}`}
+                        {seriesCollapsed ? (
+                          <span className="ml-1.5 text-white/30">
+                            · collapsed · {totalEps} episode{totalEps === 1 ? '' : 's'} hidden
+                          </span>
+                        ) : null}
                       </p>
                     </div>
 
@@ -651,37 +710,78 @@ export default function DownloadedPage() {
                   </div>
                 </div>
 
-                <div className="divide-y divide-white/5">
-                  {group.seasons.map((seasonBlock) => (
-                    <div key={seasonBlock.season} className="px-4 py-3">
-                      {!group.isMovieGroup ? (
-                        <h3 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold tracking-wider text-white/40 uppercase">
-                          <Folder size={12} className="text-accent/80" />
-                          {seasonBlock.label}
-                          <span className="font-normal text-white/30 normal-case">
-                            ({seasonBlock.items.length})
-                          </span>
-                        </h3>
-                      ) : null}
+                <div
+                  id={`series-panel-${group.key}`}
+                  hidden={seriesCollapsed}
+                  className="divide-y divide-white/5"
+                >
+                  {group.seasons.map((seasonBlock) => {
+                    const seasonKey = `season:${group.key}:${seasonBlock.season}`
+                    const seasonCollapsed = collapse.isHidden(group.key, seasonBlock.season)
+                    const eps = seasonBlock.items
+                      .map((i) => i.episode)
+                      .filter((n): n is number => typeof n === 'number')
+                    const range =
+                      eps.length > 1
+                        ? `E${String(Math.min(...eps)).padStart(2, '0')}–E${String(Math.max(...eps)).padStart(2, '0')}`
+                        : eps.length === 1
+                          ? `E${String(eps[0]).padStart(2, '0')}`
+                          : null
+                    return (
+                      <div key={seasonBlock.season}>
+                        {!group.isMovieGroup ? (
+                          <button
+                            type="button"
+                            onClick={() => collapse.toggle(seasonKey)}
+                            aria-expanded={!seasonCollapsed}
+                            aria-controls={`season-panel-${group.key}-${seasonBlock.season}`}
+                            className="flex w-full items-center gap-2 px-4 py-2.5 text-left transition hover:bg-white/4 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+                          >
+                            {seasonCollapsed ? (
+                              <ChevronRight size={13} className="shrink-0 text-white/40" />
+                            ) : (
+                              <ChevronDown size={13} className="shrink-0 text-white/40" />
+                            )}
+                            <Folder size={12} className="shrink-0 text-accent/80" />
+                            <span className="text-[11px] font-semibold tracking-wider text-white/55 uppercase">
+                              {seasonBlock.label}
+                            </span>
+                            <span className="rounded-full bg-white/6 px-1.5 py-0.5 text-[10px] font-normal text-white/45 tabular-nums">
+                              {seasonBlock.items.length} {seasonBlock.items.length === 1 ? 'episode' : 'episodes'}
+                            </span>
+                            {range ? (
+                              <span className="text-[10px] font-normal text-white/30 tabular-nums">{range}</span>
+                            ) : null}
+                            <span className="ml-auto text-[10px] text-white/30 tabular-nums">
+                              {formatBytes(seasonBlock.items.reduce((sum, i) => sum + i.size, 0))}
+                            </span>
+                          </button>
+                        ) : null}
 
-                      <div className="space-y-1.5">
-                        {seasonBlock.items.map((item) => (
-                          <LibraryFileRow
-                            key={item.id}
-                            item={item}
-                            selectMode={selectMode}
-                            checked={selected.has(item.id)}
-                            busy={deleteBusy === item.id}
-                            subBusy={subBusyId === item.id}
-                            onToggle={() => toggleItem(item.id)}
-                            onPlay={() => player.open(localItemToPlayback(item))}
-                            onAttachSub={(ev) => void onAttachSubtitle(item, ev)}
-                            onDelete={() => void onDeleteOne(item)}
-                          />
-                        ))}
+                        {!seasonCollapsed ? (
+                          <div
+                            id={`season-panel-${group.key}-${seasonBlock.season}`}
+                            className={group.isMovieGroup ? 'space-y-1.5 px-4 py-3' : 'space-y-1.5 px-4 pt-1 pb-3'}
+                          >
+                            {seasonBlock.items.map((item) => (
+                              <LibraryFileRow
+                                key={item.id}
+                                item={item}
+                                selectMode={selectMode}
+                                checked={selected.has(item.id)}
+                                busy={deleteBusy === item.id}
+                                subBusy={subBusyId === item.id}
+                                onToggle={() => toggleItem(item.id)}
+                                onPlay={() => player.open(localItemToPlayback(item))}
+                                onAttachSub={(ev) => void onAttachSubtitle(item, ev)}
+                                onDelete={() => void onDeleteOne(item)}
+                              />
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               </section>
             )

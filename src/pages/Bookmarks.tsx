@@ -8,6 +8,7 @@ import { useSettings } from '../lib/settings'
 import { inferSeasonFromTitle } from '../lib/format'
 import { MediaGrid } from '../components/MediaCard'
 import { useToast } from '../components/Toasts'
+import PersonalLists from '../components/PersonalLists'
 
 export default function Bookmarks() {
   const bookmarks = useBookmarks()
@@ -205,6 +206,7 @@ export default function Bookmarks() {
           />
         )}
       </div>
+      <PersonalLists bookmarks={items} />
     </div>
   )
 }
