@@ -93,6 +93,11 @@ function AccountsCard() {
   const [avatarBroken, setAvatarBroken] = useState(false)
   const [avatarBusy, setAvatarBusy] = useState(false)
   const [avatarError, setAvatarError] = useState<string | null>(null)
+  const [profileVisibility, setProfileVisibility] = useState('public')
+  const [profileLinkToken, setProfileLinkToken] = useState('')
+  const [profileLinkPath, setProfileLinkPath] = useState('')
+  const [privacyBusy, setPrivacyBusy] = useState(false)
+  const [privacyError, setPrivacyError] = useState<string | null>(null)
 
   useEffect(() => {
     setBioDraft(user?.bio ?? '')
@@ -124,6 +129,17 @@ function AccountsCard() {
       .then((res) => setRecoveryStatus(res))
       .catch(() => setRecoveryStatus(null))
     setRecoveryCodes(null)
+    api
+      .profileSettings()
+      .then((res) => {
+        setProfileVisibility(res.visibility)
+        setProfileLinkToken(res.token)
+        setProfileLinkPath(res.path)
+      })
+      .catch(() => {
+        setProfileVisibility('public')
+        setProfileLinkToken('')
+      })
   }, [user])
 
   async function signIn() {
@@ -297,6 +313,45 @@ function AccountsCard() {
       setAvatarError(err instanceof Error ? err.message : 'Could not remove the avatar')
     } finally {
       setAvatarBusy(false)
+    }
+  }
+
+  async function changeProfileVisibility(visibility: string) {
+    setPrivacyBusy(true)
+    setPrivacyError(null)
+    try {
+      const res = await api.setProfileVisibility(visibility as 'public' | 'private' | 'link-only')
+      setProfileVisibility(res.visibility)
+      toast('Profile visibility updated')
+    } catch (err) {
+      setPrivacyError(err instanceof Error ? err.message : 'Could not update visibility')
+    } finally {
+      setPrivacyBusy(false)
+    }
+  }
+
+  async function copyProfileLink() {
+    const link = `${window.location.origin}${profileLinkPath}?token=${profileLinkToken}`
+    try {
+      await navigator.clipboard.writeText(link)
+      toast('Profile link copied')
+    } catch {
+      toast('Could not copy the link', 'err')
+    }
+  }
+
+  async function rotateProfileLinkToken() {
+    setPrivacyBusy(true)
+    setPrivacyError(null)
+    try {
+      const res = await api.rotateProfileLink()
+      setProfileLinkToken(res.token)
+      setProfileLinkPath(res.path)
+      toast('Profile link rotated — the old link no longer works')
+    } catch (err) {
+      setPrivacyError(err instanceof Error ? err.message : 'Could not rotate the link')
+    } finally {
+      setPrivacyBusy(false)
     }
   }
 
@@ -498,6 +553,50 @@ function AccountsCard() {
                 </div>
               </div>
               {avatarError ? <p className="mt-2 text-[11px] text-red-300">{avatarError}</p> : null}
+            </div>
+            <div className="mt-3 border-t border-white/5 pt-3">
+              <h3 className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-white/30">
+                <Shield size={11} /> Profile visibility
+              </h3>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <select
+                  value={profileVisibility}
+                  onChange={(event) => void changeProfileVisibility(event.target.value)}
+                  disabled={privacyBusy}
+                  className="rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white ring-1 ring-white/10 outline-none focus:ring-accent/60"
+                >
+                  <option value="public">Public — anyone can view</option>
+                  <option value="link-only">Link-only — only people with the link</option>
+                  <option value="private">Private — only you</option>
+                </select>
+                {profileVisibility === 'link-only' && profileLinkToken ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void copyProfileLink()}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-white/5 px-3 py-1.5 text-[11px] font-semibold text-white ring-1 ring-white/10 transition hover:bg-white/10"
+                    >
+                      <Send size={12} /> Copy profile link
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void rotateProfileLinkToken()}
+                      disabled={privacyBusy}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-white/5 px-3 py-1.5 text-[11px] font-semibold text-white ring-1 ring-white/10 transition hover:bg-white/10 disabled:opacity-40"
+                    >
+                      {privacyBusy ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} Rotate link
+                    </button>
+                  </>
+                ) : null}
+              </div>
+              <p className="mt-1 text-[11px] text-white/40">
+                {profileVisibility === 'link-only'
+                  ? 'Anyone with the link can view your profile. Rotating the link disables old copies.'
+                  : profileVisibility === 'private'
+                    ? 'Only you can view your profile.'
+                    : 'Anyone can view your profile.'}
+              </p>
+              {privacyError ? <p className="mt-2 text-[11px] text-red-300">{privacyError}</p> : null}
             </div>
             {passkeySupported ? (
               <div className="mt-3 border-t border-white/5 pt-3">

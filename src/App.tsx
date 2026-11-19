@@ -17,6 +17,7 @@ import {
   DownloadsPage,
   HomePage,
   IndexPage,
+  ProfilePage,
   SchedulePage,
   SearchPage,
   SettingsPage,
@@ -85,6 +86,7 @@ export default function App() {
               <Route path="downloaded" element={<LazyPage><DownloadedPage /></LazyPage>} />
               <Route path="bookmarks" element={<LazyPage><BookmarksPage /></LazyPage>} />
               <Route path="settings" element={<LazyPage><SettingsPage /></LazyPage>} />
+              <Route path="profile/:userId" element={<LazyPage><ProfilePage /></LazyPage>} />
               <Route path="admin/inspect" element={<LazyPage><AdminInspectPage /></LazyPage>} />
               <Route path="admin/inspect/:id" element={<LazyPage><AdminInspectPage /></LazyPage>} />
               <Route path="*" element={<Navigate to="/" replace />} />

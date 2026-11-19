@@ -523,6 +523,23 @@ export const api = {
     return send<{ ok: boolean }>('/api/auth/avatar', 'DELETE')
   },
 
+  profileSettings() {
+    return get<{ token: string; path: string; visibility: string }>('/api/auth/profile-link', false)
+  },
+
+  setProfileVisibility(visibility: 'public' | 'private' | 'link-only') {
+    return send<{ visibility: string }>('/api/auth/profile-visibility', 'PUT', { visibility })
+  },
+
+  rotateProfileLink() {
+    return send<{ token: string; path: string }>('/api/auth/profile-link/rotate', 'POST')
+  },
+
+  viewProfile(userId: string, token?: string | null) {
+    const qs = token ? `?token=${encodeURIComponent(token)}` : ''
+    return get<{ user: RegisteredUser; visibility: string }>(`/api/profile/${encodeURIComponent(userId)}${qs}`, false)
+  },
+
   resolverStatus() {
     return get<ResolverStatus>('/api/resolver/status', false)
   },
