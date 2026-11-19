@@ -62,6 +62,7 @@ import * as detailEngine from './detail.mjs'
 import * as kv from './kv.mjs'
 import * as listStore from './listStore.mjs'
 import * as progressStore from './progressStore.mjs'
+import * as sessionStore from './sessionStore.mjs'
 import { exportListJson, exportListCsv } from './listExport.mjs'
 import { pickListEntry } from './listRandom.mjs'
 import { sortListEntries } from './listSort.mjs'
@@ -1688,9 +1689,48 @@ app.delete(
         })
       }
       res.json(await progressStore.clearProgressEntries(progressProfileId(user, req), entries))
+      // Sessions never outlive their progress entries (AV-166 interplay).
+      await sessionStore.clearSessionsEntries(progressProfileId(user, req), entries)
       return
     }
-    res.json(await progressStore.clearProgress(progressProfileId(user, req), {
+    const scope = {
+      mediaId: req.body?.mediaId,
+      season: req.body?.season,
+      episode: req.body?.episode,
+    }
+    res.json(await progressStore.clearProgress(progressProfileId(user, req), scope))
+    await sessionStore.clearSessions(progressProfileId(user, req), scope)
+  }),
+)
+
+// Playback-session records (AV-166 slice 1): start time, end time, and
+// watched duration per playback session. Profile key matches progress;
+// private-history mode (AV-165) skips recording sessions too — its promise
+// is exactly "does not record playback sessions".
+app.get('/api/sessions', wrap(async (req, res) => {
+  const { user } = await requireSessionUser(req)
+  res.json({ sessions: sessionStore.listSessions(progressProfileId(user, req)) })
+}))
+
+app.put(
+  '/api/sessions',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user } = await requireSessionUser(req)
+    if (settings.get().privateHistoryMode) {
+      res.json({ session: null, skipped: true })
+      return
+    }
+    res.json({ session: await sessionStore.saveSession(progressProfileId(user, req), req.body) })
+  }),
+)
+
+app.delete(
+  '/api/sessions',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user } = await requireSessionUser(req)
+    res.json(await sessionStore.clearSessions(progressProfileId(user, req), {
       mediaId: req.body?.mediaId,
       season: req.body?.season,
       episode: req.body?.episode,

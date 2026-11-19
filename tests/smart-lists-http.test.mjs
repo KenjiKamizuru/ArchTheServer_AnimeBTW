@@ -221,3 +221,23 @@ test('private-history mode skips playback saves and keeps manual marks (AV-165)'
   const recorded = await req('/api/progress', 'PUT', { mediaId: 601, season: 's1', episode: 1, positionSeconds: 300, runtimeSeconds: 1000 })
   assert.equal(recorded.body.entry.positionSeconds, 300, 'recording resumes when the mode is off')
 })
+
+// AV-166 slice 1: session records — validation, private-mode skip, and the
+// interplay that keeps sessions from outliving deleted history entries.
+test('session records respect private mode and follow history deletion (AV-166)', async () => {
+  const saved = await req('/api/sessions', 'PUT', { mediaId: 701, season: 's1', episode: 1, startedAt: 1700000000000, endedAt: 1700000120000, watchedSeconds: 110 })
+  assert.equal(saved.status, 200)
+  assert.equal(saved.body.session.watchedSeconds, 110)
+  const bad = await req('/api/sessions', 'PUT', { mediaId: 701, season: 's1', episode: 2, startedAt: 1700000000000, endedAt: 1700000010000, watchedSeconds: 999 })
+  assert.equal(bad.status, 400, 'watched time must fit the wall time')
+  // deleting the history entry removes its sessions
+  assert.equal((await req('/api/progress', 'PUT', { mediaId: 701, season: 's1', episode: 1, positionSeconds: 300, runtimeSeconds: 1000 })).status, 200)
+  assert.equal((await req('/api/progress', 'DELETE', { mediaId: 701, season: 's1', episode: 1 })).body.removed, 1)
+  assert.equal((await req('/api/sessions')).body.sessions.some((entry) => entry.mediaId === 701), false, 'sessions never outlive their entries')
+  // private-history mode skips session recording (its literal promise)
+  assert.equal((await req('/api/settings', 'PUT', { privateHistoryMode: true })).body.privateHistoryMode, true)
+  const skipped = await req('/api/sessions', 'PUT', { mediaId: 702, season: 's1', episode: 1, startedAt: 1700000000000, endedAt: 1700000060000, watchedSeconds: 55 })
+  assert.deepEqual(skipped.body, { session: null, skipped: true })
+  assert.equal((await req('/api/settings', 'PUT', { privateHistoryMode: false })).body.privateHistoryMode, false)
+  assert.equal((await req('/api/sessions')).body.sessions.every((entry) => entry.mediaId !== 702), true)
+})
