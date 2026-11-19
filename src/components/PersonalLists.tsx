@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { GripVertical } from 'lucide-react'
 import type { Media } from '../types'
+import { saveSettings, useSettings } from '../lib/settings'
 
 type ListSummary = { id: string; name: string; count: number; description?: string }
 type Entry = { mediaId: number; media: Media; status: string | null; note: string; priority: number | null; rating: number | null }
-type Overview = { statuses: ListSummary[]; lists: ListSummary[] }
+type Overview = { statuses: ListSummary[]; lists: ListSummary[]; totalEntries: number; limits: { maxItems: number; maxLists: number } }
 type List = ListSummary & { entries: Entry[]; custom: boolean }
 
 async function request<T>(url: string, method = 'GET', body?: unknown): Promise<T> {
@@ -37,6 +38,7 @@ function EntryNote({ entry, listId, busy, onSave }: { entry: Entry; listId: stri
 
 /** Lists are shared across this installation until account support exists. */
 export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
+  const settings = useSettings()
   const [overview, setOverview] = useState<Overview | null>(null)
   const [active, setActive] = useState('status:planned')
   const [sort, setSort] = useState('added')
@@ -78,11 +80,32 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
     })
   }
   const button = 'rounded-lg bg-white/10 px-3 py-2 text-xs text-white hover:bg-white/20 disabled:opacity-50'
+  // Capacity warnings (AV-140): surface at 90% of the installation caps so
+  // users can clean up before adds start failing; users can disable them.
+  const nearCapacity = overview !== null && (
+    overview.totalEntries >= Math.floor(overview.limits.maxItems * 0.9)
+    || overview.lists.length >= Math.floor(overview.limits.maxLists * 0.9)
+  )
   const input = 'rounded-lg bg-ink-900 px-3 py-2 text-sm text-white ring-1 ring-white/10'
   return (
     <section className="mt-8 rounded-xl bg-ink-900 p-4 ring-1 ring-white/10" aria-labelledby="lists-heading">
       <h2 id="lists-heading" className="text-lg font-semibold text-white">Your lists</h2>
       <p className="mt-1 text-xs text-white/50">Lists are shared on this installation. Bookmarks remain separate.</p>
+      <label className="mt-1 flex items-center gap-1.5 text-[11px] text-white/40">
+        <input
+          type="checkbox"
+          checked={!settings.hideListCapacityWarnings}
+          onChange={(event) => void saveSettings({ hideListCapacityWarnings: !event.target.checked })}
+        />
+        Warn when lists are near capacity
+      </label>
+      {nearCapacity && !settings.hideListCapacityWarnings ? (
+        <p role="status" className="mt-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-200 ring-1 ring-amber-400/20">
+          Lists are nearing this installation&apos;s capacity
+          {overview ? ` (${overview.totalEntries}/${overview.limits.maxItems} titles, ${overview.lists.length}/${overview.limits.maxLists} custom lists)` : ''}
+          . Remove entries or lists to keep adding.
+        </p>
+      ) : null}
       {error && <p role="alert" className="mt-2 text-sm text-red-300">{error}</p>}
       {message && <p role="status" className="mt-2 text-sm text-white/70">{message}</p>}
       <div className="mt-4 flex flex-wrap gap-2" aria-label="Lists">

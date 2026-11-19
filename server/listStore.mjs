@@ -78,6 +78,8 @@ export function summary() {
     statuses: STATUSES.map((status) => { const list = readList(`status:${status}`); return { id: list.id, name: list.name, count: list.count } }),
     lists: state.lists.map(({ order, ...list }) => ({ ...list, count: readList(list.id).count })),
     totalEntries: state.entries.length,
+    // Capacity bounds (AV-140) so the client can warn before hitting them.
+    limits: { maxItems: MAX_ITEMS, maxLists: MAX_LISTS },
   }
 }
 export async function createList(body = {}) {

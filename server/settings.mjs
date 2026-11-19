@@ -6,7 +6,7 @@ import { normalizeSectionOrder } from './detail.mjs'
 import { atomicWriteFile, normalizeHostPatternList, validateLibraryDir } from './security.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const DATA_DIR = path.join(ROOT, 'data')
+const DATA_DIR = process.env.ANIMEVAULT_DATA ? path.resolve(process.env.ANIMEVAULT_DATA) : path.join(ROOT, 'data')
 const FILE = path.join(DATA_DIR, 'settings.json')
 
 export const QUALITIES = ['best', '1080', '720', '480', '360', 'worst']
@@ -37,6 +37,7 @@ const DEFAULTS = {
   allowedExternalHosts: [],
   theme: 'dark',
   systemTheme: false,
+  hideListCapacityWarnings: false,
   updatedAt: 0,
 }
 
@@ -80,6 +81,8 @@ export async function init() {
           : [],
         theme: typeof parsed.theme === 'string' && ['dark', 'light'].includes(parsed.theme) ? parsed.theme : DEFAULTS.theme,
         systemTheme: Boolean(parsed.systemTheme),
+        hideListCapacityWarnings:
+          parsed.hideListCapacityWarnings === undefined ? false : Boolean(parsed.hideListCapacityWarnings),
         updatedAt: Number(parsed.updatedAt) || 0,
       }
     }
@@ -113,6 +116,7 @@ export function get() {
     envExternalHostsConfigured: Boolean(String(process.env.ALLOWED_SOURCE_HOSTS ?? '').trim()),
     theme: state.theme,
     systemTheme: state.systemTheme,
+    hideListCapacityWarnings: state.hideListCapacityWarnings,
     updatedAt: state.updatedAt,
   }
 }
@@ -130,6 +134,10 @@ export async function save(patch = {}) {
 
   if (patch.detailSectionOrder !== undefined) {
     next.detailSectionOrder = normalizeSectionOrder(patch.detailSectionOrder)
+  }
+
+  if (patch.hideListCapacityWarnings !== undefined) {
+    next.hideListCapacityWarnings = Boolean(patch.hideListCapacityWarnings)
   }
 
   if (patch.registrationOpen !== undefined) {

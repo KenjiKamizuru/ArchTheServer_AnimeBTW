@@ -1,0 +1,35 @@
+// Round-trip tests for installation settings (AV-140 field + store wiring).
+import { test, after } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtemp, rm } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { spawnSync } from 'node:child_process'
+const dir = await mkdtemp(path.join(os.tmpdir(), 'animevault-settings-'))
+process.env.ANIMEVAULT_DATA = dir
+const settings = await import('../server/settings.mjs')
+await settings.init()
+after(async () => { await rm(dir, { recursive: true, force: true }) })
+
+test('capacity warnings default to on (AV-140)', () => {
+  assert.equal(settings.get().hideListCapacityWarnings, false)
+})
+test('capacity warnings can be disabled and persist (AV-140)', async () => {
+  await settings.save({ hideListCapacityWarnings: true })
+  assert.equal(settings.get().hideListCapacityWarnings, true)
+  const script = `import * as s from ${JSON.stringify(new URL('../server/settings.mjs', import.meta.url).href)}; await s.init(); console.log(JSON.stringify(s.get().hideListCapacityWarnings))`
+  const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, ANIMEVAULT_DATA: dir }, encoding: 'utf8' })
+  assert.equal(run.status, 0, run.stderr)
+  assert.equal(JSON.parse(run.stdout), true, 'setting survives a restart')
+})
+test('unknown settings keys are ignored', async () => {
+  await settings.save({ bogus: 1 })
+  assert.equal('bogus' in settings.get(), false)
+})
+test('list summary exposes capacity limits (AV-140)', async () => {
+  const listStore = await import('../server/listStore.mjs')
+  await listStore.init()
+  const { limits } = listStore.summary()
+  assert.equal(limits.maxItems, 2000)
+  assert.equal(limits.maxLists, 50)
+})

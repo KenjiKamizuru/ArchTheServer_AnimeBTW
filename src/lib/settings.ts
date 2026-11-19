@@ -14,6 +14,7 @@ let state: AppSettings = {
   envExternalHostsConfigured: false,
   theme: 'dark',
   systemTheme: false,
+  hideListCapacityWarnings: false,
   updatedAt: 0,
 }
 let started = false

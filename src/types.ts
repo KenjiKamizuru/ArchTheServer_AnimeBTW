@@ -426,6 +426,7 @@ export interface AppSettings {
   envExternalHostsConfigured: boolean
   theme: 'dark' | 'light'
   systemTheme: boolean
+  hideListCapacityWarnings: boolean
   updatedAt: number
 }
 
