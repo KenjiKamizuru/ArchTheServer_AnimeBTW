@@ -46,6 +46,7 @@ import { normalizePreferencesUpdate } from './userPreferences.mjs'
 import { normalizeBetaOptInsUpdate, setBetaOptIns, betaOptInsView } from './featureFlags.mjs'
 import { parseMalExport, matchResolved, toImportDocument } from './malImport.mjs'
 import { stalledUnfinished, clampIdleDays, returningSoon, newEpisodesAvailable, continueWatching } from './smartLists.mjs'
+import { buildProgressExport } from './progressExport.mjs'
 import { normalizeShowActivity, buildActivitySummary } from './profileActivity.mjs'
 import { buildAccountExport } from './accountExport.mjs'
 import { validateDeletionConfirmation, DELETION_ARTIFACTS } from './accountDeletion.mjs'
@@ -1884,6 +1885,26 @@ app.get('/api/progress/continue', limitOutbound, wrap(async (req, res) => {
   } catch {
     res.json({ entries: [], count: 0, unavailable: true })
   }
+}))
+
+// Progress export (AV-174): the caller's records with stable external IDs
+// (Media.externalIds) in a deterministic, re-importable layout.
+app.get('/api/progress/export', limitOutbound, wrap(async (req, res) => {
+  const { user } = await requireSessionUser(req)
+  const rows = progressStore.listProgress(progressProfileId(user, req))
+  const mediaById = new Map()
+  let externalIdsUnavailable = false
+  if (rows.length) {
+    try {
+      for (const record of await anilist.mediaWithRelations([...new Set(rows.map((row) => row.mediaId))])) {
+        mediaById.set(record.id, record)
+      }
+    } catch {
+      // The rows still export (never dropped) — the ID gap is flagged.
+      externalIdsUnavailable = true
+    }
+  }
+  res.json(buildProgressExport(rows, mediaById, { exportedAt: Date.now(), externalIdsUnavailable }))
 }))
 
 // Smart list (AV-138): "returning soon" — entries with a SEQUEL relation

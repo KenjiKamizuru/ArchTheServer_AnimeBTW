@@ -426,6 +426,27 @@ export const api = {
     return send<{ session: PlaybackSession | null; skipped?: boolean }>('/api/sessions', 'PUT', record)
   },
 
+  // AV-174: deterministic export of this profile's progress with stable
+  // external IDs. The caller triggers the file download.
+  exportProgress() {
+    return get<{
+      format: string
+      exportedAt: number
+      externalIdsUnavailable: boolean
+      entries: {
+        mediaId: number
+        title: string | null
+        season: string
+        episode: number
+        state: string
+        positionSeconds: number
+        runtimeSeconds: number | null
+        updatedAt: number
+        externalIds: Record<string, string>
+      }[]
+    }>('/api/progress/export', false)
+  },
+
   // AV-158: continue-watching rail data (in-progress episodes + media).
   continueWatching() {
     return get<{ entries: ContinueEntry[]; count: number; unavailable: boolean }>('/api/progress/continue', false)

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Loader2, RotateCcw, Trash2 } from 'lucide-react'
+import { Download, Loader2, RotateCcw, Trash2 } from 'lucide-react'
 import type { Media, ProgressEntry } from '../types'
 import { api } from '../lib/api'
 import { filterWatchHistory, searchWatchHistory, watchHistoryRows, type WatchHistoryRow } from '../lib/history'
@@ -56,6 +56,23 @@ export default function History() {
   // bounds stay as the precise filter.
   const filtered = useMemo(() => filterWatchHistory(searchWatchHistory(rows, query), { from, to }), [rows, from, to, query])
   const filtersActive = Boolean(from || to || query.trim())
+
+  // AV-174: export the profile's progress with stable external IDs.
+  async function exportProgress() {
+    try {
+      const data = await api.exportProgress()
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `animevault-progress-${new Date(data.exportedAt).toISOString().slice(0, 10)}.json`
+      link.click()
+      URL.revokeObjectURL(url)
+      push(data.externalIdsUnavailable ? 'Exported — external IDs were unavailable and left empty' : 'Progress exported')
+    } catch {
+      push('Could not export progress', 'err')
+    }
+  }
 
   // AV-163: per-entry deletion. The entry IS the progress record, so
   // removing it clears the episode's watch mark and resume position too.
@@ -160,6 +177,17 @@ export default function History() {
           >
             <RotateCcw size={13} /> Clear filters
           </button>
+        ) : null}
+        {records !== null && rows.length > 0 ? (
+          <>
+            <button
+              type="button"
+              onClick={() => void exportProgress()}
+              className="flex items-center gap-1.5 rounded-full bg-white/10 px-3.5 py-2 text-xs font-medium text-white/80 transition hover:bg-white/20"
+            >
+              <Download size={13} /> Export
+            </button>
+          </>
         ) : null}
         {records !== null && rows.length > 0 ? (
           selectMode ? (

@@ -241,3 +241,20 @@ test('session records respect private mode and follow history deletion (AV-166)'
   assert.equal((await req('/api/settings', 'PUT', { privateHistoryMode: false })).body.privateHistoryMode, false)
   assert.equal((await req('/api/sessions')).body.sessions.every((entry) => entry.mediaId !== 702), true)
 })
+
+// AV-174: progress export — auth, format, and the honest ID-gap flag.
+test('the progress export requires auth and keeps its shape (AV-174)', async () => {
+  assert.equal((await req('/api/progress/export', 'GET', undefined, { cookie: '' })).status, 401)
+  const out = await req('/api/progress/export')
+  assert.equal(out.status, 200)
+  assert.equal(out.body.format, 'animevault-progress-v1')
+  assert.equal(typeof out.body.exportedAt, 'number')
+  assert.equal(typeof out.body.externalIdsUnavailable, 'boolean')
+  assert.ok(Array.isArray(out.body.entries))
+  for (const entry of out.body.entries) {
+    assert.equal(typeof entry.externalIds, 'object')
+    assert.equal('profileId' in entry, false, 'the profile key is never exported')
+    assert.equal(typeof entry.mediaId, 'number')
+    assert.equal(typeof entry.episode, 'number')
+  }
+})
