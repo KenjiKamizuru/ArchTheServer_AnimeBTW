@@ -10,6 +10,7 @@ import {
   resolveActiveGuest,
   guestPreferencesView,
   setGuestPreferences,
+  resolveDeviceProfile,
   MAX_GUESTS,
   MAX_GUEST_NAME,
 } from '../server/guestProfiles.mjs'
@@ -81,4 +82,41 @@ test('guest usage: selection validation + per-guest preferences (AV-122b)', () =
   // Removing the guest revokes the selection entirely.
   removeGuest(user, 'g1')
   assert.equal(resolveActiveGuest(user, 'g1'), null, 'a removed guest resolves to nothing')
+})
+
+test('device profile resolution: mode, precedence, owner fallback (AV-123)', () => {
+  const owner = {
+    username: 'kenji',
+    displayName: 'Kenji',
+    theme: 'dark',
+    defaultSubtitle: 'en',
+    defaultAudio: null,
+    loginNotifications: true,
+  }
+  // No selection → owner mode with the owner's own preferences.
+  const ownerMode = resolveDeviceProfile(owner, null)
+  assert.equal(ownerMode.mode, 'owner')
+  assert.equal(ownerMode.name, 'Kenji')
+  assert.equal(ownerMode.prefs.theme, 'dark')
+  assert.equal(ownerMode.prefs.loginNotifications, null, 'the device profile view never exposes mail prefs')
+
+  // A removed/unknown selection falls back to owner mode (never errors).
+  assert.equal(resolveDeviceProfile(owner, 'g404').mode, 'owner')
+
+  // Guest mode: SET guest fields win; UNSET fields inherit the owner's.
+  const user = { ...owner, guests: [] }
+  addGuest(user, 'Aki', { makeId: () => 'g1' })
+  setGuestPreferences(user.guests[0], { theme: 'light', defaultQuality: '720p' })
+  const guestMode = resolveDeviceProfile(user, 'g1')
+  assert.equal(guestMode.mode, 'guest')
+  assert.equal(guestMode.name, 'Aki')
+  assert.equal(guestMode.guestId, 'g1')
+  assert.equal(guestMode.prefs.theme, 'light', 'set guest fields win')
+  assert.equal(guestMode.prefs.defaultSubtitle, 'en', 'unset guest fields inherit the owner')
+  assert.equal(guestMode.prefs.defaultQuality, '720p')
+  assert.equal(guestMode.prefs.defaultAudio, null, 'owner-unset stays null (app default)')
+  assert.equal(guestMode.prefs.loginNotifications, null, 'guests never inherit login notifications')
+
+  // Clearing the selection (the switch back) is pure owner-mode again.
+  assert.equal(resolveDeviceProfile(user, null).mode, 'owner')
 })

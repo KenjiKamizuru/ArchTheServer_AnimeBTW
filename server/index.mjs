@@ -47,7 +47,7 @@ import { normalizeShowActivity, buildActivitySummary } from './profileActivity.m
 import { buildAccountExport } from './accountExport.mjs'
 import { validateDeletionConfirmation, DELETION_ARTIFACTS } from './accountDeletion.mjs'
 import { listUserSessions, shouldRevoke, isSessionHash } from './sessionManagement.mjs'
-import { listGuests, addGuest, removeGuest, resolveActiveGuest, guestPreferencesView, setGuestPreferences } from './guestProfiles.mjs'
+import { listGuests, addGuest, removeGuest, resolveActiveGuest, guestPreferencesView, setGuestPreferences, resolveDeviceProfile } from './guestProfiles.mjs'
 import { atomicWriteFile } from './security.mjs'
 
 const EMAIL_VERIFY_TTL_MS = 24 * 60 * 60 * 1000
@@ -1419,6 +1419,18 @@ app.get(
     const guestId = readCookie(req, GUEST_COOKIE)
     const guest = guestId ? resolveActiveGuest(user, guestId) : null
     res.json({ guest })
+  }),
+)
+
+// Device profile resolution (AV-123): who is using this device and with
+// which preferences. Switching only changes the av_guest marker — the
+// account session is never cleared by select/clear.
+app.get(
+  '/api/auth/profile/active',
+  wrap(async (req, res) => {
+    const { user } = await requireSessionUser(req)
+    const guestId = readCookie(req, GUEST_COOKIE)
+    res.json({ profile: resolveDeviceProfile(user, guestId) })
   }),
 )
 

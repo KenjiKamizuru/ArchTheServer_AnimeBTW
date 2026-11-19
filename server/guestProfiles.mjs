@@ -100,3 +100,41 @@ export function setGuestPreferences(record, body) {
   record.prefs = { ...(record.prefs ?? {}), ...parsed.value }
   return { ok: true, value: guestPreferencesView(record) }
 }
+
+/** Which profile is using this device right now (AV-123), and with which
+ * preferences. Switching NEVER touches the account session — it only changes
+ * the `av_guest` marker (see the routes); this function makes the RESULT of
+ * switching explicit and testable.
+ *
+ * Preference precedence (recorded decision — household inheritance): a
+ * guest's SET fields win; its unset (null) fields fall back to the owner's
+ * preference; owner fields unset fall back to null (the app default).
+ */
+export function resolveDeviceProfile(user, guestId) {
+  const ownerPrefs = {
+    preferredLanguage: user?.preferredLanguage ?? null,
+    locale: user?.locale ?? null,
+    defaultSubtitle: user?.defaultSubtitle ?? null,
+    defaultAudio: user?.defaultAudio ?? null,
+    defaultQuality: user?.defaultQuality ?? null,
+    maxContentRating: user?.maxContentRating ?? null,
+    theme: user?.theme ?? null,
+    preferLocalPlayback: user?.preferLocalPlayback ?? null,
+    loginNotifications: null, // never active for a guest
+  }
+  const guest = guestId ? resolveActiveGuest(user, guestId) : null
+  if (!guest) {
+    return {
+      mode: 'owner',
+      name: user?.displayName || user?.username || null,
+      prefs: ownerPrefs,
+    }
+  }
+  const merged = {}
+  for (const key of Object.keys(ownerPrefs)) {
+    merged[key] = guest.prefs[key] !== null && guest.prefs[key] !== undefined ? guest.prefs[key] : ownerPrefs[key]
+  }
+  // A guest never inherits the owner's login notifications.
+  merged.loginNotifications = null
+  return { mode: 'guest', name: guest.name, guestId: guest.id, prefs: merged }
+}
