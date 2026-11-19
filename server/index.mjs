@@ -642,6 +642,9 @@ app.get('/api/lists', wrap(async (_req, res) => res.json(listStore.summary())))
 app.post('/api/lists', limitMutations, wrap(async (req, res) => {
   res.status(201).json({ list: await listStore.createList(req.body) })
 }))
+app.post('/api/lists/import', limitMutations, wrap(async (req, res) => {
+  res.status(201).json(await listStore.importList(req.body))
+}))
 app.post('/api/lists/migrate', limitMutations, wrap(async (_req, res) => {
   res.json(await listStore.migrateBookmarks(store.list()))
 }))

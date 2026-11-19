@@ -84,6 +84,22 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
           setMessage(`Copied ${result.migrated} bookmarks to Planned; ${result.skipped} already present or skipped.`)
         })}>Copy bookmarks to Planned</button>
       </form>
+      <div className="mt-4">
+        <label htmlFor="list-import" className="text-xs text-white/70">Import an AnimeVault JSON list (up to 400 KB)</label>
+        <input id="list-import" type="file" accept="application/json,.json" disabled={busy} className="mt-1 block max-w-full text-xs text-white/70" onChange={(event) => {
+          const file = event.currentTarget.files?.[0]
+          event.currentTarget.value = ''
+          if (!file) return
+          void perform(async () => {
+            if (file.size > 400_000) throw new Error('The file exceeds the 400 KB import limit')
+            let document: unknown
+            try { document = JSON.parse(await file.text()) } catch { throw new Error('The file is not valid JSON') }
+            const result = await request<{ list: ListSummary; imported: number }>('/api/lists/import', 'POST', document)
+            setActive(result.list.id)
+            setMessage(`Imported ${result.imported} titles into ${result.list.name}. Existing titles keep their status.`)
+          })
+        }} />
+      </div>
       {list && <div className="mt-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-medium text-white">{list.name}</h3>

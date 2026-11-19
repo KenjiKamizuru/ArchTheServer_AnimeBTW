@@ -5,6 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { atomicWriteFile } from './security.mjs'
 import { sanitizeBookmarkMedia } from './store.mjs'
+import { parseListImport } from './listImport.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const file = path.join(process.env.ANIMEVAULT_DATA ? path.resolve(process.env.ANIMEVAULT_DATA) : path.join(root, 'data'), 'lists.json')
@@ -165,6 +166,29 @@ export async function setRating(id, rawId, patch) {
   if (next.priority !== null || next.rating !== null) entry.ratings.push(next)
   await persist()
   return { mediaId, priority: next.priority, rating: next.rating }
+}
+// Import into a new custom list. Existing titles keep their metadata and status;
+// imported notes/ratings belong only to the newly-created list.
+export async function importList(document) {
+  const parsed = parseListImport(document)
+  if (state.lists.length >= MAX_LISTS) throw error('List limit reached', 429)
+  const existing = new Map(state.entries.map((entry) => [entry.mediaId, entry]))
+  const newCount = parsed.entries.filter((entry) => !existing.has(entry.mediaId)).length
+  if (state.entries.length + newCount > MAX_ITEMS) throw error('Entry limit reached', 429)
+  const list = { id: `l_${crypto.randomBytes(12).toString('hex')}`, name: parsed.name, description: parsed.description, createdAt: Date.now() }
+  state.lists.push(list)
+  for (const item of parsed.entries) {
+    let entry = existing.get(item.mediaId)
+    if (!entry) {
+      entry = { mediaId: item.mediaId, media: item.media, status: item.status, listIds: [], addedAt: item.addedAt }
+      state.entries.push(entry)
+    }
+    entry.listIds.push(list.id)
+    if (item.note.trim()) (entry.notes ??= []).push({ listId: list.id, text: item.note })
+    if (item.priority !== null || item.rating !== null) (entry.ratings ??= []).push({ listId: list.id, priority: item.priority, rating: item.rating })
+  }
+  await persist()
+  return { list, imported: parsed.entries.length, newEntries: newCount }
 }
 export async function migrateBookmarks(bookmarks) {
   let migrated = 0, skipped = 0
