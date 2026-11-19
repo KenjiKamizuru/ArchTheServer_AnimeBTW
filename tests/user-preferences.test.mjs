@@ -10,11 +10,13 @@ import {
   normalizeMaxContentRating,
   normalizeTheme,
   normalizePreferLocalPlayback,
+  normalizeLoginNotifications,
   normalizePreferencesUpdate,
   PLAYBACK_QUALITIES,
   CONTENT_RATINGS,
   THEMES,
 } from '../server/userPreferences.mjs'
+import { loginNotificationMessage } from '../server/mail.mjs'
 
 test('language tags: pattern validation, normalization, empty clears', () => {
   assert.deepEqual(normalizePreferredLanguage('en'), { ok: true, value: 'en' })
@@ -133,4 +135,27 @@ test('theme & interface overrides: closed sets, null follows global', () => {
     value: { theme: 'system', preferLocalPlayback: false },
   })
   assert.equal(normalizePreferencesUpdate({ theme: 'neon' }).ok, false)
+})
+
+test('login notifications: strict boolean opt-in + message shape', () => {
+  assert.deepEqual(normalizeLoginNotifications(true), { ok: true, value: true })
+  assert.deepEqual(normalizeLoginNotifications(false), { ok: true, value: false })
+  assert.deepEqual(normalizeLoginNotifications(null), { ok: true, value: null })
+  assert.deepEqual(normalizeLoginNotifications(''), { ok: true, value: null }, 'empty clears (established convention)')
+  for (const bad of ['true', 'on', 1, 0]) {
+    assert.equal(normalizeLoginNotifications(bad).ok, false, `should reject ${JSON.stringify(bad)}`)
+  }
+  assert.deepEqual(normalizePreferencesUpdate({ loginNotifications: true }), {
+    ok: true,
+    value: { loginNotifications: true },
+  })
+  const message = loginNotificationMessage(
+    { username: 'kenji', displayName: 'Kenji', email: 'k@example.test' },
+    { now: 1_000 },
+  )
+  assert.equal(message.to, 'k@example.test')
+  assert.equal(message.subject, 'New sign-in to your account')
+  assert.ok(message.text.includes('1970-01-01T00:00:01.000Z'), 'the sign-in time is stated')
+  assert.ok(message.text.includes('Kenji'))
+  assert.ok(!message.text.toLowerCase().includes('new device'), 'no fabricated device detection')
 })

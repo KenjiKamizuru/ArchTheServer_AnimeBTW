@@ -27,3 +27,14 @@ export function resetMessage(user, rawToken) {
     text: `Hello ${user.displayName || user.username},\n\nReset your password by sending this single-use token: ${rawToken}\n\nIf you did not request this, ignore this message — your password is unchanged.`,
   }
 }
+
+/** Login notification (AV-120): sent on every password sign-in when the user
+ * opted in. No "new device" wording — device fingerprints are not tracked. */
+export function loginNotificationMessage(user, { now = Date.now() } = {}) {
+  const when = new Date(now).toISOString()
+  return {
+    to: user.email,
+    subject: 'New sign-in to your account',
+    text: `Hello ${user.displayName || user.username},\n\nYour account was signed into at ${when}.\n\nIf this was not you, change your password and review your sessions in Settings.`,
+  }
+}

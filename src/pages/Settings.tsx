@@ -107,6 +107,7 @@ function AccountsCard() {
   const [prefRating, setPrefRating] = useState('')
   const [prefTheme, setPrefTheme] = useState('')
   const [prefLocalPlayback, setPrefLocalPlayback] = useState('')
+  const [prefLoginNotify, setPrefLoginNotify] = useState(false)
   const [prefsBusy, setPrefsBusy] = useState(false)
   const [prefsError, setPrefsError] = useState<string | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -173,6 +174,7 @@ function AccountsCard() {
         setPrefRating(res.maxContentRating ?? '')
         setPrefTheme(res.theme ?? '')
         setPrefLocalPlayback(res.preferLocalPlayback == null ? '' : String(res.preferLocalPlayback))
+        setPrefLoginNotify(res.loginNotifications === true)
       })
       .catch(() => {
         setPrefLanguage('')
@@ -183,6 +185,7 @@ function AccountsCard() {
         setPrefRating('')
         setPrefTheme('')
         setPrefLocalPlayback('')
+        setPrefLoginNotify(false)
       })
     api
       .listSessions()
@@ -430,6 +433,7 @@ function AccountsCard() {
         maxContentRating: prefRating,
         theme: prefTheme,
         preferLocalPlayback: prefLocalPlayback === '' ? null : prefLocalPlayback === 'true',
+        loginNotifications: prefLoginNotify,
       })
       setPrefLanguage(res.preferredLanguage ?? '')
       setPrefLocale(res.locale ?? '')
@@ -855,6 +859,16 @@ function AccountsCard() {
               <p className="mt-1 text-[11px] text-white/40">
                 Language tags like &quot;en&quot;, &quot;pt-BR&quot;, or &quot;zh-Hant&quot;. Subtitles accept &quot;off&quot; for none. Stored for display and playback choices — the UI is not translated yet.
               </p>
+              <label className="mt-2 flex items-center gap-2 text-[11px] text-white/70">
+                <input
+                  type="checkbox"
+                  checked={prefLoginNotify}
+                  disabled={prefsBusy}
+                  onChange={(event) => setPrefLoginNotify(event.target.checked)}
+                  className="h-3.5 w-3.5 accent-[color:var(--color-accent,#e11d48)]"
+                />
+                Email me on every password sign-in
+              </label>
               {prefsError ? <p className="mt-2 text-[11px] text-red-300">{prefsError}</p> : null}
             </div>
             <div className="mt-3 border-t border-white/5 pt-3">

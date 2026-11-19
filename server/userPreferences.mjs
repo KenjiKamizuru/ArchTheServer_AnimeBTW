@@ -24,6 +24,10 @@
 // - `preferLocalPlayback` — boolean | null = follow the global
 //   (AppSettings.preferLocalPlayback). These mirror real AppSettings fields
 //   as PER-USER OVERRIDES (signed-in user's value wins at consumption time).
+// - `loginNotifications` — boolean | null (default off): email the account on
+//   every password sign-in (AV-120). "Every sign-in", not "new device": no
+//   device fingerprints are tracked (AV-119 decision), so a new-device claim
+//   would be fabricated.
 // Language tags are validated by pattern so valid regional variants are not
 // wrongly rejected; empty clears any field to null.
 // These are STORED DEFAULTS consumed by the player/download flows; AV-113/114
@@ -92,6 +96,10 @@ export function normalizePreferLocalPlayback(value) {
   return { ok: false, error: 'preferLocalPlayback must be true or false' }
 }
 
+export function normalizeLoginNotifications(value) {
+  return normalizePreferLocalPlayback(value)
+}
+
 /** Normalize a partial preference update; unknown keys are ignored. */
 export function normalizePreferencesUpdate(body) {
   const out = {}
@@ -104,6 +112,7 @@ export function normalizePreferencesUpdate(body) {
     ['maxContentRating', normalizeMaxContentRating],
     ['theme', normalizeTheme],
     ['preferLocalPlayback', normalizePreferLocalPlayback],
+    ['loginNotifications', normalizeLoginNotifications],
   ]
   for (const [key, normalize] of fields) {
     if (body && typeof body === 'object' && key in body) {

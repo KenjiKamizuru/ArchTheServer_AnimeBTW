@@ -25,7 +25,7 @@ import {
   readCookie,
 } from './sessions.mjs'
 import { issueToken, isTokenValid, hashToken as hashAccountToken } from './tokens.mjs'
-import { sendMail, verificationMessage, resetMessage } from './mail.mjs'
+import { sendMail, verificationMessage, resetMessage, loginNotificationMessage } from './mail.mjs'
 import {
   issuePasskeyChallenge,
   registerPasskey,
@@ -930,6 +930,14 @@ app.post(
     const token = createSessionToken()
     await kv.set(`session:${hashToken(token)}`, sessionRecord(user.id))
     res.cookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', maxAge: SESSION_TTL_MS })
+    // Login notifications (AV-120): best-effort, never blocks the sign-in.
+    if (user.loginNotifications === true && user.email) {
+      try {
+        sendMail(loginNotificationMessage(user))
+      } catch {
+        // notification failure must not affect login
+      }
+    }
     res.json({ user: publicUser(user) })
   }),
 )
@@ -1426,6 +1434,7 @@ const preferencesView = (user) => ({
   maxContentRating: user.maxContentRating ?? null,
   theme: user.theme ?? null,
   preferLocalPlayback: user.preferLocalPlayback ?? null,
+  loginNotifications: user.loginNotifications ?? null,
 })
 
 app.get(
