@@ -733,7 +733,26 @@ export async function getDetail(id) {
         Media(id: $id, type: ANIME) {
           ${MEDIA_FIELDS}
           trailer { id site }
+          startDate { year month day }
+          endDate { year month day }
           streamingEpisodes { title thumbnail url site }
+          scoreDistribution { score amount }
+          rankings { rank type context year season allTime }
+          characters(perPage: 12, sort: [ROLE, RELEVANCE, ID]) {
+            edges {
+              role
+              node { id name { full native } image { large } siteUrl }
+              voiceActors(language: JAPANESE, sort: [RELEVANCE, ID]) {
+                id name { full native } image { large } languageV2 siteUrl
+              }
+            }
+          }
+          staff(perPage: 10, sort: [RELEVANCE, ID]) {
+            edges {
+              role
+              node { id name { full native } image { large } siteUrl primaryOccupations }
+            }
+          }
           relations {
             edges {
               relationType
@@ -743,10 +762,13 @@ export async function getDetail(id) {
                 format
                 status
                 episodes
+                chapters
+                averageScore
                 season
                 seasonYear
+                startDate { year month day }
                 title { romaji english native }
-                coverImage { large }
+                coverImage { large extraLarge }
                 nextAiringEpisode { episode airingAt }
               }
             }
@@ -756,6 +778,13 @@ export async function getDetail(id) {
       { id: numeric },
     )
     const base = normalize(data.Media)
+    const relationEdges = (data.Media.relations?.edges ?? []).map((edge) => ({
+      relationType: edge?.relationType,
+      node: {
+        ...(edge?.node ?? {}),
+        coverImage: edge?.node?.coverImage ?? null,
+      },
+    }))
     const seasonOrder = { WINTER: 0, SPRING: 1, SUMMER: 2, FALL: 3 }
     const relatedSeasons = (data.Media.relations?.edges ?? [])
       .filter(
@@ -802,6 +831,76 @@ export async function getDetail(id) {
         })
         .filter(Boolean),
       relatedSeasons,
+      // Raw graph data for the detail engine (grouping, timeline).
+      rawRelations: relationEdges,
+      timelineNodes: [
+        {
+          id: base.id,
+          title: { romaji: base.romaji, english: base.english, native: base.native },
+          format: base.format,
+          episodes: base.episodes,
+          season: base.season,
+          seasonYear: base.seasonYear,
+          startDate: data.Media.startDate ?? null,
+          coverImage: { large: base.cover },
+        },
+        ...(data.Media.relations?.edges ?? [])
+          .filter((edge) => edge?.node?.type === 'ANIME')
+          .map((edge) => edge.node),
+      ],
+      startDate: data.Media.startDate ?? null,
+      endDate: data.Media.endDate ?? null,
+      rankings: (data.Media.rankings ?? [])
+        .filter((r) => r && Number.isFinite(r.rank))
+        .slice(0, 8)
+        .map((r) => ({
+          rank: r.rank,
+          type: r.type ?? 'RATED',
+          context: String(r.context ?? '').slice(0, 80),
+          year: r.year ?? null,
+          season: r.season ?? null,
+          allTime: Boolean(r.allTime),
+        })),
+      scoreBuckets: data.Media.scoreDistribution ?? [],
+      characters: (data.Media.characters?.edges ?? [])
+        .map((edge) => {
+          const node = edge?.node
+          if (!node?.id) return null
+          return {
+            id: node.id,
+            name: node.name?.full || node.name?.native || `Character #${node.id}`,
+            nativeName: node.name?.native ?? null,
+            image: sanitizeCoverUrl(node.image?.large ?? null),
+            siteUrl: sanitizePublicHttpUrl(node.siteUrl, { httpsOnly: false, maxLen: 512 }),
+            role: edge.role ?? 'SUPPORTING',
+            voiceActors: (edge.voiceActors ?? [])
+              .filter((va) => va?.id)
+              .slice(0, 3)
+              .map((va) => ({
+                id: va.id,
+                name: va.name?.full || va.name?.native || `Staff #${va.id}`,
+                image: sanitizeCoverUrl(va.image?.large ?? null),
+                language: va.languageV2 ?? 'JAPANESE',
+                siteUrl: sanitizePublicHttpUrl(va.siteUrl, { httpsOnly: false, maxLen: 512 }),
+              })),
+          }
+        })
+        .filter(Boolean),
+      staff: (data.Media.staff?.edges ?? [])
+        .map((edge) => {
+          const node = edge?.node
+          if (!node?.id) return null
+          return {
+            id: node.id,
+            name: node.name?.full || node.name?.native || `Staff #${node.id}`,
+            nativeName: node.name?.native ?? null,
+            image: sanitizeCoverUrl(node.image?.large ?? null),
+            role: String(edge.role ?? '').slice(0, 120) || null,
+            occupations: (node.primaryOccupations ?? []).slice(0, 4),
+            siteUrl: sanitizePublicHttpUrl(node.siteUrl, { httpsOnly: false, maxLen: 512 }),
+          }
+        })
+        .filter(Boolean),
     }
   })
 }

@@ -26,6 +26,7 @@ import type {
   UploadSessionInfo,
   UploadSessionSpec,
   WatchResult,
+  AnimeNote,
 } from '../types'
 
 export interface BrowseFilters {
@@ -337,8 +338,38 @@ export const api = {
     )
   },
 
-  detail(id: number) {
-    return get<MediaDetail>(`/api/anime/${id}`)
+  detail(id: number, opts: { spoilers?: boolean; order?: 'release' | 'chronological' } = {}) {
+    const qs = new URLSearchParams()
+    if (opts.spoilers) qs.set('spoilers', '1')
+    if (opts.order) qs.set('order', opts.order)
+    const query = qs.toString()
+    return get<MediaDetail>(`/api/anime/${id}${query ? `?${query}` : ''}`, !query)
+  },
+
+  animeNotes(id: number) {
+    return get<AnimeNote>(`/api/anime/${id}/notes`, false)
+  },
+
+  saveAnimeNotes(id: number, note: string) {
+    return send<AnimeNote>(`/api/anime/${id}/notes`, 'PUT', { note })
+  },
+
+  reportAnimeIssue(
+    id: number,
+    payload: { field?: string; message: string; kind?: 'metadata' | 'episode-order' },
+  ) {
+    return send<{ report: { id: string; field: string; status: string }; pending: number }>(
+      `/api/anime/${id}/report`,
+      'POST',
+      payload,
+    )
+  },
+
+  reports() {
+    return get<{ reports: { id: string; mediaId: number; field: string; message: string; createdAt: number; status: string }[] }>(
+      '/api/reports',
+      false,
+    )
   },
 
   mediaMany(ids: number[]) {

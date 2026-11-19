@@ -8,6 +8,8 @@ import * as anilist from './anilist.mjs'
 import * as browse from './browse.mjs'
 import * as explore from './explore.mjs'
 import * as searchEngine from './search.mjs'
+import * as detailEngine from './detail.mjs'
+import * as kv from './kv.mjs'
 import * as store from './store.mjs'
 import * as settings from './settings.mjs'
 import * as resolver from './resolver.mjs'
@@ -46,7 +48,7 @@ const APP_CSP = [
   "form-action 'self'",
 ].join('; ')
 
-await Promise.all([store.init(), settings.init(), resolver.init(), imdb.init()])
+await Promise.all([store.init(), settings.init(), resolver.init(), imdb.init(), kv.init()])
 await library.init()
 await downloads.init()
 
@@ -545,7 +547,88 @@ app.get(
   '/api/anime/:id',
   wrap(async (req, res) => {
     const media = await anilist.getDetail(req.params.id)
-    res.json(media)
+    const reveal = String(req.query.spoilers ?? '') === '1'
+    const synopsis = detailEngine.redactSpoilers(media.description, { reveal })
+    res.json({
+      ...media,
+      // Pre-computed sections keep the client free of ranking/grouping logic.
+      episodes: detailEngine.buildEpisodeGuide(media, media.streamingEpisodes),
+      relations: detailEngine.groupRelations(
+        (media.rawRelations ?? media.relations ?? []),
+      ),
+      timeline: detailEngine.buildTimeline(media.timelineNodes ?? [], String(req.query.order ?? 'release')),
+      scores: detailEngine.scoreDistribution(media.scoreBuckets),
+      scoreMean: detailEngine.distributionMean(media.scoreBuckets),
+      scoreMode: detailEngine.distributionMode(media.scoreBuckets),
+      statusTimeline: detailEngine.buildStatusTimeline(media),
+      synopsis,
+      overview: detailEngine.spoilerFreeOverview(media.description),
+      hasSpoilers: detailEngine.hasSpoilers(media.description),
+      sections: detailEngine.DETAIL_SECTIONS,
+    })
+  }),
+)
+
+// Per-anime private notes (AV-099). Notes live in the settings store so they
+// survive restarts without a database, and are namespaced by media id.
+app.get(
+  '/api/anime/:id/notes',
+  wrap(async (req, res) => {
+    const id = Number(req.params.id)
+    if (!Number.isInteger(id) || id <= 0) throw Object.assign(new Error('Invalid anime id'), { status: 400 })
+    const notes = await kv.get(`notes:${id}`, null)
+    res.json({ mediaId: id, note: typeof notes?.note === 'string' ? notes.note : '', updatedAt: notes?.updatedAt ?? null })
+  }),
+)
+
+app.put(
+  '/api/anime/:id/notes',
+  wrap(async (req, res) => {
+    const id = Number(req.params.id)
+    if (!Number.isInteger(id) || id <= 0) throw Object.assign(new Error('Invalid anime id'), { status: 400 })
+    const note = String(req.body?.note ?? '').slice(0, 4000)
+    const payload = note.trim() ? { note, updatedAt: Date.now() } : null
+    if (payload) await kv.set(`notes:${id}`, payload)
+    else await kv.remove(`notes:${id}`)
+    res.json({ mediaId: id, note: payload?.note ?? '', updatedAt: payload?.updatedAt ?? null })
+  }),
+)
+
+// Metadata correction suggestions (AV-096), queued for review.
+app.post(
+  '/api/anime/:id/report',
+  wrap(async (req, res) => {
+    const id = Number(req.params.id)
+    if (!Number.isInteger(id) || id <= 0) throw Object.assign(new Error('Invalid anime id'), { status: 400 })
+    const field = String(req.body?.field ?? '').slice(0, 40)
+    const message = String(req.body?.message ?? '').trim().slice(0, 1000)
+    const kind = req.body?.kind === 'episode-order' ? 'episode-order' : 'metadata'
+    if (!message) throw Object.assign(new Error('Please describe the problem'), { status: 400 })
+    const allowed = new Set([
+      'title', 'episodes', 'season', 'year', 'format', 'status', 'score',
+      'synopsis', 'studio', 'relations', 'episode-order', 'other',
+    ])
+    const report = {
+      id: `r_${crypto.randomBytes(8).toString('hex')}`,
+      mediaId: id,
+      kind,
+      field: allowed.has(field) ? field : 'other',
+      message,
+      createdAt: Date.now(),
+      status: 'open',
+    }
+    const existing = (await kv.get('reports', [])) ?? []
+    const reports = [report, ...(Array.isArray(existing) ? existing : [])].slice(0, 500)
+    await kv.set('reports', reports)
+    res.status(201).json({ report, pending: reports.length })
+  }),
+)
+
+app.get(
+  '/api/reports',
+  wrap(async (_req, res) => {
+    const reports = (await kv.get('reports', [])) ?? []
+    res.json({ reports: Array.isArray(reports) ? reports : [] })
   }),
 )
 

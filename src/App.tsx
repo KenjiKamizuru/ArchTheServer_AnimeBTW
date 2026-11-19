@@ -6,6 +6,7 @@ import { DetailProvider } from './components/MediaModal'
 import { PlayerProvider } from './components/Player'
 import { ToastProvider } from './components/Toasts'
 import {
+  AnimeDetailPage,
   BookmarksPage,
   BrowsePage,
   DiscoverPage,
@@ -46,6 +47,7 @@ export default function App() {
             <Route element={<Layout />}>
               <Route index element={<LazyPage><HomePage /></LazyPage>} />
               <Route path="browse" element={<LazyPage><BrowsePage /></LazyPage>} />
+              <Route path="anime/:id" element={<LazyPage><AnimeDetailPage /></LazyPage>} />
               <Route path="discover" element={<LazyPage><DiscoverPage /></LazyPage>} />
               <Route path="schedule" element={<LazyPage><SchedulePage /></LazyPage>} />
               <Route path="studios" element={<LazyPage><StudiosPage /></LazyPage>} />
