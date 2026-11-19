@@ -7,7 +7,7 @@ test('buildVidsrcEmbedUrl builds movie embed URL', () => {
   assert.equal(res.provider, 'vidsrc')
   assert.equal(res.kind, 'movie')
   assert.equal(res.imdbId, 'tt1375666')
-  assert.equal(res.embedUrl, 'https://vidsrc.xyz/embed/movie?imdb=tt1375666')
+  assert.equal(res.embedUrl, 'https://vidsrc.sh/embed/movie?imdb=tt1375666')
 })
 
 test('buildVidsrcEmbedUrl builds TV series embed URL with season and episode', () => {
@@ -21,7 +21,7 @@ test('buildVidsrcEmbedUrl builds TV series embed URL with season and episode', (
   assert.equal(res.kind, 'series')
   assert.equal(res.season, 3)
   assert.equal(res.episode, 7)
-  assert.equal(res.embedUrl, 'https://vidsrc.xyz/embed/tv?imdb=tt0903747&season=3&episode=7')
+  assert.equal(res.embedUrl, 'https://vidsrc.sh/embed/tv?imdb=tt0903747&season=3&episode=7')
 })
 
 test('buildVidsrcEmbedUrl rejects invalid IMDb ID', () => {

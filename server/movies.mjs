@@ -135,7 +135,7 @@ export function buildVidsrcEmbedUrl({ imdbId, kind, season = 1, episode = 1 }) {
       kind: 'series',
       season: s,
       episode: e,
-      embedUrl: `https://vidsrc.xyz/embed/tv?imdb=${encodeURIComponent(cleanId)}&season=${s}&episode=${e}`,
+      embedUrl: `https://vidsrc.sh/embed/tv?imdb=${encodeURIComponent(cleanId)}&season=${s}&episode=${e}`,
     }
   }
   return {
@@ -144,6 +144,6 @@ export function buildVidsrcEmbedUrl({ imdbId, kind, season = 1, episode = 1 }) {
     kind: 'movie',
     season: null,
     episode: null,
-    embedUrl: `https://vidsrc.xyz/embed/movie?imdb=${encodeURIComponent(cleanId)}`,
+    embedUrl: `https://vidsrc.sh/embed/movie?imdb=${encodeURIComponent(cleanId)}`,
   }
 }
