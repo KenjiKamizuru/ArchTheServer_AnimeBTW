@@ -32,6 +32,7 @@ import {
   listPasskeys,
   removePasskey,
 } from './passkeyAuth.mjs'
+import { beginTwoFactorSetup, confirmTwoFactorSetup, disableTwoFactor, verifyTwoFactor } from './twoFactor.mjs'
 
 const EMAIL_VERIFY_TTL_MS = 24 * 60 * 60 * 1000
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000
@@ -908,6 +909,8 @@ app.post(
     const users = (await kv.get('users', [])) ?? []
     const user = users.find((u) => u?.username?.toLowerCase() === username)
     if (!user || !verifyPassword(password, user.passwordSalt, user.passwordHash)) throw invalid()
+    // Optional 2FA (AV-106): when enabled, a valid TOTP code is required too.
+    verifyTwoFactor(user, req.body?.code)
     const token = createSessionToken()
     await kv.set(`session:${hashToken(token)}`, sessionRecord(user.id))
     res.cookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', maxAge: SESSION_TTL_MS })
@@ -1036,6 +1039,62 @@ app.delete(
     }
     await removePasskey(record.userId, req.params.credentialId, { kv })
     res.json({ ok: true })
+  }),
+)
+
+// Optional two-factor authentication (AV-106): TOTP enrollment and gating.
+// The shared secret never leaves the server except once, at setup, as the
+// otpauth:// provisioning URI; it is never part of publicUser.
+const requireSessionUser = async (req) => {
+  const token = readCookie(req, SESSION_COOKIE)
+  const record = token ? await kv.get(`session:${hashToken(token)}`, null) : null
+  if (!record || !isSessionValid(record)) {
+    throw Object.assign(new Error('Sign in to manage two-factor authentication'), { status: 401 })
+  }
+  const users = (await kv.get('users', [])) ?? []
+  const user = users.find((u) => u?.id === record.userId)
+  if (!user) throw Object.assign(new Error('Account no longer exists'), { status: 401 })
+  return { user, users }
+}
+
+app.get(
+  '/api/auth/2fa',
+  wrap(async (req, res) => {
+    const { user } = await requireSessionUser(req)
+    res.json({ enabled: Boolean(user.twoFactorEnabled), confirmedAt: user.twoFactorConfirmedAt ?? null })
+  }),
+)
+
+app.post(
+  '/api/auth/2fa/setup',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user, users } = await requireSessionUser(req)
+    const setup = beginTwoFactorSetup(user)
+    await kv.set('users', users)
+    res.json(setup)
+  }),
+)
+
+app.post(
+  '/api/auth/2fa/enable',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user, users } = await requireSessionUser(req)
+    const result = confirmTwoFactorSetup(user, req.body?.code)
+    await kv.set('users', users)
+    res.json(result)
+  }),
+)
+
+app.post(
+  '/api/auth/2fa/disable',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user, users } = await requireSessionUser(req)
+    const result = disableTwoFactor(user, req.body?.code)
+    await kv.set('users', users)
+    res.json(result)
   }),
 )
 
