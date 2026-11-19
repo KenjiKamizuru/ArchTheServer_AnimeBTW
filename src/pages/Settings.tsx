@@ -102,6 +102,7 @@ function AccountsCard() {
   const [prefLocale, setPrefLocale] = useState('')
   const [prefSubtitle, setPrefSubtitle] = useState('')
   const [prefAudio, setPrefAudio] = useState('')
+  const [prefQuality, setPrefQuality] = useState('')
   const [prefsBusy, setPrefsBusy] = useState(false)
   const [prefsError, setPrefsError] = useState<string | null>(null)
 
@@ -153,12 +154,14 @@ function AccountsCard() {
         setPrefLocale(res.locale ?? '')
         setPrefSubtitle(res.defaultSubtitle ?? '')
         setPrefAudio(res.defaultAudio ?? '')
+        setPrefQuality(res.defaultQuality ?? '')
       })
       .catch(() => {
         setPrefLanguage('')
         setPrefLocale('')
         setPrefSubtitle('')
         setPrefAudio('')
+        setPrefQuality('')
       })
   }, [user])
 
@@ -384,11 +387,13 @@ function AccountsCard() {
         locale: prefLocale,
         defaultSubtitle: prefSubtitle,
         defaultAudio: prefAudio,
+        defaultQuality: prefQuality,
       })
       setPrefLanguage(res.preferredLanguage ?? '')
       setPrefLocale(res.locale ?? '')
       setPrefSubtitle(res.defaultSubtitle ?? '')
       setPrefAudio(res.defaultAudio ?? '')
+      setPrefQuality(res.defaultQuality ?? '')
       toast('Preferences saved')
     } catch (err) {
       setPrefsError(err instanceof Error ? err.message : 'Could not save preferences')
@@ -673,6 +678,20 @@ function AccountsCard() {
                   placeholder="Audio language (e.g. ja)"
                   className="w-48 rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
                 />
+                <select
+                  value={prefQuality}
+                  onChange={(event) => setPrefQuality(event.target.value)}
+                  className="rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white ring-1 ring-white/10 outline-none focus:ring-accent/60"
+                >
+                  <option value="">Quality: unset</option>
+                  <option value="auto">Quality: auto</option>
+                  <option value="2160p">Quality: 2160p</option>
+                  <option value="1080p">Quality: 1080p</option>
+                  <option value="720p">Quality: 720p</option>
+                  <option value="576p">Quality: 576p</option>
+                  <option value="480p">Quality: 480p</option>
+                  <option value="360p">Quality: 360p</option>
+                </select>
                 <button
                   type="button"
                   onClick={() => void savePreferences()}

@@ -6,7 +6,9 @@ import {
   normalizeLocale,
   normalizeDefaultSubtitle,
   normalizeDefaultAudio,
+  normalizeDefaultQuality,
   normalizePreferencesUpdate,
+  PLAYBACK_QUALITIES,
 } from '../server/userPreferences.mjs'
 
 test('language tags: pattern validation, normalization, empty clears', () => {
@@ -66,4 +68,22 @@ test('playback defaults: subtitle sentinel, language tags, strict updates', () =
   const bad = normalizePreferencesUpdate({ defaultSubtitle: 'none at all' })
   assert.equal(bad.ok, false)
   assert.deepEqual(normalizePreferencesUpdate({ other: 1 }), { ok: true, value: {} }, 'unknown keys are ignored')
+})
+
+test('playback quality: closed-set allowlist', () => {
+  for (const quality of PLAYBACK_QUALITIES) {
+    assert.deepEqual(normalizeDefaultQuality(quality), { ok: true, value: quality })
+  }
+  assert.deepEqual(normalizeDefaultQuality(' 1080P '), { ok: true, value: '1080p' }, 'case-insensitive')
+  assert.deepEqual(normalizeDefaultQuality(''), { ok: true, value: null })
+  assert.deepEqual(normalizeDefaultQuality(null), { ok: true, value: null })
+  for (const bad of ['1440p', 'best', '<b>1080p</b>', '1080', 'ultra']) {
+    assert.equal(normalizeDefaultQuality(bad).ok, false, `should reject ${JSON.stringify(bad)}`)
+  }
+  assert.deepEqual(normalizePreferencesUpdate({ defaultQuality: '720p' }), {
+    ok: true,
+    value: { defaultQuality: '720p' },
+  })
+  const badUpdate = normalizePreferencesUpdate({ defaultQuality: 'best' })
+  assert.equal(badUpdate.ok, false)
 })
