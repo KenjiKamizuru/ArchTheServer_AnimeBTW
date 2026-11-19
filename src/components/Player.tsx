@@ -154,6 +154,8 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
   const [mseFallback, setMseFallback] = useState(false)
   const [localRemuxFallback, setLocalRemuxFallback] = useState(false)
   const [ended, setEnded] = useState(false)
+  const [autoCountdown, setAutoCountdown] = useState<number | null>(null)
+  const [autoCancelled, setAutoCancelled] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
   const autoPlayedRef = useRef(false)
   const settings = useSettings()
@@ -173,6 +175,7 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
     setMseFallback(false)
     setLocalRemuxFallback(false)
     setEnded(false)
+    setAutoCancelled(false)
     autoPlayedRef.current = false
   }, [source])
 
@@ -249,7 +252,10 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
-    const onEnded = () => setEnded(true)
+    const onEnded = () => {
+      setEnded(true)
+      setAutoCancelled(false)
+    }
     const onPlay = () => setEnded(false)
     video.addEventListener('ended', onEnded)
     video.addEventListener('play', onPlay)
@@ -258,6 +264,31 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
       video.removeEventListener('play', onPlay)
     }
   }, [videoSrc, useMse])
+
+  // Auto-advance (AV-160): when the toggle is on, the next episode starts
+  // after a short countdown the viewer can cancel — or take immediately.
+  useEffect(() => {
+    if (!ended || !source.onNext || !settings.autoplayNextEpisode || autoCancelled) {
+      setAutoCountdown(null)
+      return
+    }
+    let remaining = 5
+    setAutoCountdown(remaining)
+    const timer = setInterval(() => {
+      remaining -= 1
+      if (remaining <= 0) {
+        clearInterval(timer)
+        setAutoCountdown(null)
+        source.onNext?.()
+      } else {
+        setAutoCountdown(remaining)
+      }
+    }, 1000)
+    return () => {
+      clearInterval(timer)
+      setAutoCountdown(null)
+    }
+  }, [ended, source, settings.autoplayNextEpisode, autoCancelled])
 
   useEffect(() => {
     autoPlayedRef.current = false
@@ -601,29 +632,55 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
             </div>
           ) : null}
 
-          {/* Completion (AV-159): the next-episode action after playback
-              ends. The native controls stay usable underneath. */}
+          {/* Completion (AV-159/160): the next-episode action after
+              playback ends — auto-advance countdown when enabled, manual
+              otherwise. The native controls stay usable underneath. */}
           {ended && !error && source.onNext ? (
             <div className="pointer-events-none absolute inset-0 flex items-end justify-center rounded-xl bg-gradient-to-t from-black/80 to-transparent pb-14">
               <div className="pointer-events-auto flex items-center gap-3 rounded-full bg-black/80 px-5 py-3 ring-1 ring-white/10">
-                <span className="text-sm text-white/80">Episode finished</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEnded(false)
-                    source.onNext?.()
-                  }}
-                  className="rounded-full bg-accent px-4 py-1.5 text-xs font-semibold text-black transition hover:bg-accent/85"
-                >
-                  Play next episode
-                </button>
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="rounded-full bg-white/10 px-4 py-1.5 text-xs font-medium text-white/80 transition hover:bg-white/20"
-                >
-                  Close
-                </button>
+                {autoCountdown !== null ? (
+                  <>
+                    <span className="text-sm text-white/80">Playing next episode in {autoCountdown}s</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAutoCancelled(true)
+                        source.onNext?.()
+                      }}
+                      className="rounded-full bg-accent px-4 py-1.5 text-xs font-semibold text-black transition hover:bg-accent/85"
+                    >
+                      Play now
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAutoCancelled(true)}
+                      className="rounded-full bg-white/10 px-4 py-1.5 text-xs font-medium text-white/80 transition hover:bg-white/20"
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-sm text-white/80">Episode finished</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEnded(false)
+                        source.onNext?.()
+                      }}
+                      className="rounded-full bg-accent px-4 py-1.5 text-xs font-semibold text-black transition hover:bg-accent/85"
+                    >
+                      Play next episode
+                    </button>
+                    <button
+                      type="button"
+                      onClick={onClose}
+                      className="rounded-full bg-white/10 px-4 py-1.5 text-xs font-medium text-white/80 transition hover:bg-white/20"
+                    >
+                      Close
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           ) : null}

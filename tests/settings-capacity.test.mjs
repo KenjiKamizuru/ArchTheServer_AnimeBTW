@@ -78,3 +78,14 @@ test('the playback save interval is configurable and survives restart (AV-153)',
   assert.equal(run.status, 0, run.stderr)
   assert.equal(JSON.parse(run.stdout), 60, 'the interval survives a restart')
 })
+test('the auto-next-episode toggle is configurable and survives restart (AV-160)', async () => {
+  assert.equal(settings.get().autoplayNextEpisode, true, 'defaults on — industry norm, cancellable countdown')
+  await settings.save({ autoplayNextEpisode: false })
+  assert.equal(settings.get().autoplayNextEpisode, false)
+  await settings.save({ autoplayNextEpisode: true })
+  assert.equal(settings.get().autoplayNextEpisode, true)
+  const script = `import * as s from ${JSON.stringify(new URL('../server/settings.mjs', import.meta.url).href)}; await s.init(); console.log(JSON.stringify(s.get().autoplayNextEpisode))`
+  const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, ANIMEVAULT_DATA: dir }, encoding: 'utf8' })
+  assert.equal(run.status, 0, run.stderr)
+  assert.equal(JSON.parse(run.stdout), true, 'the toggle survives a restart')
+})

@@ -445,6 +445,7 @@ export interface AppSettings {
   episodeCompletionThresholdPercent: number
   progressSaveIntervalSeconds: number
   preferLocalPlayback: boolean
+  autoplayNextEpisode: boolean
   allowedExternalHosts: string[]
   envExternalHostsConfigured: boolean
   theme: 'dark' | 'light'

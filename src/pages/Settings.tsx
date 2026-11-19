@@ -44,6 +44,7 @@ function editable(s: AppSettings) {
     episodeCompletionThresholdPercent: s.episodeCompletionThresholdPercent,
     progressSaveIntervalSeconds: s.progressSaveIntervalSeconds,
     preferLocalPlayback: s.preferLocalPlayback,
+    autoplayNextEpisode: s.autoplayNextEpisode,
     allowedHostsText: (s.allowedExternalHosts ?? []).join('\n'),
     theme: s.theme,
     systemTheme: s.systemTheme,
@@ -1592,6 +1593,7 @@ export default function SettingsPage() {
         episodeCompletionThresholdPercent: draft.episodeCompletionThresholdPercent,
         progressSaveIntervalSeconds: draft.progressSaveIntervalSeconds,
         preferLocalPlayback: draft.preferLocalPlayback,
+        autoplayNextEpisode: draft.autoplayNextEpisode,
         allowedExternalHosts,
         theme: draft.theme,
         systemTheme: draft.systemTheme,
@@ -1918,6 +1920,18 @@ export default function SettingsPage() {
             />
             <span className="text-sm text-white/70">
               Prefer local library files over remote streaming when an episode is downloaded
+            </span>
+          </label>
+
+          <label className="flex items-center gap-2 sm:col-span-2">
+            <input
+              type="checkbox"
+              checked={draft.autoplayNextEpisode}
+              onChange={(event) => set('autoplayNextEpisode', event.target.checked)}
+              className="h-4 w-4 accent-[var(--color-accent)]"
+            />
+            <span className="text-sm text-white/70">
+              Automatically play the next episode when one finishes (a countdown lets you cancel)
             </span>
           </label>
 

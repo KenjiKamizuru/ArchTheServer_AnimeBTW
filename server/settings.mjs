@@ -34,6 +34,7 @@ const DEFAULTS = {
   libraryDir: 'library',
   maxConcurrentDownloads: defaultConcurrency(),
   preferLocalPlayback: true,
+  autoplayNextEpisode: true,
   allowedExternalHosts: [],
   theme: 'dark',
   systemTheme: false,
@@ -78,6 +79,11 @@ export async function init() {
         ),
         preferLocalPlayback:
           parsed.preferLocalPlayback === undefined ? true : Boolean(parsed.preferLocalPlayback),
+        // AV-160: auto-advance to the next episode when playback finishes
+        // (default on — industry norm; the countdown panel can always
+        // cancel, and the toggle lives in Settings).
+        autoplayNextEpisode:
+          parsed.autoplayNextEpisode === undefined ? true : Boolean(parsed.autoplayNextEpisode),
         allowedExternalHosts: Array.isArray(parsed.allowedExternalHosts)
           ? safeNormalizeHosts(parsed.allowedExternalHosts)
           : [],
@@ -137,6 +143,7 @@ export function get() {
     libraryDirLocked: envOverride,
     maxConcurrentDownloads: state.maxConcurrentDownloads,
     preferLocalPlayback: state.preferLocalPlayback,
+    autoplayNextEpisode: state.autoplayNextEpisode,
     allowedExternalHosts: [...state.allowedExternalHosts],
     envExternalHostsConfigured: Boolean(String(process.env.ALLOWED_SOURCE_HOSTS ?? '').trim()),
     theme: state.theme,
@@ -186,6 +193,10 @@ export async function save(patch = {}) {
       300,
       next.progressSaveIntervalSeconds,
     )
+  }
+
+  if (patch.autoplayNextEpisode !== undefined) {
+    next.autoplayNextEpisode = Boolean(patch.autoplayNextEpisode)
   }
 
   if (patch.registrationOpen !== undefined) {

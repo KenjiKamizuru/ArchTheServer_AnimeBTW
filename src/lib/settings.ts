@@ -12,6 +12,7 @@ let state: AppSettings = {
   episodeCompletionThresholdPercent: 90,
   progressSaveIntervalSeconds: 15,
   preferLocalPlayback: true,
+  autoplayNextEpisode: true,
   allowedExternalHosts: [],
   envExternalHostsConfigured: false,
   theme: 'dark',
