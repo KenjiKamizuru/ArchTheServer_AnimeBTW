@@ -7,6 +7,7 @@
 
 import { readResponseTextLimited, sanitizeCoverUrl, sanitizePublicHttpUrl } from './security.mjs'
 import { parseBrowseFilters } from './browse.mjs'
+import { createAnimeRecord } from './catalog.mjs'
 
 const ENDPOINT = 'https://graphql.anilist.co'
 const MAX_GQL_BYTES = 6 * 1024 * 1024
@@ -179,7 +180,7 @@ function normalize(media) {
   const rawColor = typeof media.coverImage?.color === 'string' ? media.coverImage.color.trim() : ''
   const color = /^#[0-9a-fA-F]{3,8}$/.test(rawColor) ? rawColor : null
 
-  return {
+  return createAnimeRecord({
     id: media.id,
     title,
     romaji: media.title?.romaji ?? null,
@@ -219,7 +220,7 @@ function normalize(media) {
     anidb,
     anidbSearch: !directAnidb,
     siteUrl: sanitizePublicHttpUrl(media.siteUrl, { httpsOnly: false, maxLen: 512 }),
-  }
+  })
 }
 
 export function currentSeason(date = new Date()) {

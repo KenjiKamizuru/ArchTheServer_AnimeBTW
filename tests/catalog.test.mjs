@@ -1,0 +1,46 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { createAnimeRecord } from '../server/catalog.mjs'
+const basic = () => createAnimeRecord({ id: 1 })
+test('id retained', () => assert.equal(basic().id, 1))
+test('fallback title', () => assert.equal(basic().title, 'Anime #1'))
+test('provided title', () => assert.equal(createAnimeRecord({ id: 2, title: 'Title' }).title, 'Title'))
+test('null input rejected', () => assert.throws(() => createAnimeRecord(null), TypeError))
+test('zero id rejected', () => assert.throws(() => createAnimeRecord({ id: 0 }), TypeError))
+test('negative id rejected', () => assert.throws(() => createAnimeRecord({ id: -1 }), TypeError))
+test('fractional id rejected', () => assert.throws(() => createAnimeRecord({ id: 1.2 }), TypeError))
+test('string id rejected', () => assert.throws(() => createAnimeRecord({ id: '1' }), TypeError))
+test('unsafe id rejected', () => assert.throws(() => createAnimeRecord({ id: Number.MAX_SAFE_INTEGER + 1 }), TypeError))
+test('unknown status default', () => assert.equal(basic().status, 'UNKNOWN'))
+test('title variants default null', () => assert.deepEqual([basic().romaji, basic().english, basic().native], [null, null, null]))
+test('numeric zero is preserved', () => assert.equal(createAnimeRecord({ id: 1, score: 0 }).score, 0))
+test('episode count unknown distinct from zero', () => { assert.equal(basic().episodes, null); assert.equal(createAnimeRecord({ id: 1, episodes: 0 }).episodes, 0) })
+test('default description', () => assert.equal(basic().description, ''))
+test('default duration unknown', () => assert.equal(basic().duration, null))
+test('default aired count', () => assert.equal(basic().airedEpisodes, 0))
+test('default genre array', () => assert.deepEqual(basic().genres, []))
+test('default tags array', () => assert.deepEqual(basic().tags, []))
+test('default studios array', () => assert.deepEqual(basic().studios, []))
+test('default links array', () => assert.deepEqual(basic().links, []))
+test('default streaming array', () => assert.deepEqual(basic().streams, []))
+test('default next episode', () => assert.equal(basic().nextEpisode, null))
+test('default provider search flag', () => assert.equal(basic().anidbSearch, false))
+test('copies genres and studios', () => { const input = { id: 1, genres: ['Action'], studios: ['Studio'] }; const record = createAnimeRecord(input); input.genres.push('Drama'); input.studios.push('Other'); assert.deepEqual(record.genres, ['Action']); assert.deepEqual(record.studios, ['Studio']) })
+test('copies link objects', () => { const input = { id: 1, links: [{ site: 'Example', url: 'https://example.com' }] }; const record = createAnimeRecord(input); input.links[0].site = 'changed'; assert.equal(record.links[0].site, 'Example') })
+test('copies tag objects', () => { const input = { id: 1, tags: [{ name: 'Tag', rank: 80, isMediaSpoiler: false }] }; const record = createAnimeRecord(input); input.tags[0].name = 'changed'; assert.equal(record.tags[0].name, 'Tag') })
+test('copies next episode', () => { const input = { id: 1, nextEpisode: { episode: 2, airingAt: 123 } }; const record = createAnimeRecord(input); input.nextEpisode.episode = 3; assert.equal(record.nextEpisode.episode, 2) })
+test('does not leak provider fields', () => assert.equal(createAnimeRecord({ id: 1, coverImage: { large: 'x' }, averageScore: 42 }).averageScore, undefined))
+test('preserves independent source fields', () => { const r = createAnimeRecord({ id: 1, title: 'From another adapter', duration: 24, score: 88, countryOfOrigin: 'JP' }); assert.equal(r.title, 'From another adapter'); assert.equal(r.duration, 24); assert.equal(r.score, 88); assert.equal(r.countryOfOrigin, 'JP') })
+test('AniList adapter emits the canonical shape through the season API', async () => {
+  const original = globalThis.fetch
+  globalThis.fetch = async () => new Response(JSON.stringify({ data: { Page: { pageInfo: { total: 1, hasNextPage: false }, media: [{ id: 42, title: { english: 'Example', romaji: 'Rei', native: '例' }, coverImage: {}, episodes: 12, duration: 24, status: 'FINISHED', averageScore: 80, genres: ['Drama'], studios: { nodes: [{ name: 'Studio' }] }, externalLinks: [] }] } } }), { status: 200, headers: { 'content-type': 'application/json' } })
+  try {
+    const { getSeason } = await import('../server/anilist.mjs')
+    const result = await getSeason({ season: 'WINTER', year: 2097, sort: 'popular', page: 1, perPage: 30 })
+    const record = result.media[0]
+    assert.equal(record.id, 42); assert.equal(record.title, 'Example'); assert.equal(record.romaji, 'Rei')
+    assert.equal(record.score, 80); assert.equal(record.duration, 24); assert.deepEqual(record.studios, ['Studio'])
+    assert.equal(record.averageScore, undefined); assert.equal(record.coverImage, undefined)
+    assert.deepEqual(Object.keys(record), Object.keys(createAnimeRecord({ id: 42 })))
+  } finally { globalThis.fetch = original }
+})
