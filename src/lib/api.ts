@@ -124,6 +124,74 @@ export interface FranchiseResponse {
   considered: number
 }
 
+export interface HighlightSegment {
+  text: string
+  match: boolean
+}
+
+export interface SearchSuggestion {
+  id: number
+  title: string
+  sub: string
+  cover: string | null
+  reason: string
+  score: number
+  hintText: HighlightSegment[]
+}
+
+export interface SuggestResponse {
+  query: string
+  suggestions: SearchSuggestion[]
+  correction: { suggestion: string; original: string; reason: string; score: number } | null
+}
+
+export interface SearchFilterState {
+  studio: string[]
+  genre: string[]
+  tag: string[]
+  year: { min: number; max: number } | null
+  status: string[]
+  format: string[]
+  score: { min?: number; max?: number } | null
+  episodes: { min?: number; max?: number } | null
+}
+
+export interface AdvancedSearchResponse {
+  query: string
+  text: string
+  filters: SearchFilterState
+  media: Media[]
+  hasNextPage: boolean
+  removed: number
+  correction: { suggestion: string; original: string; reason: string; score: number } | null
+  page: number
+  perPage: number
+  cappedAt: number
+  groups: { format: string; items: Media[] }[]
+  alternatives: { label: string; query: string; kind: string }[]
+}
+
+export interface SearchLibraryItem {
+  id: string
+  fileName: string
+  folder: string | null
+  animeTitle: string | null
+  seriesTitle: string | null
+  season: number | null
+  episode: number | null
+  quality: string | null
+  size: number
+  modifiedAt: number
+  highlight: HighlightSegment[]
+}
+
+export interface SearchLibraryResponse {
+  query: string
+  count: number
+  items: SearchLibraryItem[]
+  totalLibrary: number
+}
+
 export interface SeasonResponse {
   season: string
   year: number
@@ -246,6 +314,27 @@ export const api = {
 
   search(q: string, page = 1) {
     return get<{ media: Media[]; hasNextPage: boolean }>(`/api/search?q=${encodeURIComponent(q)}&page=${page}`)
+  },
+
+  suggest(q: string) {
+    return get<SuggestResponse>(`/api/search/suggest?q=${encodeURIComponent(q)}`, false)
+  },
+
+  searchAdvanced(q: string, params: { page?: number; perPage?: number } = {}) {
+    const qs = new URLSearchParams({ q })
+    if (params.page && params.page > 1) qs.set('page', String(params.page))
+    if (params.perPage) qs.set('perPage', String(params.perPage))
+    return get<AdvancedSearchResponse>(`/api/search/advanced?${qs.toString()}`, false)
+  },
+
+  searchLibrary(q: string) {
+    return get<SearchLibraryResponse>(`/api/search/library?q=${encodeURIComponent(q)}`, false)
+  },
+
+  searchOptions() {
+    return get<{ fields: string[]; resultCap: { max: number; defaultPerPage: number; min: number }; statuses: string[]; formats: string[] }>(
+      '/api/search/options',
+    )
   },
 
   detail(id: number) {

@@ -6,6 +6,7 @@
 // surfaces as metadata references.
 
 import { readResponseTextLimited, sanitizeCoverUrl, sanitizePublicHttpUrl } from './security.mjs'
+import { parseBrowseFilters } from './browse.mjs'
 
 const ENDPOINT = 'https://graphql.anilist.co'
 const MAX_GQL_BYTES = 6 * 1024 * 1024
@@ -28,7 +29,11 @@ const MEDIA_FIELDS = `
   seasonYear
   averageScore
   popularity
+  favourites
   genres
+  tags { name rank isMediaSpoiler }
+  source
+  countryOfOrigin
   siteUrl
   nextAiringEpisode { episode airingAt }
   studios(isMain: true) { nodes { name } }
@@ -193,7 +198,18 @@ function normalize(media) {
     seasonYear: media.seasonYear ?? null,
     score: media.averageScore ?? null,
     popularity: media.popularity ?? 0,
+    favourites: media.favourites ?? null,
     genres: media.genres ?? [],
+    // Rank-sorted, spoiler-flagged tags drive tag search and discovery filters.
+    tags: (media.tags ?? [])
+      .filter((tag) => tag && typeof tag.name === 'string')
+      .map((tag) => ({
+        name: tag.name.slice(0, 60),
+        rank: Number.isFinite(tag.rank) ? tag.rank : 0,
+        isMediaSpoiler: Boolean(tag.isMediaSpoiler),
+      })),
+    source: media.source ?? null,
+    countryOfOrigin: media.countryOfOrigin ?? null,
     nextEpisode: media.nextAiringEpisode
       ? { episode: media.nextAiringEpisode.episode, airingAt: media.nextAiringEpisode.airingAt }
       : null,
@@ -553,6 +569,156 @@ export async function searchAnime(term, page = 1) {
       hasNextPage: Boolean(data.Page.pageInfo?.hasNextPage),
     }
   })
+}
+
+/**
+ * Instant search suggestions (AV-051/053/056). Returns a small, cheap page of
+ * candidate titles plus ranked + highlighted entries so the client can show a
+ * dropdown without a second round trip.
+ */
+export async function suggest(term, searchModule) {
+  const q = String(term ?? '').trim().slice(0, 80)
+  if (q.length < 2) return { query: q, suggestions: [], correction: null }
+  const data = await searchAnime(q, 1)
+  const candidates = data.media.map((item) => ({
+    id: item.id,
+    label: item.title,
+    sub: [item.format, item.seasonYear].filter(Boolean).join(' · '),
+    cover: item.cover,
+    aliases: [item.romaji, item.english].filter((t) => typeof t === 'string'),
+  }))
+  const ranked = searchModule.rankTitles(candidates, q, { limit: 8 })
+  // Offer a correction both when nothing matched *and* when the best hit was
+  // only approximate — a typo should always be visibly fixable.
+  const approximate = ranked.length === 0 || !/exact title match|starts with|word match|contains your search/.test(ranked[0].reason)
+  return {
+    query: q,
+    suggestions: ranked.map((entry) => ({
+      id: entry.id,
+      title: entry.label,
+      sub: entry.sub,
+      cover: entry.cover,
+      reason: entry.reason,
+      score: Number(entry.score.toFixed(2)),
+      hintText: searchModule.highlightSegments(entry.label, q),
+    })),
+    correction: approximate ? searchModule.suggestCorrection(candidates, q) : null,
+  }
+}
+
+/**
+ * Full search with structured `field:value` filters applied on top of AniList's
+ * title search. Filters are matched locally so a partially correct query still
+ * returns something rather than an empty page.
+ */
+export async function searchAdvanced(rawQuery, page, searchModule) {
+  const parsed = searchModule.parseSearchQuery(rawQuery)
+  const { text, filters } = parsed
+  const structured = searchModule.hasStructuredFilters(filters)
+  if (!text && !structured) {
+    return { query: rawQuery, text, filters, media: [], hasNextPage: false, removed: 0, correction: null }
+  }
+
+  // A pure filter query (no free text) still needs a candidate set: borrow the
+  // popular catalog page so filters have something to act on.
+  const base = text
+    ? await searchAnime(text, page)
+    : await browse(
+        parseBrowseFilters({
+          sort: 'popular',
+          page: String(page),
+          genres: filters.genre.join(','),
+        }),
+        await import('./browse.mjs'),
+      )
+
+  const kept = []
+  let removed = 0
+  for (const media of base.media) {
+    const reasons = []
+    let ok = true
+
+    for (const studio of filters.studio) {
+      const hit = (media.studios ?? []).some((name) => String(name).toLowerCase().includes(studio))
+      if (!hit) ok = false
+      else reasons.push(`studio ${studio}`)
+    }
+    if (ok) {
+      for (const genre of filters.genre) {
+        const hit = (media.genres ?? []).some((g) => String(g).toLowerCase() === genre)
+        if (!hit) ok = false
+        else reasons.push(`genre ${genre}`)
+      }
+    }
+    if (ok) {
+      for (const tag of filters.tag) {
+        const hit = (media.tags ?? []).some(
+          (t) => !t.isMediaSpoiler && String(t.name).toLowerCase() === tag,
+        )
+        if (!hit) ok = false
+        else reasons.push(`tag ${tag}`)
+      }
+    }
+    if (ok && filters.year) {
+      const year = media.seasonYear
+      ok = Number.isFinite(year) && year >= filters.year.min && year <= filters.year.max
+      if (ok) reasons.push(`year ${year}`)
+    }
+    if (ok && filters.status.length) {
+      const status = String(media.status ?? '').toLowerCase()
+      ok = filters.status.includes(status)
+      if (ok) reasons.push(status)
+    }
+    if (ok && filters.format.length) {
+      const format = String(media.format ?? '').toLowerCase()
+      ok = filters.format.includes(format)
+      if (ok) reasons.push(format)
+    }
+    if (ok && filters.score) {
+      const score = media.score
+      ok =
+        Number.isFinite(score) &&
+        (filters.score.min === undefined || score >= filters.score.min) &&
+        (filters.score.max === undefined || score <= filters.score.max)
+      if (ok) reasons.push(`score ${score}`)
+    }
+    if (ok && filters.episodes) {
+      const eps = media.episodes
+      ok =
+        Number.isFinite(eps) &&
+        (filters.episodes.min === undefined || eps >= filters.episodes.min) &&
+        (filters.episodes.max === undefined || eps <= filters.episodes.max)
+      if (ok) reasons.push(`episodes ${eps}`)
+    }
+
+    if (ok) {
+      kept.push({ ...media, matchReasons: reasons })
+    } else {
+      removed += 1
+    }
+  }
+
+  const correction =
+    text
+      ? searchModule.suggestCorrection(
+          base.media.map((m) => ({
+            id: m.id,
+            label: m.title,
+            aliases: [m.romaji, m.english].filter((t) => typeof t === 'string'),
+          })),
+          text,
+        )
+      : null
+
+  return {
+    query: rawQuery,
+    text,
+    filters,
+    media: kept,
+    hasNextPage: Boolean(base.hasNextPage),
+    removed,
+    correction,
+  }
 }
 
 export async function getDetail(id) {

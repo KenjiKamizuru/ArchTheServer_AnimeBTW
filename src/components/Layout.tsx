@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { prefetchProps } from '../lib/routePrefetch'
+import { api, type SearchSuggestion } from '../lib/api'
 import {
   Bookmark,
   Building2,
@@ -68,6 +69,9 @@ export default function Layout() {
   const navigate = useNavigate()
   const location = useLocation()
   const [term, setTerm] = useState('')
+  const [hints, setHints] = useState<SearchSuggestion[]>([])
+  const [hintIndex, setHintIndex] = useState(-1)
+  const [hintsOpen, setHintsOpen] = useState(false)
   const artwork = useArtwork()
   const appArt = artworkForTarget(artwork, 'app', 'global')
   const { counts } = useDownloads()
@@ -97,6 +101,53 @@ export default function Layout() {
       setTerm(new URLSearchParams(location.search).get('q') ?? '')
     }
   }, [location.pathname, location.search])
+
+  // Header type-ahead shares the server suggestion endpoint. Debounced and
+  // abandoned on blur so it never fights the dedicated search page.
+  useEffect(() => {
+    const draft = term.trim()
+    if (!hintsOpen || draft.length < 2 || location.pathname === '/search') {
+      setHints([])
+      return
+    }
+    const controller = new AbortController()
+    const handle = setTimeout(() => {
+      api
+        .suggest(draft)
+        .then((res) => {
+          if (!controller.signal.aborted) setHints(res.suggestions ?? [])
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) setHints([])
+        })
+    }, 250)
+    return () => {
+      controller.abort()
+      clearTimeout(handle)
+    }
+  }, [term, hintsOpen, location.pathname])
+
+  function onQuickKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (!hints.length) return
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setHintIndex((i) => (i + 1) % hints.length)
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setHintIndex((i) => (i <= 0 ? hints.length - 1 : i - 1))
+    } else if (event.key === 'Escape') {
+      setHintsOpen(false)
+      setHintIndex(-1)
+    } else if (event.key === 'Enter' && hintIndex >= 0) {
+      const pick = hints[hintIndex]
+      if (pick) {
+        event.preventDefault()
+        setHintsOpen(false)
+        setHintIndex(-1)
+        navigate(`/anime/${pick.id}`)
+      }
+    }
+  }
 
   function onSubmit(event: FormEvent) {
     event.preventDefault()
@@ -209,11 +260,50 @@ export default function Layout() {
                 />
                 <input
                   value={term}
-                  onChange={(event) => setTerm(event.target.value)}
+                  onChange={(event) => {
+                    setTerm(event.target.value)
+                    setHintsOpen(true)
+                    setHintIndex(-1)
+                  }}
+                  onFocus={() => setHintsOpen(true)}
+                  onBlur={() => setTimeout(() => setHintsOpen(false), 140)}
+                  onKeyDown={onQuickKeyDown}
                   placeholder="Search anime…"
                   aria-label="Search anime"
+                  role="combobox"
+                  aria-expanded={hintsOpen && hints.length > 0}
+                  aria-controls="header-search-hints"
+                  aria-autocomplete="list"
                   className="w-full rounded-lg bg-ink-850 py-2 pr-3 pl-9 text-sm text-white placeholder:text-white/30 ring-1 ring-white/10 outline-none transition focus:bg-ink-800 focus:ring-accent/60"
                 />
+                {hintsOpen && hints.length > 0 ? (
+                  <ul
+                    id="header-search-hints"
+                    role="listbox"
+                    className="absolute inset-x-0 top-full z-40 mt-1.5 overflow-hidden rounded-lg bg-ink-850 shadow-xl ring-1 ring-white/10"
+                  >
+                    {hints.map((hint, index) => (
+                      <li key={hint.id} role="option" aria-selected={index === hintIndex}>
+                        <button
+                          type="button"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => {
+                            setHintsOpen(false)
+                            navigate(`/anime/${hint.id}`)
+                          }}
+                          className={`block w-full px-3 py-2 text-left transition ${
+                            index === hintIndex ? 'bg-accent/15' : 'hover:bg-white/5'
+                          }`}
+                        >
+                          <span className="block truncate text-xs text-white">{hint.title}</span>
+                          <span className="block truncate text-[10px] text-white/30">
+                            {hint.sub} · {hint.reason}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
               </div>
             </form>
 

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import * as anilist from './anilist.mjs'
 import * as browse from './browse.mjs'
 import * as explore from './explore.mjs'
+import * as searchEngine from './search.mjs'
 import * as store from './store.mjs'
 import * as settings from './settings.mjs'
 import * as resolver from './resolver.mjs'
@@ -427,6 +428,84 @@ app.get(
     const limit = clamp(Number(req.query.limit) || 24, 1, 50)
     const media = await anilist.recentlyUpdated(limit)
     res.json({ media, count: media.length })
+  }),
+)
+
+// ── Search intelligence ─────────────────────────────────────────────────────
+
+// Instant suggestions for the type-ahead dropdown (AV-051).
+app.get(
+  '/api/search/suggest',
+  limitOutbound,
+  wrap(async (req, res) => {
+    const q = String(req.query.q ?? '')
+    const data = await anilist.suggest(q, searchEngine)
+    // Typing is bursty: let the browser reuse a suggestion list briefly.
+    res.setHeader('Cache-Control', 'private, max-age=20')
+    res.json(data)
+  }),
+)
+
+// Structured search with field filters live here rather than on /api/search so
+// the plain title endpoint keeps its simple response shape.
+app.get(
+  '/api/search/advanced',
+  limitOutbound,
+  wrap(async (req, res) => {
+    const q = String(req.query.q ?? '')
+    const page = clamp(Number(req.query.page) || 1, 1, 25)
+    const perPage = searchEngine.clampResultCap(req.query.perPage)
+    const data = await anilist.searchAdvanced(q, page, searchEngine)
+    res.json({
+      ...data,
+      page,
+      perPage,
+      cappedAt: perPage,
+      groups: searchEngine.groupResults(data.media),
+      alternatives: data.media.length === 0 ? searchEngine.alternativeQueries(data.text || q) : [],
+    })
+  }),
+)
+
+// Search only the local library (AV-063).
+app.get(
+  '/api/search/library',
+  wrap(async (req, res) => {
+    const q = String(req.query.q ?? '').trim()
+    const { items } = await library.list()
+    const needle = searchEngine.normalizeForSearch(q)
+    const matches = needle
+      ? items.filter((item) => {
+          const haystack = searchEngine.normalizeForSearch(
+            [item.animeTitle, item.seriesTitle, item.fileName, item.folder, item.quality].filter(Boolean).join(' '),
+          )
+          return haystack.includes(needle)
+        })
+      : []
+    res.json({
+      query: q,
+      count: matches.length,
+      // Pre-computed fragments so the client can highlight without shipping the
+      // matcher (and without a second pass over every row).
+      items: matches.slice(0, 200).map((item) => ({
+        ...item,
+        highlight: searchEngine.highlightSegments(item.animeTitle || item.seriesTitle || item.fileName || '', q),
+      })),
+      totalLibrary: items.length,
+    })
+  }),
+)
+
+app.get(
+  '/api/search/options',
+  wrap(async (_req, res) => {
+    res.json({
+      fields: Object.keys(searchEngine.SEARCH_FIELDS),
+      aliases: Object.keys(searchEngine.SEARCH_FIELDS).length,
+      resultCap: searchEngine.RESULT_CAP,
+      statuses: ['airing', 'finished', 'upcoming', 'cancelled', 'hiatus'],
+      formats: ['tv', 'movie', 'ova', 'ona', 'special', 'music', 'tv_short'],
+    })
   }),
 )
 
