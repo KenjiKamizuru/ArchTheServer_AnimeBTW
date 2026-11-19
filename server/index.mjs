@@ -59,6 +59,7 @@ import * as searchEngine from './search.mjs'
 import * as detailEngine from './detail.mjs'
 import * as kv from './kv.mjs'
 import * as listStore from './listStore.mjs'
+import * as progressStore from './progressStore.mjs'
 import { exportListJson, exportListCsv } from './listExport.mjs'
 import { pickListEntry } from './listRandom.mjs'
 import { sortListEntries } from './listSort.mjs'
@@ -100,7 +101,7 @@ const APP_CSP = [
   "form-action 'self'",
 ].join('; ')
 
-await Promise.all([store.init(), settings.init(), resolver.init(), imdb.init(), kv.init(), listStore.init()])
+await Promise.all([store.init(), settings.init(), resolver.init(), imdb.init(), kv.init(), listStore.init(), progressStore.init()])
 await library.init()
 await downloads.init()
 
@@ -1623,6 +1624,44 @@ app.put(
     setBetaOptIns(user, parsed.value)
     await kv.set('users', users)
     res.json(betaOptInsView(user))
+  }),
+)
+
+// Watch progress (AV-151a): persisted INDEPENDENTLY per device profile —
+// the owner account, or the selected guest (AV-123 resolution, incl. its
+// unknown-selection fallback to owner).
+function progressProfileId(user, req) {
+  const profile = resolveDeviceProfile(user, readCookie(req, GUEST_COOKIE))
+  return profile.mode === 'guest' ? `${user.id}:g:${profile.guestId}` : String(user.id)
+}
+
+app.get(
+  '/api/progress',
+  wrap(async (req, res) => {
+    const { user } = await requireSessionUser(req)
+    res.json({ entries: progressStore.listProgress(progressProfileId(user, req)) })
+  }),
+)
+
+app.put(
+  '/api/progress',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user } = await requireSessionUser(req)
+    res.json({ entry: await progressStore.saveProgress(progressProfileId(user, req), req.body) })
+  }),
+)
+
+app.delete(
+  '/api/progress',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user } = await requireSessionUser(req)
+    res.json(await progressStore.clearProgress(progressProfileId(user, req), {
+      mediaId: req.body?.mediaId,
+      season: req.body?.season,
+      episode: req.body?.episode,
+    }))
   }),
 )
 
