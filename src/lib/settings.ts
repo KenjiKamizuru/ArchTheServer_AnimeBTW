@@ -18,6 +18,7 @@ let state: AppSettings = {
   skipForwardSeconds: 10,
   skipBackwardSeconds: 10,
   playbackSpeed: 1,
+  volume: 1,
   allowedExternalHosts: [],
   envExternalHostsConfigured: false,
   theme: 'dark',

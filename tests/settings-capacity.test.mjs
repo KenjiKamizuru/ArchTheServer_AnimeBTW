@@ -151,3 +151,19 @@ test('playback speed is remembered within range (AV-188)', async () => {
   assert.equal(run.status, 0, run.stderr)
   assert.equal(JSON.parse(run.stdout), 1.25, 'the speed survives a restart')
 })
+
+test('volume level is remembered within range (AV-193)', async () => {
+  assert.equal(settings.get().volume, 1)
+  await settings.save({ volume: 0.35 })
+  assert.equal(settings.get().volume, 0.35)
+  // out-of-range values clamp to 0–1 at the boundary
+  await settings.save({ volume: 5 })
+  assert.equal(settings.get().volume, 1)
+  await settings.save({ volume: -2 })
+  assert.equal(settings.get().volume, 0)
+  await settings.save({ volume: 0.8 })
+  const script = `import * as s from ${JSON.stringify(new URL('../server/settings.mjs', import.meta.url).href)}; await s.init(); console.log(JSON.stringify(s.get().volume))`
+  const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, ANIMEVAULT_DATA: dir }, encoding: 'utf8' })
+  assert.equal(run.status, 0, run.stderr)
+  assert.equal(JSON.parse(run.stdout), 0.8, 'the volume survives a restart')
+})

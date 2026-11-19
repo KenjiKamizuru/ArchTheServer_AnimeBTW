@@ -368,6 +368,14 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
     if (video) video.playbackRate = normalizePlaybackSpeed(settings.playbackSpeed)
   }, [videoSrc, useMse, settings.playbackSpeed])
 
+  // AV-193: the remembered volume level — applied on every keyed remount
+  // (mirror of the playback-rate effect). Saved on slider RELEASE, not on
+  // every step (see the volume input), so dragging never storms the API.
+  useEffect(() => {
+    const video = videoRef.current
+    if (video) video.volume = Math.min(1, Math.max(0, settings.volume))
+  }, [videoSrc, useMse, settings.volume])
+
   // AV-189: PiP state follows the element's own events (enter/leave),
   // re-bound on every keyed remount like the other listeners.
   useEffect(() => {
@@ -986,6 +994,14 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
                   const next = Number(event.target.value)
                   video.volume = next
                   if (next > 0 && video.muted) video.muted = false
+                }}
+                onPointerUp={(event) => {
+                  // AV-193: persist on release — one save per gesture.
+                  void saveSettings({ volume: Number(event.currentTarget.value) })
+                }}
+                onKeyUp={(event) => {
+                  // keyboard steps save on key release (same one-save rule).
+                  void saveSettings({ volume: Number(event.currentTarget.value) })
                 }}
                 aria-label="Volume"
                 className="h-1.5 w-16 shrink-0 cursor-pointer accent-[var(--color-accent)]"

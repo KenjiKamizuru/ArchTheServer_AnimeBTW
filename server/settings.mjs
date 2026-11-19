@@ -85,6 +85,7 @@ const DEFAULTS = {
   skipForwardSeconds: 10,
   skipBackwardSeconds: 10,
   playbackSpeed: 1,
+  volume: 1,
   allowedExternalHosts: [],
   theme: 'dark',
   systemTheme: false,
@@ -147,6 +148,7 @@ export async function init() {
         // AV-188: remembered playback speed (0.25–4; the UIs snap to a
         // fixed ladder of common values).
         playbackSpeed: clampFloat(parsed.playbackSpeed, 0.25, 4, 1),
+        volume: clampFloat(parsed.volume, 0, 1, 1),
         allowedExternalHosts: Array.isArray(parsed.allowedExternalHosts)
           ? safeNormalizeHosts(parsed.allowedExternalHosts)
           : [],
@@ -212,6 +214,7 @@ export function get() {
     skipForwardSeconds: state.skipForwardSeconds,
     skipBackwardSeconds: state.skipBackwardSeconds,
     playbackSpeed: state.playbackSpeed,
+    volume: state.volume,
     allowedExternalHosts: [...state.allowedExternalHosts],
     envExternalHostsConfigured: Boolean(String(process.env.ALLOWED_SOURCE_HOSTS ?? '').trim()),
     theme: state.theme,
@@ -285,6 +288,9 @@ export async function save(patch = {}) {
 
   if (patch.playbackSpeed !== undefined) {
     next.playbackSpeed = clampFloat(patch.playbackSpeed, 0.25, 4, next.playbackSpeed)
+  }
+  if (patch.volume !== undefined) {
+    next.volume = clampFloat(patch.volume, 0, 1, next.volume)
   }
 
   if (patch.registrationOpen !== undefined) {

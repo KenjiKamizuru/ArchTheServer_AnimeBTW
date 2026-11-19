@@ -463,6 +463,7 @@ export interface AppSettings {
   skipForwardSeconds: number
   skipBackwardSeconds: number
   playbackSpeed: number
+  volume: number
   allowedExternalHosts: string[]
   envExternalHostsConfigured: boolean
   theme: 'dark' | 'light'
