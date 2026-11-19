@@ -16,7 +16,7 @@ import { createProgressWriter } from '../lib/progressWriter'
 import { createWatchSession } from '../lib/watchSession'
 import { playerLoadingPhase, readinessLabels } from '../lib/playerLoading'
 import { recoveryActionLabel, recoveryActions } from '../lib/playerRecovery'
-import { canUsePictureInPicture, escapeAction, formatClock, normalizePlaybackSpeed, PLAYBACK_SPEEDS, seekFractionToTime, shouldTogglePlayback } from '../lib/playerControls'
+import { CENTER_BUTTON_IDLE_MS, canUsePictureInPicture, centerButtonVisible, escapeAction, formatClock, normalizePlaybackSpeed, PLAYBACK_SPEEDS, seekFractionToTime, shouldTogglePlayback } from '../lib/playerControls'
 import { actionForKey, effectiveShortcuts } from '../lib/playerShortcuts'
 import { saveSettings } from '../lib/settings'
 import { concatBytes, Mp4BoxTracker, selectMseMimeType } from '../lib/mp4'
@@ -178,6 +178,9 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
   const [paused, setPaused] = useState(true)
   const [volume, setVolume] = useState(1)
   const [muted, setMuted] = useState(false)
+  // AV-186: idle tracking for the central button's fade.
+  const [idle, setIdle] = useState(false)
+  const idleTimerRef = useRef<number | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const autoPlayedRef = useRef(false)
   const settings = useSettings()
@@ -413,6 +416,20 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
       video.removeEventListener('volumechange', onVolume)
     }
   }, [videoSrc, useMse])
+
+  // AV-186: activity resets a single fade timer — no interval, no
+  // re-renders from pointer churn (only the timer outcome changes state).
+  const noteActivity = useCallback(() => {
+    setIdle(false)
+    if (idleTimerRef.current !== null) window.clearTimeout(idleTimerRef.current)
+    idleTimerRef.current = window.setTimeout(() => setIdle(true), CENTER_BUTTON_IDLE_MS)
+  }, [])
+  useEffect(() => {
+    noteActivity()
+    return () => {
+      if (idleTimerRef.current !== null) window.clearTimeout(idleTimerRef.current)
+    }
+  }, [noteActivity])
 
   // AV-190: fullscreen state follows `fullscreenchange`, so the button,
   // Esc handling, and the browser's own exit (Esc, F11) never disagree.
@@ -825,7 +842,7 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
       </div>
 
       <div className="flex min-h-0 flex-1 items-center justify-center p-2 md:p-6">
-        <div className="relative w-full max-w-6xl">
+        <div className="relative w-full max-w-6xl" onPointerMove={noteActivity}>
           <video
             ref={videoRef}
             key={`${videoSrc}${useMse ? '-mse' : ''}`}
@@ -956,6 +973,29 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
                 aria-label="Volume"
                 className="h-1.5 w-16 shrink-0 cursor-pointer accent-[var(--color-accent)]"
               />
+            </div>
+          ) : null}
+
+          {/* AV-186: the central play/pause — always shown when paused,
+              fading after an idle window while playing. */}
+          {!error ? (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+              <button
+                type="button"
+                onClick={() => {
+                  const video = videoRef.current
+                  if (!video) return
+                  if (video.paused) void video.play().catch(() => {})
+                  else video.pause()
+                }}
+                aria-label={paused ? 'Play' : 'Pause'}
+                title={paused ? 'Play' : 'Pause'}
+                className={`rounded-full bg-black/55 p-5 text-white/90 ring-1 ring-white/15 backdrop-blur-sm transition-opacity duration-300 hover:bg-black/70 ${
+                  centerButtonVisible(paused, idle) ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0'
+                }`}
+              >
+                {paused ? <Play size={30} /> : <Pause size={30} />}
+              </button>
             </div>
           ) : null}
 

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { canUsePictureInPicture, escapeAction, formatClock, NATIVE_CONTROLS_ZONE_PX, normalizePlaybackSpeed, seekFractionToTime, shouldTogglePlayback } from '../src/lib/playerControls.ts'
+import { canUsePictureInPicture, CENTER_BUTTON_IDLE_MS, centerButtonVisible, escapeAction, formatClock, NATIVE_CONTROLS_ZONE_PX, normalizePlaybackSpeed, seekFractionToTime, shouldTogglePlayback } from '../src/lib/playerControls.ts'
 
 test('click-to-toggle covers the picture area only (AV-178)', () => {
   // a 400px-tall video: picture area is 0…352, controls strip 352…400
@@ -57,4 +57,12 @@ test('clock formatting and seek mapping are total (AV-180)', () => {
   assert.equal(seekFractionToTime(-1, 120), 0)
   assert.equal(seekFractionToTime(0.5, 0), 0, 'unknown duration seeks nowhere')
   assert.equal(seekFractionToTime(Number.NaN, 120), 0)
+})
+
+test('the central button shows when paused and fades when idle (AV-186)', () => {
+  assert.equal(centerButtonVisible(true, false), true, 'paused — always the affordance')
+  assert.equal(centerButtonVisible(true, true), true, 'paused beats idle')
+  assert.equal(centerButtonVisible(false, false), true, 'playing with recent activity')
+  assert.equal(centerButtonVisible(false, true), false, 'playing and idle — fades out')
+  assert.equal(CENTER_BUTTON_IDLE_MS, 2000, 'the idle window is a shared constant')
 })

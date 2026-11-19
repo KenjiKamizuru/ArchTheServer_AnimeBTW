@@ -66,6 +66,14 @@ export function seekFractionToTime(fraction: number, durationSeconds: number): n
   return Math.min(durationSeconds, Math.max(0, fraction * durationSeconds))
 }
 
+// AV-186: the central play/pause fades when idle. Paused always shows it
+// (the obvious affordance); while playing it follows recent activity.
+export const CENTER_BUTTON_IDLE_MS = 2000
+
+export function centerButtonVisible(paused: boolean, idle: boolean): boolean {
+  return paused || !idle
+}
+
 /**
  * Whether a click at `offsetY` (relative to the video element's top edge,
  * in CSS pixels) should toggle play/pause. False inside the bottom
