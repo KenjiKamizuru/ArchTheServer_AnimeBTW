@@ -81,7 +81,7 @@ export function parseAuthenticatorData(authDataBase64url) {
   return { ok: true, value }
 }
 
-// --- Minimal CBOR reading for COSE ES256 keys (major types 0,1,2,5) ---
+// --- Minimal CBOR reading for COSE ES256 keys (major types 0,1,2,3,5) ---
 
 function readCborItem(buf, offset) {
   if (offset >= buf.length) throw new Error('CBOR input ended early')
@@ -101,6 +101,10 @@ function readCborItem(buf, offset) {
     if (pos + argument > buf.length) throw new Error('CBOR bytes truncated')
     return { value: buf.subarray(pos, pos + argument), pos: pos + argument }
   }
+  if (major === 3) {
+    if (pos + argument > buf.length) throw new Error('CBOR text truncated')
+    return { value: buf.subarray(pos, pos + argument).toString('utf8'), pos: pos + argument }
+  }
   if (major === 5) {
     const map = new Map()
     for (let i = 0; i < argument; i += 1) {
@@ -112,6 +116,25 @@ function readCborItem(buf, offset) {
     return { value: map, pos }
   }
   throw new Error(`unsupported CBOR major type ${major}`)
+}
+
+/** Parse a WebAuthn attestationObject (CBOR map: fmt / attStmt / authData). */
+export function parseAttestationObject(input) {
+  const buf = Buffer.isBuffer(input) ? input : Buffer.from(String(input), 'base64url')
+  let map
+  try {
+    map = readCborItem(buf, 0).value
+  } catch (err) {
+    return { ok: false, error: `attestationObject is not valid CBOR: ${err.message}` }
+  }
+  if (!(map instanceof Map)) return { ok: false, error: 'attestationObject is not a CBOR map' }
+  const fmt = map.get('fmt')
+  const attStmt = map.get('attStmt')
+  const authData = map.get('authData')
+  if (typeof fmt !== 'string' || !Buffer.isBuffer(authData) || !(attStmt instanceof Map)) {
+    return { ok: false, error: 'attestationObject is missing fmt/attStmt/authData' }
+  }
+  return { ok: true, value: { fmt, attStmt, authData } }
 }
 
 const SPKI_P256_PREFIX = Buffer.from('3059301306072a8648ce3d020106082a8648ce3d03010703420004', 'hex')

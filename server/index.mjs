@@ -25,6 +25,13 @@ import {
 } from './sessions.mjs'
 import { issueToken, isTokenValid, hashToken as hashAccountToken } from './tokens.mjs'
 import { sendMail, verificationMessage, resetMessage } from './mail.mjs'
+import {
+  issuePasskeyChallenge,
+  registerPasskey,
+  authenticatePasskey,
+  listPasskeys,
+  removePasskey,
+} from './passkeyAuth.mjs'
 
 const EMAIL_VERIFY_TTL_MS = 24 * 60 * 60 * 1000
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000
@@ -930,6 +937,105 @@ app.get(
     const users = (await kv.get('users', [])) ?? []
     const user = users.find((u) => u?.id === record.userId)
     res.json({ user: user ? publicUser(user) : null })
+  }),
+)
+
+// Passkeys (AV-105b): WebAuthn ceremonies on the passkeys.mjs data layer.
+// Challenges are single-use (2-minute TTL) and purpose-bound; rpId is the
+// request host and origin the request's own origin (the browser enforces both
+// against where it is actually running).
+const passkeyRp = (req) => ({
+  rpId: String(req.hostname ?? '').split(':')[0] || 'localhost',
+  origin: `${req.protocol}://${req.get('host')}`,
+})
+
+app.post(
+  '/api/auth/passkey/challenge',
+  limitMutations,
+  wrap(async (req, res) => {
+    const purpose = String(req.body?.purpose ?? '')
+    let userId = null
+    if (purpose === 'register') {
+      const token = readCookie(req, SESSION_COOKIE)
+      const record = token ? await kv.get(`session:${hashToken(token)}`, null) : null
+      if (!record || !isSessionValid(record)) {
+        throw Object.assign(new Error('Sign in to register a passkey'), { status: 401 })
+      }
+      userId = record.userId
+    }
+    const { challenge } = await issuePasskeyChallenge(purpose, { kv, userId })
+    res.json({ challenge })
+  }),
+)
+
+app.post(
+  '/api/auth/passkey/register',
+  limitMutations,
+  wrap(async (req, res) => {
+    const token = readCookie(req, SESSION_COOKIE)
+    const record = token ? await kv.get(`session:${hashToken(token)}`, null) : null
+    if (!record || !isSessionValid(record)) {
+      throw Object.assign(new Error('Sign in to register a passkey'), { status: 401 })
+    }
+    const { credential } = await registerPasskey(
+      {
+        userId: record.userId,
+        credentialName: req.body?.name,
+        clientDataJSON: req.body?.clientDataJSON,
+        attestationObject: req.body?.attestationObject,
+      },
+      { kv, ...passkeyRp(req) },
+    )
+    res.json({ credential })
+  }),
+)
+
+app.post(
+  '/api/auth/passkey/authenticate',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { userId } = await authenticatePasskey(
+      {
+        credentialId: req.body?.credentialId,
+        clientDataJSON: req.body?.clientDataJSON,
+        authenticatorData: req.body?.authenticatorData,
+        signature: req.body?.signature,
+      },
+      { kv, ...passkeyRp(req) },
+    )
+    const users = (await kv.get('users', [])) ?? []
+    const user = users.find((u) => u?.id === userId)
+    if (!user) throw Object.assign(new Error('Passkey authentication failed'), { status: 401 })
+    const token = createSessionToken()
+    await kv.set(`session:${hashToken(token)}`, sessionRecord(user.id))
+    res.cookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', maxAge: SESSION_TTL_MS })
+    res.json({ user: publicUser(user) })
+  }),
+)
+
+app.get(
+  '/api/auth/passkey',
+  wrap(async (req, res) => {
+    const token = readCookie(req, SESSION_COOKIE)
+    const record = token ? await kv.get(`session:${hashToken(token)}`, null) : null
+    if (!record || !isSessionValid(record)) {
+      throw Object.assign(new Error('Sign in to manage passkeys'), { status: 401 })
+    }
+    res.json({ passkeys: await listPasskeys(record.userId, { kv }) })
+  }),
+)
+
+app.delete(
+  '/api/auth/passkey/:credentialId',
+  limitMutations,
+  wrap(async (req, res) => {
+    const token = readCookie(req, SESSION_COOKIE)
+    const record = token ? await kv.get(`session:${hashToken(token)}`, null) : null
+    if (!record || !isSessionValid(record)) {
+      throw Object.assign(new Error('Sign in to manage passkeys'), { status: 401 })
+    }
+    await removePasskey(record.userId, req.params.credentialId, { kv })
+    res.json({ ok: true })
   }),
 )
 
