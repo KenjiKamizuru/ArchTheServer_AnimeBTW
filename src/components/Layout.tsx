@@ -3,11 +3,14 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-do
 import { prefetchProps } from '../lib/routePrefetch'
 import {
   Bookmark,
+  Building2,
   CalendarClock,
+  Compass,
   Download,
   HardDrive,
   ImagePlus,
   LayoutGrid,
+  LibraryBig,
   Play,
   Search,
   Settings2,
@@ -20,6 +23,9 @@ import { useUploads } from '../lib/uploads'
 const DESKTOP_NAV = [
   { to: '/', label: 'This Season', icon: Sparkles, end: true, badgeKey: null },
   { to: '/browse', label: 'Browse', icon: LayoutGrid, end: false, badgeKey: null },
+  { to: '/discover', label: 'Discover', icon: Compass, end: false, badgeKey: null },
+  { to: '/studios', label: 'Studios', icon: Building2, end: false, badgeKey: null },
+  { to: '/index', label: 'A–Z', icon: LibraryBig, end: false, badgeKey: null },
   { to: '/schedule', label: 'Airing', icon: CalendarClock, end: false, badgeKey: null },
   { to: '/downloads', label: 'Downloads', icon: Download, end: false, badgeKey: 'queue' as const },
   { to: '/downloaded', label: 'Downloaded', icon: HardDrive, end: false, badgeKey: 'library' as const },
@@ -29,7 +35,7 @@ const DESKTOP_NAV = [
 const MOBILE_NAV = [
   { to: '/', short: 'Season', icon: Sparkles, end: true, matchLibrary: false },
   { to: '/browse', short: 'Browse', icon: LayoutGrid, end: false, matchLibrary: false },
-  { to: '/schedule', short: 'Airing', icon: CalendarClock, end: false, matchLibrary: false },
+  { to: '/discover', short: 'Discover', icon: Compass, end: false, matchLibrary: false },
   { to: '/downloads', short: 'Downloads', icon: Download, end: false, matchLibrary: true },
   { to: '/bookmarks', short: 'Saved', icon: Bookmark, end: false, matchLibrary: false },
 ]

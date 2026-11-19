@@ -70,6 +70,60 @@ export interface DiscoverPick {
   total?: number
 }
 
+export interface StudioSummary {
+  id: number | null
+  name: string
+  isAnimationStudio: boolean
+  favourites: number | null
+  siteUrl: string | null
+  bucket: string
+}
+
+export interface StudioListResponse {
+  studios: StudioSummary[]
+  page: number
+  hasNextPage: boolean
+  total: number
+}
+
+export interface StudioFilmographyResponse {
+  studio: Omit<StudioSummary, 'bucket'>
+  media: Media[]
+  page: number
+  hasNextPage: boolean
+  total: number
+  byYear: { year: number | 'Unknown'; count: number; items: Media[] }[]
+  decades: number[]
+}
+
+export interface IndexBucket {
+  bucket: string
+  count: number
+  items: Media[]
+}
+
+export interface CatalogIndexResponse {
+  buckets: IndexBucket[]
+  bucketsAvailable: string[]
+  page: number
+  hasNextPage: boolean
+  total: number
+}
+
+export interface FranchiseGroup {
+  key: string
+  count: number
+  title: string
+  media: Media[]
+}
+
+export interface FranchiseResponse {
+  season: string
+  year: number
+  groups: FranchiseGroup[]
+  considered: number
+}
+
 export interface SeasonResponse {
   season: string
   year: number
@@ -142,6 +196,48 @@ export const api = {
     }
     const query = qs.toString()
     return get<DiscoverPick>(`/api/discover/${kind}${query ? `?${query}` : ''}`, false)
+  },
+
+  studios(params: { page?: number; q?: string; sort?: 'favourites' | 'name' } = {}) {
+    const qs = new URLSearchParams()
+    if (params.page && params.page > 1) qs.set('page', String(params.page))
+    if (params.q) qs.set('q', params.q)
+    if (params.sort) qs.set('sort', params.sort)
+    const query = qs.toString()
+    return get<StudioListResponse>(`/api/studios${query ? `?${query}` : ''}`)
+  },
+
+  studio(id: number, params: { page?: number; sort?: string } = {}) {
+    const qs = new URLSearchParams()
+    if (params.page && params.page > 1) qs.set('page', String(params.page))
+    if (params.sort) qs.set('sort', params.sort)
+    const query = qs.toString()
+    return get<StudioFilmographyResponse>(`/api/studios/${id}${query ? `?${query}` : ''}`)
+  },
+
+  catalogIndex(params: { page?: number; sort?: 'title' | 'popular' | 'rated'; kana?: boolean } = {}) {
+    const qs = new URLSearchParams()
+    if (params.page && params.page > 1) qs.set('page', String(params.page))
+    if (params.sort) qs.set('sort', params.sort)
+    if (params.kana === false) qs.set('kana', '0')
+    const query = qs.toString()
+    return get<CatalogIndexResponse>(`/api/index${query ? `?${query}` : ''}`)
+  },
+
+  franchises(params: { season?: string; year?: number } = {}) {
+    const qs = new URLSearchParams()
+    if (params.season) qs.set('season', params.season)
+    if (params.year) qs.set('year', String(params.year))
+    const query = qs.toString()
+    return get<FranchiseResponse>(`/api/franchises${query ? `?${query}` : ''}`)
+  },
+
+  recentlyAdded(limit = 24) {
+    return get<{ media: Media[]; count: number }>(`/api/recent?limit=${limit}`, false)
+  },
+
+  recentlyUpdated(limit = 24) {
+    return get<{ media: Media[]; count: number }>(`/api/updated?limit=${limit}`, false)
   },
 
   airing() {

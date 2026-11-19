@@ -8,12 +8,16 @@ import { ToastProvider } from './components/Toasts'
 import {
   BookmarksPage,
   BrowsePage,
+  DiscoverPage,
   DownloadedPage,
   DownloadsPage,
   HomePage,
+  IndexPage,
   SchedulePage,
   SearchPage,
   SettingsPage,
+  StudioPage,
+  StudiosPage,
 } from './lib/routePrefetch'
 
 // Every page is its own chunk; hover/focus/idle prefetching (see
@@ -42,7 +46,11 @@ export default function App() {
             <Route element={<Layout />}>
               <Route index element={<LazyPage><HomePage /></LazyPage>} />
               <Route path="browse" element={<LazyPage><BrowsePage /></LazyPage>} />
+              <Route path="discover" element={<LazyPage><DiscoverPage /></LazyPage>} />
               <Route path="schedule" element={<LazyPage><SchedulePage /></LazyPage>} />
+              <Route path="studios" element={<LazyPage><StudiosPage /></LazyPage>} />
+              <Route path="studios/:id" element={<LazyPage><StudioPage /></LazyPage>} />
+              <Route path="index" element={<LazyPage><IndexPage /></LazyPage>} />
               <Route path="search" element={<LazyPage><SearchPage /></LazyPage>} />
               <Route path="downloads" element={<LazyPage><DownloadsPage /></LazyPage>} />
               <Route path="downloaded" element={<LazyPage><DownloadedPage /></LazyPage>} />

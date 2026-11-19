@@ -334,6 +334,184 @@ export async function discover(kind, filters, browseModule) {
   throw Object.assign(new Error('Unknown discovery kind'), { status: 400 })
 }
 
+/**
+ * Studio search/listing for the studio explorer. Sorted by favourites so the
+ * landing page opens on recognisable names.
+ */
+export async function studios({ page = 1, search = '', sort = '' } = {}) {
+  const allowed = new Set(['favourites', 'name'])
+  const studioSort = allowed.has(sort) ? sort : 'favourites'
+  const key = `studios:${page}:${search}:${studioSort}`
+  return cached(key, async () => {
+    const data = await gql(
+      `query Studios($page: Int, $perPage: Int, $search: String, $sort: [StudioSort]) {
+        Page(page: $page, perPage: $perPage) {
+          pageInfo { hasNextPage total }
+          studios(search: $search, sort: $sort) {
+            id
+            name
+            isAnimationStudio
+            favourites
+            siteUrl
+          }
+        }
+      }`,
+      {
+        page,
+        perPage: 30,
+        search: search.trim() || undefined,
+        // AniList reads StudioSort values as an enum list.
+        sort: studioSort === 'name' ? ['NAME'] : ['FAVOURITES_DESC'],
+      },
+    )
+    const raw = data.Page?.studios ?? []
+    const media = raw
+      .map((node) =>
+        node
+          ? {
+              id: node.id,
+              name: node.name,
+              isAnimationStudio: Boolean(node.isAnimationStudio),
+              favourites: node.favourites ?? null,
+              siteUrl: typeof node.siteUrl === 'string' && /^https:\/\//.test(node.siteUrl) ? node.siteUrl : null,
+              bucket: node.name ? String(node.name).charAt(0).toUpperCase() : '#',
+            }
+          : null,
+      )
+      .filter(Boolean)
+    return {
+      studios: media,
+      page,
+      hasNextPage: Boolean(data.Page?.pageInfo?.hasNextPage),
+      total: data.Page?.pageInfo?.total ?? media.length,
+    }
+  })
+}
+
+/** A studio's filmography, newest-first by popularity within the page. */
+export async function studioFilmography(id, { page = 1, sort = 'popular' } = {}) {
+  const sortEnum = {
+    popular: 'POPULARITY_DESC',
+    rated: 'SCORE_DESC',
+    newest: 'START_DATE_DESC',
+    oldest: 'START_DATE_ASC',
+  }[sort] ?? 'POPULARITY_DESC'
+  const key = `studio:${id}:${page}:${sortEnum}`
+  return cached(key, async () => {
+    const data = await gql(
+      `query Studio($id: Int, $page: Int, $perPage: Int, $sort: [MediaSort]) {
+        Studio(id: $id) {
+          id
+          name
+          isAnimationStudio
+          favourites
+          siteUrl
+          media(page: $page, perPage: $perPage, sort: $sort, isMain: true) {
+            pageInfo { hasNextPage total }
+            nodes {
+              ${MEDIA_FIELDS}
+            }
+          }
+        }
+      }`,
+      { id, page, perPage: 24, sort: [sortEnum] },
+    )
+    const studio = data.Studio
+    if (!studio) throw Object.assign(new Error('Studio not found'), { status: 404 })
+    const media = (studio.media?.nodes ?? []).map(normalize).filter(Boolean)
+    return {
+      studio: {
+        id: studio.id,
+        name: studio.name,
+        isAnimationStudio: Boolean(studio.isAnimationStudio),
+        favourites: studio.favourites ?? null,
+        siteUrl: typeof studio.siteUrl === 'string' && /^https:\/\//.test(studio.siteUrl) ? studio.siteUrl : null,
+      },
+      media,
+      page,
+      hasNextPage: Boolean(studio.media?.pageInfo?.hasNextPage),
+      total: studio.media?.pageInfo?.total ?? media.length,
+    }
+  })
+}
+
+/** Catalog page used to build the A–Z index. */
+export async function catalogIndex({ page = 1, sort = 'title' } = {}) {
+  const sortEnum = { title: 'TITLE_ROMAJI', popular: 'POPULARITY_DESC', rated: 'SCORE_DESC' }[sort] ?? 'TITLE_ROMAJI'
+  const key = `index:${page}:${sortEnum}`
+  return cached(key, async () => {
+    const data = await gql(
+      `query Index($page: Int, $perPage: Int, $sort: [MediaSort]) {
+        Page(page: $page, perPage: $perPage) {
+          pageInfo { hasNextPage total }
+          media(type: ANIME, sort: $sort, isAdult: false) { ${MEDIA_FIELDS} }
+        }
+      }`,
+      { page, perPage: 50, sort: [sortEnum] },
+    )
+    const media = (data.Page?.media ?? []).map(normalize).filter(Boolean)
+    return {
+      media,
+      page,
+      hasNextPage: Boolean(data.Page?.pageInfo?.hasNextPage),
+      total: data.Page?.pageInfo?.total ?? media.length,
+    }
+  })
+}
+
+/** Current-season media with relations, for franchise grouping. */
+export async function seasonFranchises({ season = '', year } = {}) {
+  const resolved = resolveSeason(season || undefined, year)
+  const key = `franchises:${resolved.season}:${resolved.year}`
+  return cached(key, async () => {
+    const data = await gql(
+      `query Franchises($season: MediaSeason, $seasonYear: Int, $page: Int) {
+        Page(page: $page, perPage: 50) {
+          media(season: $season, seasonYear: $seasonYear, type: ANIME, sort: POPULARITY_DESC, isAdult: false) {
+            ${MEDIA_FIELDS}
+            relations { relationType nodes { id title { romaji english } seasonYear } }
+          }
+        }
+      }`,
+      { season: resolved.season, seasonYear: resolved.year, page: 1 },
+    )
+    const media = (data.Page?.media ?? []).map(normalize).filter(Boolean)
+    return { season: resolved.season, year: resolved.year, media }
+  })
+}
+
+/** Newest catalog entries (highest IDs first). */
+export async function recentlyAdded(limit = 24) {
+  const key = `recent:added:${limit}`
+  return cached(key, async () => {
+    const data = await gql(
+      `query Recent($perPage: Int, $sort: [MediaSort]) {
+        Page(page: 1, perPage: $perPage) {
+          media(type: ANIME, sort: $sort, isAdult: false) { ${MEDIA_FIELDS} }
+        }
+      }`,
+      { perPage: Math.min(50, Math.max(1, limit)), sort: ['ID_DESC'] },
+    )
+    return (data.Page?.media ?? []).map(normalize).filter(Boolean)
+  })
+}
+
+/** Recently updated metadata — useful to spot refreshed artwork/synopses. */
+export async function recentlyUpdated(limit = 24) {
+  const key = `recent:updated:${limit}`
+  return cached(key, async () => {
+    const data = await gql(
+      `query Updated($perPage: Int, $sort: [MediaSort]) {
+        Page(page: 1, perPage: $perPage) {
+          media(type: ANIME, sort: $sort, isAdult: false) { ${MEDIA_FIELDS} }
+        }
+      }`,
+      { perPage: Math.min(50, Math.max(1, limit)), sort: ['UPDATED_AT_DESC'] },
+    )
+    return (data.Page?.media ?? []).map(normalize).filter(Boolean)
+  })
+}
+
 export async function getAiring({ page = 1, perPage = 50 } = {}) {
   const key = `airing:${page}:${perPage}`
   return cached(key, async () => {

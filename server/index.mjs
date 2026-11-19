@@ -6,6 +6,7 @@ import { existsSync, lstatSync, createReadStream } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import * as anilist from './anilist.mjs'
 import * as browse from './browse.mjs'
+import * as explore from './explore.mjs'
 import * as store from './store.mjs'
 import * as settings from './settings.mjs'
 import * as resolver from './resolver.mjs'
@@ -336,6 +337,96 @@ app.get(
     const filters = browse.parseBrowseFilters(req.query)
     const data = await anilist.discover(kind, filters, browse)
     res.json(data)
+  }),
+)
+
+// ── Studio / producer browsing, alphabetical index, franchises ──────────────
+
+app.get(
+  '/api/studios',
+  limitOutbound,
+  wrap(async (req, res) => {
+    const page = clamp(Number(req.query.page) || 1, 1, 10)
+    const search = String(req.query.q ?? '').trim().slice(0, 60)
+    const sort = String(req.query.sort ?? '')
+    const data = await anilist.studios({ page, search, sort })
+    res.json(data)
+  }),
+)
+
+app.get(
+  '/api/studios/:id',
+  limitOutbound,
+  wrap(async (req, res) => {
+    const id = Number(req.params.id)
+    if (!Number.isInteger(id) || id <= 0) throw Object.assign(new Error('Invalid studio id'), { status: 400 })
+    const page = clamp(Number(req.query.page) || 1, 1, 20)
+    const sort = browse.BROWSE_SORTS[String(req.query.sort ?? '')] ? String(req.query.sort) : 'popular'
+    const data = await anilist.studioFilmography(id, { page, sort })
+    res.json({
+      ...data,
+      byYear: explore.groupByYear(data.media),
+      decades: explore.decadesPresent(data.media),
+    })
+  }),
+)
+
+// Alphabetical catalog index (AV-046). Buckets are computed server-side so
+// clients do not need to reimplement the kana row mapping.
+app.get(
+  '/api/index',
+  limitOutbound,
+  wrap(async (req, res) => {
+    const sort = ['title', 'popular', 'rated'].includes(String(req.query.sort)) ? String(req.query.sort) : 'title'
+    const kana = String(req.query.kana ?? '1') !== '0'
+    const page = clamp(Number(req.query.page) || 1, 1, 10)
+    const data = await anilist.catalogIndex({ page, sort })
+    res.json({
+      buckets: explore.buildAlphabetIndex(data.media, { kana }),
+      bucketsAvailable: kana ? [...explore.LATIN_BUCKETS, ...explore.KANA_ROWS] : explore.LATIN_BUCKETS,
+      page,
+      hasNextPage: data.hasNextPage,
+      total: data.total,
+    })
+  }),
+)
+
+// Franchise grouping for the current season (AV-045).
+app.get(
+  '/api/franchises',
+  limitOutbound,
+  wrap(async (req, res) => {
+    const season = String(req.query.season ?? '')
+    const year = Number(req.query.year) || undefined
+    const data = await anilist.seasonFranchises({ season, year })
+    res.json({
+      season: data.season,
+      year: data.year,
+      groups: explore.buildFranchiseGroups(data.media),
+      considered: data.media.length,
+    })
+  }),
+)
+
+// Recently added to catalog (AV-047): newest IDs are the closest signal.
+app.get(
+  '/api/recent',
+  limitOutbound,
+  wrap(async (req, res) => {
+    const limit = clamp(Number(req.query.limit) || 24, 1, 50)
+    const media = await anilist.recentlyAdded(limit)
+    res.json({ media, count: media.length })
+  }),
+)
+
+// Recently updated metadata (AV-048).
+app.get(
+  '/api/updated',
+  limitOutbound,
+  wrap(async (req, res) => {
+    const limit = clamp(Number(req.query.limit) || 24, 1, 50)
+    const media = await anilist.recentlyUpdated(limit)
+    res.json({ media, count: media.length })
   }),
 )
 
