@@ -259,6 +259,22 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
           })
         }} />
       </div>
+      <div className="mt-3">
+        <label htmlFor="mal-import" className="text-xs text-white/70">Import a MyAnimeList export (JSON, up to 400 KB)</label>
+        <input id="mal-import" type="file" accept="application/json,.json" disabled={busy} className="mt-1 block max-w-full text-xs text-white/70" onChange={(event) => {
+          const file = event.currentTarget.files?.[0]
+          event.currentTarget.value = ''
+          if (!file) return
+          void perform(async () => {
+            if (file.size > 400_000) throw new Error('The file exceeds the 400 KB import limit')
+            let entries: unknown
+            try { entries = JSON.parse(await file.text()) } catch { throw new Error('The file is not valid JSON') }
+            const result = await request<{ list: ListSummary; imported: number; unmatched: number }>('/api/lists/import/mal', 'POST', { entries })
+            setActive(result.list.id)
+            setMessage(`Imported ${result.imported} titles into ${result.list.name} by anime_id` + (result.unmatched ? `. ${result.unmatched} unmatched were not imported` : '.'))
+          })
+        }} />
+      </div>
       {list && <div className="mt-5">
         {(list.cover ?? []).length > 0 ? (
           <div className={`mb-3 grid max-w-48 gap-1 overflow-hidden rounded-xl ${(list.cover ?? []).length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>

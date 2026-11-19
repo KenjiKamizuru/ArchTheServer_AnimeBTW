@@ -44,6 +44,7 @@ import {
 } from './profilePrivacy.mjs'
 import { normalizePreferencesUpdate } from './userPreferences.mjs'
 import { normalizeBetaOptInsUpdate, setBetaOptIns, betaOptInsView } from './featureFlags.mjs'
+import { parseMalExport, matchResolved, toImportDocument } from './malImport.mjs'
 import { normalizeShowActivity, buildActivitySummary } from './profileActivity.mjs'
 import { buildAccountExport } from './accountExport.mjs'
 import { validateDeletionConfirmation, DELETION_ARTIFACTS } from './accountDeletion.mjs'
@@ -1700,6 +1701,31 @@ app.post('/api/lists', limitMutations, wrap(async (req, res) => {
 }))
 app.post('/api/lists/import', limitMutations, wrap(async (req, res) => {
   res.status(201).json(await listStore.importList(req.body))
+}))
+
+// MyAnimeList export import (AV-142b): parse strictly, resolve by anime_id
+// via AniList (never title matching), import the matches, report the rest.
+app.post('/api/lists/import/mal', limitMutations, limitOutbound, wrap(async (req, res) => {
+  const raw = Array.isArray(req.body) ? req.body : req.body?.entries
+  const parsed = parseMalExport(raw)
+  if (!parsed.ok) throw Object.assign(new Error(parsed.error), { status: 400 })
+  const entries = parsed.value.entries
+  if (!entries.length) throw Object.assign(new Error('The export contains no entries'), { status: 400 })
+  const mediaByMalId = await anilist.mediaByMalIds(entries.map((entry) => entry.malId))
+  const { matched, unmatched } = matchResolved(entries, mediaByMalId)
+  if (!matched.length) {
+    throw Object.assign(new Error('No entries matched catalog media by anime_id'), { status: 422 })
+  }
+  const document = toImportDocument(matched, {
+    name: typeof req.body?.name === 'string' ? req.body.name : 'MyAnimeList import',
+    description: typeof req.body?.description === 'string' ? req.body.description : '',
+  })
+  const result = await listStore.importList(document)
+  res.status(201).json({
+    ...result,
+    unmatched: unmatched.length,
+    unmatchedSample: unmatched.slice(0, 50).map((entry) => ({ malId: entry.malId, title: entry.title })),
+  })
 }))
 app.post('/api/lists/migrate', limitMutations, wrap(async (_req, res) => {
   res.json(await listStore.migrateBookmarks(store.list()))

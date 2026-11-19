@@ -589,6 +589,31 @@ export async function seasonFranchises({ season = '', year } = {}) {
   })
 }
 
+/** Catalog media keyed by MyAnimeList id (AV-142b): batched `idMal_in`
+ * pages, cached per chunk — ID-based resolution only, never title matching.
+ * Mal ids the API does not return are simply absent from the map. */
+export async function mediaByMalIds(ids) {
+  const unique = [...new Set((Array.isArray(ids) ? ids : []).map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))]
+  const map = new Map()
+  for (let i = 0; i < unique.length; i += 50) {
+    const chunk = unique.slice(i, i + 50)
+    const media = await cached(`media-by-mal:${chunk.join(',')}`, async () => {
+      const data = await gql(
+        `query MediaByMal($idMal_in: [Int], $page: Int) {
+          Page(page: $page, perPage: 50) { media(idMal_in: $idMal_in, type: ANIME) { ${MEDIA_FIELDS} } }
+        }`,
+        { idMal_in: chunk, page: 1 },
+      )
+      return (data.Page?.media ?? []).map(normalize).filter(Boolean)
+    })
+    for (const item of media) {
+      const malId = Number(item.externalIds?.myanimelist)
+      if (Number.isSafeInteger(malId) && malId > 0) map.set(malId, item)
+    }
+  }
+  return map
+}
+
 /** Media with relation EDGES for a set of ids (AV-133b): batched `id_in`
  * pages, cached per chunk. Ids the API does not return are silently absent. */
 export async function mediaWithRelations(ids) {
