@@ -109,6 +109,12 @@ function AccountsCard() {
   const [prefLocalPlayback, setPrefLocalPlayback] = useState('')
   const [prefsBusy, setPrefsBusy] = useState(false)
   const [prefsError, setPrefsError] = useState<string | null>(null)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deletePassword, setDeletePassword] = useState('')
+  const [deleteCode, setDeleteCode] = useState('')
+  const [deleteConfirm, setDeleteConfirm] = useState('')
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   useEffect(() => {
     setBioDraft(user?.bio ?? '')
@@ -431,6 +437,41 @@ function AccountsCard() {
       setPrefsError(err instanceof Error ? err.message : 'Could not save preferences')
     } finally {
       setPrefsBusy(false)
+    }
+  }
+
+  function downloadExport() {
+    const anchor = document.createElement('a')
+    anchor.href = '/api/auth/export'
+    anchor.download = ''
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+  }
+
+  async function deleteAccount() {
+    setDeleteBusy(true)
+    setDeleteError(null)
+    try {
+      const res = await api.deleteAccount({
+        password: deletePassword,
+        confirm: deleteConfirm,
+        code: deleteCode.trim() || undefined,
+      })
+      setUser(null)
+      setDeleteOpen(false)
+      setDeletePassword('')
+      setDeleteCode('')
+      setDeleteConfirm('')
+      toast(
+        res.retained?.length
+          ? 'Account deleted. Installation-wide notes and lists were kept (they are not per-user).'
+          : 'Account deleted',
+      )
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Could not delete the account')
+    } finally {
+      setDeleteBusy(false)
     }
   }
 
@@ -779,6 +820,70 @@ function AccountsCard() {
                 Language tags like &quot;en&quot;, &quot;pt-BR&quot;, or &quot;zh-Hant&quot;. Subtitles accept &quot;off&quot; for none. Stored for display and playback choices — the UI is not translated yet.
               </p>
               {prefsError ? <p className="mt-2 text-[11px] text-red-300">{prefsError}</p> : null}
+            </div>
+            <div className="mt-3 border-t border-white/5 pt-3">
+              <h3 className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-white/30">
+                <Trash2 size={11} /> Your data &amp; account
+              </h3>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={downloadExport}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-white/5 px-3 py-1.5 text-[11px] font-semibold text-white ring-1 ring-white/10 transition hover:bg-white/10"
+                >
+                  <ExternalLink size={12} /> Download my data
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeleteOpen((open) => !open)}
+                  disabled={deleteBusy}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-red-500/10 px-3 py-1.5 text-[11px] font-semibold text-red-300 ring-1 ring-red-400/20 transition hover:bg-red-500/20 disabled:opacity-40"
+                >
+                  <Trash2 size={12} /> Delete account…
+                </button>
+              </div>
+              {deleteOpen ? (
+                <div className="mt-2 space-y-2 rounded-lg bg-red-500/5 p-3 ring-1 ring-red-400/20">
+                  <p className="text-[11px] text-red-200">
+                    This permanently removes your account, sessions, passkeys, and avatar. Installation-wide notes and
+                    lists are kept (they are not per-user). Type <span className="font-mono">{user.username}</span> to
+                    confirm.
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="password"
+                      value={deletePassword}
+                      onChange={(event) => setDeletePassword(event.target.value.slice(0, 200))}
+                      placeholder="Password"
+                      className="w-44 rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-red-400/60"
+                    />
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={deleteCode}
+                      onChange={(event) => setDeleteCode(event.target.value.replace(/\D/g, '').slice(0, 8))}
+                      placeholder="2FA code (if enabled)"
+                      className="w-40 rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-red-400/60"
+                    />
+                    <input
+                      type="text"
+                      value={deleteConfirm}
+                      onChange={(event) => setDeleteConfirm(event.target.value.slice(0, 32))}
+                      placeholder={user.username}
+                      className="w-44 rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-red-400/60"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void deleteAccount()}
+                      disabled={deleteBusy || !deletePassword || deleteConfirm.trim().toLowerCase() !== user.username.toLowerCase()}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-red-500 px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-red-600 disabled:opacity-40"
+                    >
+                      {deleteBusy ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />} Permanently delete
+                    </button>
+                  </div>
+                  {deleteError ? <p className="text-[11px] text-red-300">{deleteError}</p> : null}
+                </div>
+              ) : null}
             </div>
             {passkeySupported ? (
               <div className="mt-3 border-t border-white/5 pt-3">

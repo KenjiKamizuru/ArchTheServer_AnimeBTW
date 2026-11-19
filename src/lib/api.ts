@@ -531,6 +531,10 @@ export const api = {
     return send<{ showActivity: boolean }>('/api/auth/profile-activity', 'PUT', { showActivity })
   },
 
+  deleteAccount(body: { password: string; confirm: string; code?: string }) {
+    return send<{ ok: boolean; removed: string[]; retained: string[] }>('/api/auth/account', 'DELETE', body)
+  },
+
   setProfileVisibility(visibility: 'public' | 'private' | 'link-only') {
     return send<{ visibility: string }>('/api/auth/profile-visibility', 'PUT', { visibility })
   },
