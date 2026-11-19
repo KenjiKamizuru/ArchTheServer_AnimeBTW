@@ -234,8 +234,8 @@ Make bookmarks evolve into a flexible personal anime organization system.
 - [ ] **AV-128** — Add drag-and-drop ordering for custom lists.
 - [ ] **AV-129** — Add list cover artwork assembled from selected titles.
 - [ ] **AV-130** — Add private, shared-link, and public list visibility settings.
-- [ ] **AV-131** — Add notes on individual list entries.
-- [ ] **AV-132** — Add list-entry priority and personal rating fields.
+- [x] **AV-131** — Add notes on individual list entries. *(Verified + one usability gap fixed this review: per-entry notes already existed end-to-end (`setNote`, `PUT /api/lists/:id/entries/:mediaId/note`, `EntryNote` UI with 1000-char editor) with exhaustive tests/list-notes.test.mjs (per-list AND per-status isolation, blank/whitespace clears, meaningful-whitespace preserved, 1000/1001 boundaries, type validation, 404s, persistence + restart survival, cleanup on status change/removal/list deletion, raw `notes` never exposed). Gap fixed: the collapsed row showed only "Edit note"/"Add note" — the note text itself was invisible in list view; the summary now shows a truncated preview (80 chars + ellipsis). Client-only: suite **542 pass** unchanged, typecheck + build clean. **Pending (honest)**: live-browser interaction.)*
+- [x] **AV-132** — Add list-entry priority and personal rating fields. *(Verified in the same entry-surface pass, no gap found: `setRating` (priority 1–5, rating 1–10, both nullable-clears, partial updates preserve the other field, strict — unknown/empty/fractional/string/out-of-range rejected), per-list AND per-status isolation, cleanup on membership removal/list deletion/status change, internal `ratings` array never exposed; UI selects per entry ("No priority"/1–5, rating 1–10) writing `PUT …/rating`. Evidence: tests/list-ratings.test.mjs (full matrix incl. clear-keeps-other, persistence). Suite **542 pass**, typecheck + build clean. **Pending (honest)**: live-browser interaction.)*
 - [ ] **AV-133** — Add list grouping by franchise, genre, or season.
 - [ ] **AV-134** — Add bulk move between personal lists.
 - [ ] **AV-135** — Add bulk removal with an undo window.

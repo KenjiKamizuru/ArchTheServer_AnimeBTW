@@ -20,7 +20,11 @@ function EntryNote({ entry, listId, busy, onSave }: { entry: Entry; listId: stri
   const [note, setNote] = useState(entry.note ?? '')
   useEffect(() => setNote(entry.note ?? ''), [entry.note, listId])
   return <details className="w-full text-xs text-white/60">
-    <summary className="cursor-pointer">{entry.note ? 'Edit note' : 'Add note'}</summary>
+    <summary className="cursor-pointer">
+      {entry.note
+        ? `Edit note: ${entry.note.length > 80 ? `${entry.note.slice(0, 80)}…` : entry.note}`
+        : 'Add note'}
+    </summary>
     <form className="mt-2 flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); onSave(note) }}>
       <label className="sr-only" htmlFor={`note-${entry.mediaId}`}>Note for {entry.media.title}</label>
       <textarea id={`note-${entry.mediaId}`} className="min-w-48 flex-1 rounded-lg bg-black/20 p-2 text-white" maxLength={1000} value={note} onChange={(event) => setNote(event.target.value)} />
