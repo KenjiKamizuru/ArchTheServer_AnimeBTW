@@ -30,6 +30,7 @@ export async function init() {
     for (const entry of parsed.entries) {
       const media = sanitizeBookmarkMedia(entry?.media)
       if (!media || media.id !== entry.mediaId || mediaIds.has(media.id) || (entry.status !== null && !STATUSES.includes(entry.status)) || !Array.isArray(entry.listIds) || entry.listIds.some((id) => !ids.has(id)) || new Set(entry.listIds).size !== entry.listIds.length || !Number.isFinite(entry.addedAt)) throw new Error('Invalid list entry')
+      if (entry.notes !== undefined && (!Array.isArray(entry.notes) || entry.notes.length > MAX_LISTS + 1 || entry.notes.some((note) => !note || typeof note.listId !== 'string' || typeof note.text !== 'string' || note.text.length > 1000 || !((note.listId === `status:${entry.status}`) || entry.listIds.includes(note.listId))) || new Set(entry.notes.map((note) => note.listId)).size !== entry.notes.length)) throw new Error('Invalid entry notes')
       mediaIds.add(media.id)
       entry.media = media
     }
@@ -63,7 +64,7 @@ function includes(entry, id) {
 }
 export function readList(id) {
   const meta = info(id)
-  const entries = state.entries.filter((item) => includes(item, id)).sort((a, b) => b.addedAt - a.addedAt)
+  const entries = state.entries.filter((item) => includes(item, id)).sort((a, b) => b.addedAt - a.addedAt).map(({ notes, ...item }) => ({ ...item, note: notes?.find((n) => n.listId === id)?.text ?? '' }))
   return { ...meta, count: entries.length, entries }
 }
 export function summary() {
@@ -86,7 +87,10 @@ export async function createList(body = {}) {
 export async function deleteList(id) {
   if (!info(id).custom) throw error('Built-in lists cannot be deleted')
   state.lists = state.lists.filter((item) => item.id !== id)
-  for (const entry of state.entries) entry.listIds = entry.listIds.filter((item) => item !== id)
+  for (const entry of state.entries) {
+    entry.listIds = entry.listIds.filter((item) => item !== id)
+    if (entry.notes) entry.notes = entry.notes.filter((note) => note.listId !== id)
+  }
   state.entries = state.entries.filter((entry) => entry.status || entry.listIds.length)
   await persist()
   return { deleted: true }
@@ -103,9 +107,12 @@ export async function add(id, rawMedia, addedAt = Date.now()) {
   } else entry.media = media
   if (list.custom) {
     if (!entry.listIds.includes(id)) entry.listIds.push(id)
-  } else entry.status = id.slice(7)
+  } else {
+    if (entry.status !== id.slice(7) && entry.notes) entry.notes = entry.notes.filter((note) => note.listId !== `status:${entry.status}`)
+    entry.status = id.slice(7)
+  }
   await persist()
-  return entry
+  return readList(id).entries.find((item) => item.mediaId === media.id)
 }
 export async function remove(id, rawId) {
   const list = info(id)
@@ -113,6 +120,7 @@ export async function remove(id, rawId) {
   if (!Number.isInteger(mediaId) || mediaId <= 0) throw error('Invalid media id')
   const entry = state.entries.find((item) => item.mediaId === mediaId)
   if (!entry || !includes(entry, id)) return { removed: false }
+  if (entry.notes) entry.notes = entry.notes.filter((note) => note.listId !== id)
   if (list.custom) entry.listIds = entry.listIds.filter((item) => item !== id)
   else {
     // Removing a status removes that status; custom memberships remain intact.
@@ -122,6 +130,18 @@ export async function remove(id, rawId) {
   if (list.custom && !entry.status && !entry.listIds.length) state.entries = state.entries.filter((item) => item !== entry)
   await persist()
   return { removed: true }
+}
+export async function setNote(id, rawId, text) {
+  info(id)
+  const mediaId = Number(rawId)
+  if (!Number.isInteger(mediaId) || mediaId <= 0) throw error('Invalid media id')
+  if (typeof text !== 'string' || text.length > 1000) throw error('Note must be text of at most 1000 characters')
+  const entry = state.entries.find((item) => item.mediaId === mediaId)
+  if (!entry || !includes(entry, id)) throw error('Entry not found in list', 404)
+  entry.notes = (entry.notes ?? []).filter((note) => note.listId !== id)
+  if (text.trim()) entry.notes.push({ listId: id, text })
+  await persist()
+  return { mediaId, note: text.trim() ? text : '' }
 }
 export async function migrateBookmarks(bookmarks) {
   let migrated = 0, skipped = 0

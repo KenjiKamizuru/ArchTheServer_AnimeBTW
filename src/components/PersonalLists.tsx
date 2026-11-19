@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import type { Media } from '../types'
 
 type ListSummary = { id: string; name: string; count: number; description?: string }
-type Entry = { mediaId: number; media: Media; status: string | null }
+type Entry = { mediaId: number; media: Media; status: string | null; note: string }
 type Overview = { statuses: ListSummary[]; lists: ListSummary[] }
 type List = ListSummary & { entries: Entry[]; custom: boolean }
 
@@ -16,10 +16,25 @@ async function request<T>(url: string, method = 'GET', body?: unknown): Promise<
   return response.json() as Promise<T>
 }
 
+function EntryNote({ entry, listId, busy, onSave }: { entry: Entry; listId: string; busy: boolean; onSave: (note: string) => void }) {
+  const [note, setNote] = useState(entry.note ?? '')
+  useEffect(() => setNote(entry.note ?? ''), [entry.note, listId])
+  return <details className="w-full text-xs text-white/60">
+    <summary className="cursor-pointer">{entry.note ? 'Edit note' : 'Add note'}</summary>
+    <form className="mt-2 flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); onSave(note) }}>
+      <label className="sr-only" htmlFor={`note-${entry.mediaId}`}>Note for {entry.media.title}</label>
+      <textarea id={`note-${entry.mediaId}`} className="min-w-48 flex-1 rounded-lg bg-black/20 p-2 text-white" maxLength={1000} value={note} onChange={(event) => setNote(event.target.value)} />
+      <button className="rounded-lg bg-white/10 px-3 py-2 text-white disabled:opacity-50" disabled={busy || note === (entry.note ?? '')}>Save note</button>
+      <span>{note.length}/1000</span>
+    </form>
+  </details>
+}
+
 /** Lists are shared across this installation until account support exists. */
 export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
   const [overview, setOverview] = useState<Overview | null>(null)
   const [active, setActive] = useState('status:planned')
+  const [sort, setSort] = useState('added')
   const [list, setList] = useState<List | null>(null)
   const [name, setName] = useState('')
   const [bookmarkId, setBookmarkId] = useState('')
@@ -32,11 +47,11 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
     let cancelled = false
     setList(null)
     setPick(null)
-    Promise.all([request<Overview>('/api/lists'), request<List>(`/api/lists/${encodeURIComponent(active)}`)])
+    Promise.all([request<Overview>('/api/lists'), request<List>(`/api/lists/${encodeURIComponent(active)}?sort=${encodeURIComponent(sort)}`)])
       .then(([summary, selected]) => { if (!cancelled) { setOverview(summary); setList(selected); setError('') } })
       .catch((err: Error) => { if (!cancelled) setError(err.message) })
     return () => { cancelled = true }
-  }, [active, revision])
+  }, [active, revision, sort])
   async function perform(action: () => Promise<void>) {
     setBusy(true); setError(''); setMessage('')
     try { await action(); setRevision((value) => value + 1) }
@@ -91,8 +106,18 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
             })}>Export {format.toUpperCase()}</button>)}
           </div>
           {list.custom && <button type="button" className={button} disabled={busy} onClick={() => {
-            if (window.confirm(`Delete list “${list.name}”? Titles will remain in their status lists.`)) void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}`, 'DELETE'); setActive('status:planned') })
+            if (window.confirm(`Delete list “${list.name}”? Titles with a status will remain in their status lists.`)) void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}`, 'DELETE'); setActive('status:planned') })
           }}>Delete list</button>}
+        </div>
+        <div className="mt-3 flex items-center gap-2">
+          <label className="text-sm text-white/70" htmlFor="list-sort">Sort by</label>
+          <select id="list-sort" className={input} value={sort} onChange={(event) => setSort(event.target.value)}>
+            <option value="added">Recently added</option>
+            <option value="oldest">Oldest added</option>
+            <option value="title">Title</option>
+            <option value="score">Highest score</option>
+            <option value="year">Newest season</option>
+          </select>
         </div>
         {pick && <p role="status" className="mt-3 text-sm text-white/70">Try <Link className="text-white underline" to={`/anime/${pick.mediaId}`}>{pick.media.title}</Link></p>}
         <form className="mt-3 flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); const media = bookmarks.find((item) => String(item.id) === bookmarkId); if (media) void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}/entries`, 'POST', { media }); setBookmarkId('') }) }}>
@@ -115,6 +140,7 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
               {overview?.statuses.map((status) => <option key={status.id} value={status.id.slice(7)}>{status.name}</option>)}
             </select>
             <button type="button" className={button} disabled={busy} aria-label={`Remove ${entry.media.title} from ${list.name}`} onClick={() => void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}/entries/${entry.mediaId}`, 'DELETE') })}>Remove</button>
+            <EntryNote entry={entry} listId={active} busy={busy} onSave={(note) => void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}/entries/${entry.mediaId}/note`, 'PUT', { note }) })} />
           </li>)}
         </ul>}
       </div>}

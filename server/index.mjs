@@ -13,6 +13,7 @@ import * as kv from './kv.mjs'
 import * as listStore from './listStore.mjs'
 import { exportListJson, exportListCsv } from './listExport.mjs'
 import { pickListEntry } from './listRandom.mjs'
+import { sortListEntries } from './listSort.mjs'
 import * as store from './store.mjs'
 import * as settings from './settings.mjs'
 import * as resolver from './resolver.mjs'
@@ -658,12 +659,19 @@ app.get('/api/lists/:id/export', wrap(async (req, res) => {
   res.type(format === 'csv' ? 'text/csv' : 'application/json')
   res.send(format === 'csv' ? exportListCsv(list) : exportListJson(list))
 }))
-app.get('/api/lists/:id', wrap(async (req, res) => res.json(listStore.readList(req.params.id))))
+app.get('/api/lists/:id', wrap(async (req, res) => {
+  const list = listStore.readList(req.params.id)
+  const sort = String(req.query.sort ?? 'added')
+  res.json({ ...list, entries: sortListEntries(list.entries, sort), sort })
+}))
 app.delete('/api/lists/:id', limitMutations, wrap(async (req, res) => {
   res.json(await listStore.deleteList(req.params.id))
 }))
 app.post('/api/lists/:id/entries', limitMutations, wrap(async (req, res) => {
   res.json({ entry: await listStore.add(req.params.id, req.body?.media) })
+}))
+app.put('/api/lists/:id/entries/:mediaId/note', limitMutations, wrap(async (req, res) => {
+  res.json(await listStore.setNote(req.params.id, req.params.mediaId, req.body?.note))
 }))
 app.delete('/api/lists/:id/entries/:mediaId', limitMutations, wrap(async (req, res) => {
   res.json(await listStore.remove(req.params.id, req.params.mediaId))
