@@ -83,6 +83,8 @@ function EntryNote({ entry, listId, busy, onSave }: { entry: Entry; listId: stri
   </details>
 }
 
+type StalledRow = Entry & { lastProgressAt: number | null }
+
 /** Lists are shared across this installation until account support exists. */
 export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
   const settings = useSettings()
@@ -106,6 +108,20 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
   const [undo, setUndo] = useState<{ listId: string; records: UndoRecord[]; count: number } | null>(null)
   const [groupBy, setGroupBy] = useState<'none' | 'season' | 'genre' | 'franchise'>('none')
   const [franchiseLabels, setFranchiseLabels] = useState<Map<number, { key: string; label: string }>>(new Map())
+  // Stalled shows (AV-139): a computed read-only list — unfinished
+  // (watching/paused) with no recent progress, per signed-in profile.
+  const [stalledOpen, setStalledOpen] = useState(false)
+  const [stalledDays, setStalledDays] = useState(14)
+  const [stalledRows, setStalledRows] = useState<StalledRow[] | null>(null)
+  useEffect(() => {
+    if (!stalledOpen) { setStalledRows(null); return }
+    let cancelled = false
+    setStalledRows(null)
+    request<{ entries: StalledRow[] }>(`/api/lists/smart/stalled?days=${stalledDays}`)
+      .then((result) => { if (!cancelled) setStalledRows(result.entries) })
+      .catch((err: Error) => { if (!cancelled) { setStalledRows([]); setError(err.message) } })
+    return () => { cancelled = true }
+  }, [stalledOpen, stalledDays])
   useEffect(() => {
     let cancelled = false
     setList(null)
@@ -274,6 +290,35 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
             setMessage(`Imported ${result.imported} titles into ${result.list.name} by anime_id` + (result.unmatched ? `. ${result.unmatched} unmatched were not imported` : '.'))
           })
         }} />
+      </div>
+      <div className="mt-5 rounded-xl border border-white/10 p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" className={button} onClick={() => setStalledOpen((open) => !open)}>{stalledOpen ? 'Hide stalled shows' : 'Stalled shows'}</button>
+          {stalledOpen ? (
+            <>
+              <label className="text-sm text-white/70" htmlFor="stalled-days">No progress for</label>
+              <select id="stalled-days" className={input} value={stalledDays} onChange={(event) => setStalledDays(Number(event.target.value))}>
+                <option value={7}>7 days</option>
+                <option value={14}>14 days</option>
+                <option value={30}>30 days</option>
+              </select>
+            </>
+          ) : null}
+        </div>
+        {stalledOpen && stalledRows === null ? <p className="mt-2 text-sm text-white/70">Checking…</p> : null}
+        {stalledOpen && stalledRows?.length === 0 ? <p className="mt-2 text-sm text-white/70">Nothing stalled here — every started show has recent progress.</p> : null}
+        {stalledOpen && stalledRows && stalledRows.length > 0 ? (
+          <ul className="mt-2 space-y-1">
+            {stalledRows.map((row) => (
+              <li key={row.mediaId} className="flex items-center gap-2 text-sm">
+                {row.media.cover ? <img src={row.media.cover} alt="" loading="lazy" className="h-8 w-6 rounded object-cover" /> : null}
+                <Link className="text-white underline" to={`/anime/${row.mediaId}`}>{row.media.title}</Link>
+                <span className="text-white/70">{row.status}</span>
+                <span className="text-white/50">{row.lastProgressAt === null ? 'no recorded progress' : `last progress ${new Date(row.lastProgressAt).toLocaleDateString()}`}</span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </div>
       {list && <div className="mt-5">
         {(list.cover ?? []).length > 0 ? (

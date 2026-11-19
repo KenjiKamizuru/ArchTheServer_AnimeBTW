@@ -45,6 +45,7 @@ import {
 import { normalizePreferencesUpdate } from './userPreferences.mjs'
 import { normalizeBetaOptInsUpdate, setBetaOptIns, betaOptInsView } from './featureFlags.mjs'
 import { parseMalExport, matchResolved, toImportDocument } from './malImport.mjs'
+import { stalledUnfinished, clampIdleDays } from './smartLists.mjs'
 import { normalizeShowActivity, buildActivitySummary } from './profileActivity.mjs'
 import { buildAccountExport } from './accountExport.mjs'
 import { validateDeletionConfirmation, DELETION_ARTIFACTS } from './accountDeletion.mjs'
@@ -1765,6 +1766,24 @@ app.post('/api/lists/:id/move', limitMutations, wrap(async (req, res) => {
 app.put('/api/lists/:id/cover', limitMutations, wrap(async (req, res) => {
   const list = await listStore.setCover(req.params.id, req.body?.mediaIds)
   res.json({ ...list, entries: sortListEntries(list.entries, 'order', list.order), sort: 'order' })
+}))
+
+// Smart list (AV-139): "stalled shows" — started-but-unfinished (watching /
+// paused) with no recent playback progress. Session-gated like /api/progress
+// (it reads the caller's per-profile progress); computed, never stored.
+app.get('/api/lists/smart/stalled', wrap(async (req, res) => {
+  let user
+  try {
+    ;({ user } = await requireSessionUser(req))
+  } catch (error) {
+    if (error?.status === 401) throw Object.assign(new Error('Sign in to see stalled shows'), { status: 401 })
+    throw error
+  }
+  const days = clampIdleDays(req.query.days)
+  const entries = [...listStore.readList('status:watching').entries, ...listStore.readList('status:paused').entries]
+  const progress = progressStore.listProgress(progressProfileId(user, req))
+  const rows = stalledUnfinished(entries, progress, { now: Date.now(), idleDays: days })
+  res.json({ name: 'Stalled shows', days, entries: rows, count: rows.length })
 }))
 
 // Franchise grouping for a saved list (AV-133b): refetches RELATION data

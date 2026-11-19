@@ -26,6 +26,23 @@ test('unknown settings keys are ignored', async () => {
   await settings.save({ bogus: 1 })
   assert.equal('bogus' in settings.get(), false)
 })
+test('multi-user and detail-layout settings are exposed and survive restart (AV-139 fix)', async () => {
+  assert.equal(settings.get().registrationOpen, false, 'registration defaults closed')
+  assert.equal(settings.get().emailAccounts, false)
+  await settings.save({ registrationOpen: true, emailAccounts: true, detailSectionOrder: ['episodes', 'overview'] })
+  assert.equal(settings.get().registrationOpen, true)
+  assert.equal(settings.get().emailAccounts, true)
+  assert.deepEqual(settings.get().detailSectionOrder, ['episodes', 'overview'])
+  // Previously: save() persisted these fields but init() dropped them and
+  // get() never surfaced them — registration silently re-closed on restart.
+  const script = `import * as s from ${JSON.stringify(new URL('../server/settings.mjs', import.meta.url).href)}; await s.init(); console.log(JSON.stringify(s.get()))`
+  const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, ANIMEVAULT_DATA: dir }, encoding: 'utf8' })
+  assert.equal(run.status, 0, run.stderr)
+  const after = JSON.parse(run.stdout)
+  assert.equal(after.registrationOpen, true, 'registration survives a restart')
+  assert.equal(after.emailAccounts, true)
+  assert.deepEqual(after.detailSectionOrder, ['episodes', 'overview'])
+})
 test('list summary exposes capacity limits (AV-140)', async () => {
   const listStore = await import('../server/listStore.mjs')
   await listStore.init()

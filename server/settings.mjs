@@ -83,6 +83,15 @@ export async function init() {
         systemTheme: Boolean(parsed.systemTheme),
         hideListCapacityWarnings:
           parsed.hideListCapacityWarnings === undefined ? false : Boolean(parsed.hideListCapacityWarnings),
+        // Saved by save() but previously dropped here and never surfaced by
+        // get(): registrationOpen/emailAccounts silently re-closed on every
+        // restart (and could never open at all), and detailSectionOrder never
+        // reached the detail builder (AV-139 fix).
+        registrationOpen: parsed.registrationOpen === true,
+        emailAccounts: parsed.emailAccounts === true,
+        detailSectionOrder: Array.isArray(parsed.detailSectionOrder)
+          ? normalizeSectionOrder(parsed.detailSectionOrder)
+          : undefined,
         updatedAt: Number(parsed.updatedAt) || 0,
       }
     }
@@ -117,6 +126,9 @@ export function get() {
     theme: state.theme,
     systemTheme: state.systemTheme,
     hideListCapacityWarnings: state.hideListCapacityWarnings,
+    detailSectionOrder: state.detailSectionOrder,
+    registrationOpen: state.registrationOpen === true,
+    emailAccounts: state.emailAccounts === true,
     updatedAt: state.updatedAt,
   }
 }
