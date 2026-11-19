@@ -45,6 +45,7 @@ import {
 import { normalizePreferencesUpdate } from './userPreferences.mjs'
 import { normalizeShowActivity, buildActivitySummary } from './profileActivity.mjs'
 import { buildAccountExport } from './accountExport.mjs'
+import { validateDeletionConfirmation, DELETION_ARTIFACTS } from './accountDeletion.mjs'
 import { atomicWriteFile } from './security.mjs'
 
 const EMAIL_VERIFY_TTL_MS = 24 * 60 * 60 * 1000
@@ -1259,6 +1260,47 @@ app.get(
     const { export: payload, excluded } = buildAccountExport(user, { passkeys: stored, activeSessions })
     res.setHeader('Content-Disposition', `attachment; filename="animevault-account-${user.id}.json"`)
     res.json({ ...payload, excluded })
+  }),
+)
+
+// Account deletion (AV-118b): password re-auth (+ 2FA when enabled) AND a
+// typed username confirmation — a session cookie alone never deletes. Removes
+// the account record, sessions, passkeys, and avatars; installation-wide
+// notes/lists are retained (not user-scoped) — the response says so.
+app.delete(
+  '/api/auth/account',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user, users } = await requireSessionUser(req)
+    const invalid = () => Object.assign(new Error('Invalid username or password'), { status: 401 })
+    const password = String(req.body?.password ?? '')
+    if (!verifyPassword(password, user.passwordSalt, user.passwordHash)) throw invalid()
+    verifyTwoFactor(user, req.body?.code)
+    const confirmed = validateDeletionConfirmation(user, req.body?.confirm)
+    if (!confirmed.ok) throw Object.assign(new Error(confirmed.error), { status: 400 })
+    // Remove sessions (this device included).
+    for (const key of await kv.list('session:', { limit: 10_000 })) {
+      const session = await kv.get(key, null)
+      if (session?.userId === user.id) await kv.remove(key)
+    }
+    // Remove passkey credential records.
+    for (const key of await kv.list('passkey:', { limit: 1_000 })) {
+      const record = await kv.get(key, null)
+      if (record?.userId === user.id) await kv.remove(key)
+    }
+    // Remove avatar files.
+    await fsp.mkdir(AVATAR_DIR, { recursive: true }).catch(() => {})
+    for (const ext of AVATAR_EXTENSIONS) {
+      const file = avatarFileName(user.id, ext)
+      if (file) await fsp.rm(path.join(AVATAR_DIR, file), { force: true })
+    }
+    // Remove the account record itself.
+    await kv.set(
+      'users',
+      users.filter((entry) => entry?.id !== user.id),
+    )
+    res.clearCookie(SESSION_COOKIE)
+    res.json({ ok: true, ...DELETION_ARTIFACTS })
   }),
 )
 
