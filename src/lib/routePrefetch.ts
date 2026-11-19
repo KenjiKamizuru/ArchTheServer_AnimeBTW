@@ -31,6 +31,7 @@ export const StudiosPage = lazyWithPrefetch(() => import('../pages/Studios').the
 export const StudioPage = lazyWithPrefetch(() => import('../pages/Studios').then((m) => ({ default: m.StudioPage })))
 export const IndexPage = lazyWithPrefetch(() => import('../pages/IndexPage'))
 export const DiscoverPage = lazyWithPrefetch(() => import('../pages/Discover'))
+export const MoviesPage = lazyWithPrefetch(() => import('../pages/Movies'))
 export const AnimeDetailPage = lazyWithPrefetch(() => import('../pages/AnimeDetail'))
 
 const PREFETCHERS: Record<string, (() => Promise<unknown>)[]> = {

@@ -496,3 +496,48 @@ export interface ImdbSearchItem {
   stars: string | null
   previewUrl: string | null
 }
+
+export interface MovieSearchItem {
+  imdbId: string
+  title: string
+  year: number | null
+  kind: 'movie' | 'series'
+  typeLabel: string
+  poster: string | null
+  actors: string | null
+}
+
+export interface MovieEpisode {
+  season: number
+  episode: number
+  title: string
+  overview: string | null
+}
+
+export interface MovieSeason {
+  season: number
+  episodes: MovieEpisode[]
+}
+
+export interface MovieDetails {
+  imdbId: string
+  title: string
+  year: number | null
+  kind: 'movie' | 'series'
+  typeLabel: string
+  poster: string | null
+  backdrop: string | null
+  plot: string | null
+  genres: string[]
+  rating: number | null
+  seasons: MovieSeason[]
+}
+
+export interface VidsrcEmbedResult {
+  provider: string
+  imdbId: string
+  kind: 'movie' | 'series'
+  season: number | null
+  episode: number | null
+  embedUrl: string
+}

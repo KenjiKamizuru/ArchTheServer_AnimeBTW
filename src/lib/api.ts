@@ -27,6 +27,9 @@ import type {
   UploadSessionSpec,
   WatchResult,
   AnimeNote,
+  MovieSearchItem,
+  MovieDetails,
+  VidsrcEmbedResult,
 } from '../types'
 
 export interface BrowseFilters {
@@ -680,5 +683,22 @@ export const api = {
       'DELETE',
       payload,
     )
+  },
+
+  movieSearch(q: string) {
+    return get<{ items: MovieSearchItem[] }>(`/api/movies/search?q=${encodeURIComponent(q)}`, false)
+  },
+
+  movieDetails(imdbId: string) {
+    return get<MovieDetails>(`/api/movies/title/${encodeURIComponent(imdbId)}`, false)
+  },
+
+  movieEmbed(params: { imdbId: string; kind: 'movie' | 'series'; season?: number; episode?: number }) {
+    const qs = new URLSearchParams()
+    qs.set('imdbId', params.imdbId)
+    qs.set('kind', params.kind)
+    if (params.season) qs.set('season', String(params.season))
+    if (params.episode) qs.set('episode', String(params.episode))
+    return get<VidsrcEmbedResult>(`/api/movies/embed?${qs.toString()}`, false)
   },
 }

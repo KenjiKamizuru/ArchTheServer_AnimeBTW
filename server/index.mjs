@@ -21,6 +21,7 @@ import * as playback from './playback.mjs'
 import * as library from './library.mjs'
 import * as downloads from './downloads.mjs'
 import * as imdb from './imdb.mjs'
+import * as movies from './movies.mjs'
 import { sanitizeErrorMessage, validateRemoteUrl, verifyRegularLibraryFile } from './security.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -883,6 +884,43 @@ app.get(
       hls: Boolean(stream.hls || safeVideo.href.includes('.m3u8') || safeAudio?.includes('.m3u8')),
       realtime: true,
     })
+  }),
+)
+
+// ── Movie & TV Series Fetcher (IMDb + VidSrc) ───────────────────────────────
+
+app.get(
+  '/api/movies/search',
+  limitOutbound,
+  wrap(async (req, res) => {
+    const q = String(req.query.q ?? '').trim().slice(0, 200)
+    if (!q) {
+      res.status(400).json({ error: 'A movie or TV series name is required' })
+      return
+    }
+    const items = await movies.searchMoviesAndSeries(q)
+    res.json({ items })
+  }),
+)
+
+app.get(
+  '/api/movies/title/:imdbId',
+  limitOutbound,
+  wrap(async (req, res) => {
+    const details = await movies.getMovieOrSeriesDetails(req.params.imdbId)
+    res.json(details)
+  }),
+)
+
+app.get(
+  '/api/movies/embed',
+  wrap(async (req, res) => {
+    const imdbId = String(req.query.imdbId ?? '').trim()
+    const kind = String(req.query.kind ?? 'movie').trim().toLowerCase()
+    const season = Number(req.query.season ?? 1)
+    const episode = Number(req.query.episode ?? 1)
+    const result = movies.buildVidsrcEmbedUrl({ imdbId, kind, season, episode })
+    res.json(result)
   }),
 )
 
