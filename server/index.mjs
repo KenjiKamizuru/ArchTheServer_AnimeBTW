@@ -10,6 +10,7 @@ import * as explore from './explore.mjs'
 import * as searchEngine from './search.mjs'
 import * as detailEngine from './detail.mjs'
 import * as kv from './kv.mjs'
+import * as listStore from './listStore.mjs'
 import * as store from './store.mjs'
 import * as settings from './settings.mjs'
 import * as resolver from './resolver.mjs'
@@ -48,7 +49,7 @@ const APP_CSP = [
   "form-action 'self'",
 ].join('; ')
 
-await Promise.all([store.init(), settings.init(), resolver.init(), imdb.init(), kv.init()])
+await Promise.all([store.init(), settings.init(), resolver.init(), imdb.init(), kv.init(), listStore.init()])
 await library.init()
 await downloads.init()
 
@@ -631,6 +632,26 @@ app.get(
     res.json({ reports: Array.isArray(reports) ? reports : [] })
   }),
 )
+
+
+// Installation-wide lists. These are not individual user accounts.
+app.get('/api/lists', wrap(async (_req, res) => res.json(listStore.summary())))
+app.post('/api/lists', limitMutations, wrap(async (req, res) => {
+  res.status(201).json({ list: await listStore.createList(req.body) })
+}))
+app.post('/api/lists/migrate', limitMutations, wrap(async (_req, res) => {
+  res.json(await listStore.migrateBookmarks(store.list()))
+}))
+app.get('/api/lists/:id', wrap(async (req, res) => res.json(listStore.readList(req.params.id))))
+app.delete('/api/lists/:id', limitMutations, wrap(async (req, res) => {
+  res.json(await listStore.deleteList(req.params.id))
+}))
+app.post('/api/lists/:id/entries', limitMutations, wrap(async (req, res) => {
+  res.json({ entry: await listStore.add(req.params.id, req.body?.media) })
+}))
+app.delete('/api/lists/:id/entries/:mediaId', limitMutations, wrap(async (req, res) => {
+  res.json(await listStore.remove(req.params.id, req.params.mediaId))
+}))
 
 app.get('/api/settings', (req, res) => {
   res.json(settings.get())
@@ -1393,6 +1414,6 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     if (shuttingDownServer) return
     shuttingDownServer = true
-    void Promise.allSettled([downloads.shutdown(), store.flush()]).finally(() => process.exit(0))
+    void Promise.allSettled([downloads.shutdown(), store.flush(), listStore.flush()]).finally(() => process.exit(0))
   })
 }
