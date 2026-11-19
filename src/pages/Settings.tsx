@@ -17,6 +17,13 @@ import { api } from '../lib/api'
 import { focusObjectClass, removeArtwork, useArtwork } from '../lib/artwork'
 import { refreshDownloads, refreshLibrary } from '../lib/downloads'
 import { saveSettings, useSettings } from '../lib/settings'
+import {
+  detectConflicts,
+  effectiveShortcuts,
+  normalizeKey,
+  SHORTCUT_ACTIONS,
+  type PlayerShortcutAction,
+} from '../lib/playerShortcuts'
 import { ImdbArtworkModal } from '../components/ImdbArtworkModal'
 import { UserPlus, LogIn, LogOut, KeyRound, Send, Fingerprint, Shield, Globe } from 'lucide-react'
 import { passkeysSupported, registerPasskeyCeremony, signInWithPasskey } from '../lib/passkeys'
@@ -46,6 +53,7 @@ function editable(s: AppSettings) {
     preferLocalPlayback: s.preferLocalPlayback,
     autoplayNextEpisode: s.autoplayNextEpisode,
     privateHistoryMode: s.privateHistoryMode,
+    playerShortcuts: s.playerShortcuts,
     allowedHostsText: (s.allowedExternalHosts ?? []).join('\n'),
     theme: s.theme,
     systemTheme: s.systemTheme,
@@ -1540,6 +1548,52 @@ function AccountsCard() {
   )
 }
 
+const SHORTCUT_LABELS: Record<PlayerShortcutAction, string> = {
+  'play-pause': 'Play / pause',
+  'seek-back': 'Seek backward',
+  'seek-forward': 'Seek forward',
+  'prev-episode': 'Previous episode',
+  'next-episode': 'Next episode',
+  mute: 'Mute / unmute',
+  close: 'Close player',
+}
+
+/** AV-179 slice 2: click, then press the key. Backspace clears the override. */
+function ShortcutCapture({
+  value,
+  conflict,
+  onChange,
+}: {
+  value: string
+  conflict: boolean
+  onChange: (key: string | null) => void
+}) {
+  const [listening, setListening] = useState(false)
+  return (
+    <button
+      type="button"
+      onClick={() => setListening(true)}
+      onBlur={() => setListening(false)}
+      onKeyDown={(event) => {
+        if (!listening) return
+        event.preventDefault()
+        event.stopPropagation()
+        if (event.key === 'Backspace' || event.key === 'Delete') onChange(null)
+        else onChange(normalizeKey(event.key))
+        setListening(false)
+      }}
+      title="Click, then press a key. Backspace clears the override."
+      className={`shrink-0 rounded-md px-2.5 py-1 text-xs font-medium ring-1 transition ${
+        conflict
+          ? 'bg-amber-400/15 text-amber-200 ring-amber-300/40'
+          : 'bg-white/5 text-white/80 ring-white/10 hover:bg-white/10'
+      }`}
+    >
+      {listening ? 'Press a key…' : value === ' ' ? 'Space' : value}
+    </button>
+  )
+}
+
 export default function SettingsPage() {
   const settings = useSettings()
   const artwork = useArtwork()
@@ -1596,6 +1650,7 @@ export default function SettingsPage() {
         preferLocalPlayback: draft.preferLocalPlayback,
         autoplayNextEpisode: draft.autoplayNextEpisode,
         privateHistoryMode: draft.privateHistoryMode,
+        playerShortcuts: draft.playerShortcuts,
         allowedExternalHosts,
         theme: draft.theme,
         systemTheme: draft.systemTheme,
@@ -1948,6 +2003,56 @@ export default function SettingsPage() {
               Private watch history — do not record playback progress (deliberate watched marks are still saved; existing entries stay until removed)
             </span>
           </label>
+
+          {(() => {
+            // AV-179 slice 2: the shortcut editor — effective keys (defaults
+            // + overrides), live conflict detection, strict save rejects
+            // conflicts at the boundary.
+            const effective = effectiveShortcuts(draft.playerShortcuts)
+            const conflictKeys = new Set(detectConflicts(effective).map((conflict) => conflict.key))
+            return (
+              <div className="sm:col-span-2">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <span className="text-[11px] text-white/45">Player keyboard shortcuts</span>
+                  <button
+                    type="button"
+                    onClick={() => set('playerShortcuts', {})}
+                    className="flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-[11px] font-medium text-white/70 transition hover:bg-white/20"
+                  >
+                    <RefreshCw size={11} /> Reset to defaults
+                  </button>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {SHORTCUT_ACTIONS.map((action) => (
+                    <div
+                      key={action}
+                      className="flex items-center justify-between gap-3 rounded-lg bg-ink-800 px-3 py-2 ring-1 ring-white/10"
+                    >
+                      <span className="text-sm text-white/70">{SHORTCUT_LABELS[action]}</span>
+                      <ShortcutCapture
+                        value={effective[action]}
+                        conflict={conflictKeys.has(effective[action])}
+                        onChange={(next) => {
+                          const map = { ...draft.playerShortcuts }
+                          if (next === null) delete map[action]
+                          else map[action] = next
+                          set('playerShortcuts', map)
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+                {conflictKeys.size > 0 ? (
+                  <p className="mt-2 flex items-center gap-1.5 text-[11px] text-amber-200">
+                    <AlertTriangle size={12} /> Two actions share a key — the save will be rejected until this is resolved.
+                  </p>
+                ) : null}
+                <span className="mt-2 block text-[11px] text-white/35">
+                  Click a key, then press the new one. Backspace clears the override. Conflicts are rejected when saving.
+                </span>
+              </div>
+            )
+          })()}
 
           <label className="block sm:col-span-2">
             <span className="mb-1 block text-[11px] text-white/45">
