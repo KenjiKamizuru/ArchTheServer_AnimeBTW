@@ -25,6 +25,10 @@ export async function init() {
     const ids = new Set()
     for (const list of parsed.lists) {
       if (typeof list?.id !== 'string' || !/^l_[0-9a-f]{24}$/.test(list.id) || ids.has(list.id) || typeof list.name !== 'string' || !list.name.trim() || list.name.length > 80 || typeof list.description !== 'string' || list.description.length > 500) throw new Error('Invalid list metadata')
+      // Manual ordering (AV-128): optional `order` array of media ids; absent
+      // in files from before AV-128 (fine — empty means "not ordered yet").
+      if (list.order !== undefined && (!Array.isArray(list.order) || list.order.some((id) => !Number.isInteger(id) || id <= 0) || new Set(list.order).size !== list.order.length)) throw new Error('Invalid list order')
+      if (list.order === undefined) list.order = []
       ids.add(list.id)
     }
     const mediaIds = new Set()
@@ -72,7 +76,7 @@ export function readList(id) {
 export function summary() {
   return {
     statuses: STATUSES.map((status) => { const list = readList(`status:${status}`); return { id: list.id, name: list.name, count: list.count } }),
-    lists: state.lists.map((list) => ({ ...list, count: readList(list.id).count })),
+    lists: state.lists.map(({ order, ...list }) => ({ ...list, count: readList(list.id).count })),
     totalEntries: state.entries.length,
   }
 }
@@ -81,7 +85,7 @@ export async function createList(body = {}) {
   const description = typeof body?.description === 'string' ? body.description.trim() : ''
   if (!name || name.length > 80 || description.length > 500) throw error('Name must be 1–80 characters and description at most 500 characters')
   if (state.lists.length >= MAX_LISTS) throw error('List limit reached', 429)
-  const list = { id: `l_${crypto.randomBytes(12).toString('hex')}`, name, description, createdAt: Date.now() }
+  const list = { id: `l_${crypto.randomBytes(12).toString('hex')}`, name, description, createdAt: Date.now(), order: [] }
   state.lists.push(list)
   await persist()
   return list
@@ -110,6 +114,9 @@ export async function add(id, rawMedia, addedAt = Date.now()) {
   } else entry.media = media
   if (list.custom) {
     if (!entry.listIds.includes(id)) entry.listIds.push(id)
+    // Manual ordering: new members join at the end of the custom order.
+    const record = state.lists.find((item) => item.id === id)
+    if (record && !record.order.includes(media.id)) record.order.push(media.id)
   } else {
     if (entry.status !== id.slice(7)) {
       if (entry.notes) entry.notes = entry.notes.filter((note) => note.listId !== `status:${entry.status}`)
@@ -128,8 +135,11 @@ export async function remove(id, rawId) {
   if (!entry || !includes(entry, id)) return { removed: false }
   if (entry.notes) entry.notes = entry.notes.filter((note) => note.listId !== id)
   if (entry.ratings) entry.ratings = entry.ratings.filter((r) => r.listId !== id)
-  if (list.custom) entry.listIds = entry.listIds.filter((item) => item !== id)
-  else {
+  if (list.custom) {
+    entry.listIds = entry.listIds.filter((item) => item !== id)
+    const record = state.lists.find((item) => item.id === id)
+    if (record) record.order = record.order.filter((item) => item !== mediaId)
+  } else {
     // Removing a status removes that status; custom memberships remain intact.
     entry.status = null
     if (!entry.listIds.length) state.entries = state.entries.filter((item) => item !== entry)
@@ -138,6 +148,26 @@ export async function remove(id, rawId) {
   await persist()
   return { removed: true }
 }
+
+/** Replace a CUSTOM list's manual order (AV-128): mediaIds must be a full
+ * permutation of the list's current members. Built-in status lists have no
+ * manual order. */
+export async function setOrder(id, rawIds) {
+  const meta = info(id)
+  if (!meta.custom) throw error('Built-in lists cannot be reordered')
+  if (!Array.isArray(rawIds)) throw error('mediaIds must be an array of media ids')
+  const ids = rawIds.map((value) => Number(value))
+  if (ids.some((value) => !Number.isInteger(value) || value <= 0)) throw error('Invalid media id')
+  const members = state.entries.filter((item) => includes(item, id)).map((item) => item.mediaId)
+  if (ids.length !== members.length || new Set(ids).size !== ids.length || members.some((member) => !ids.includes(member))) {
+    throw error('mediaIds must list every entry exactly once')
+  }
+  const record = state.lists.find((item) => item.id === id)
+  record.order = ids
+  await persist()
+  return readList(id)
+}
+
 export async function setNote(id, rawId, text) {
   info(id)
   const mediaId = Number(rawId)

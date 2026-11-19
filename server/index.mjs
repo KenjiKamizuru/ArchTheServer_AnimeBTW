@@ -1682,7 +1682,13 @@ app.get('/api/lists/:id/export', wrap(async (req, res) => {
 app.get('/api/lists/:id', wrap(async (req, res) => {
   const list = listStore.readList(req.params.id)
   const sort = String(req.query.sort ?? 'added')
-  res.json({ ...list, entries: sortListEntries(list.entries, sort), sort })
+  res.json({ ...list, entries: sortListEntries(list.entries, sort, list.order), sort })
+}))
+
+// Manual ordering (AV-128): custom lists only, full permutation required.
+app.put('/api/lists/:id/order', limitMutations, wrap(async (req, res) => {
+  const list = await listStore.setOrder(req.params.id, req.body?.mediaIds)
+  res.json({ ...list, entries: sortListEntries(list.entries, 'order', list.order), sort: 'order' })
 }))
 app.delete('/api/lists/:id', limitMutations, wrap(async (req, res) => {
   res.json(await listStore.deleteList(req.params.id))

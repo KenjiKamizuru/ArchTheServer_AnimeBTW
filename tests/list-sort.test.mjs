@@ -7,7 +7,7 @@ const entries = [
   { mediaId: 1, addedAt: 200, media: { title: 'Alpha 2', score: 90, seasonYear: 2024 } },
 ]
 const ids = (sort) => sortListEntries(entries, sort).map((entry) => entry.mediaId)
-test('sorts supported', () => assert.equal(LIST_SORTS.length, 5))
+test('sorts supported', () => assert.deepEqual(LIST_SORTS, ['added', 'oldest', 'title', 'score', 'year', 'order']))
 test('default newest first', () => assert.deepEqual(ids(undefined), [3, 1, 2]))
 test('explicit newest', () => assert.deepEqual(ids('added'), [3, 1, 2]))
 test('oldest first', () => assert.deepEqual(ids('oldest'), [2, 1, 3]))
