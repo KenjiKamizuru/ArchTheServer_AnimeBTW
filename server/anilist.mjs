@@ -81,7 +81,13 @@ async function gql(query, variables) {
     try {
       const res = await fetch(ENDPOINT, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          // Identify this public API client rather than relying on a generic
+          // Node runtime UA (some upstream protections reject anonymous clients).
+          'User-Agent': 'AnimeVault/1.0 (+https://github.com/KenjiKamizuru/ArchTheServer_AnimeBTW)',
+        },
         body: JSON.stringify({ query, variables }),
         signal: AbortSignal.timeout(15_000),
       })
@@ -92,30 +98,44 @@ async function gql(query, variables) {
         continue
       }
       if (!res.ok) {
-        await res.body?.cancel?.().catch(() => {})
-        throw new Error(`AniList responded ${res.status}`)
+        const responseText = await readResponseTextLimited(res, 16 * 1024, 'AniList error response').catch(() => '')
+        let upstreamMessage = ''
+        try {
+          upstreamMessage = JSON.parse(responseText)?.errors?.[0]?.message ?? ''
+        } catch {
+          // Keep a status-only diagnostic for non-JSON upstream responses.
+        }
+        const error = new Error(`AniList responded ${res.status}${upstreamMessage ? `: ${upstreamMessage}` : ''}`)
+        error.retryable = res.status === 429 || res.status >= 500
+        throw error
       }
       const json = JSON.parse(await readResponseTextLimited(res, MAX_GQL_BYTES, 'AniList response'))
-      if (json.errors?.length) throw new Error(json.errors[0].message)
-      if (!json.data) throw new Error('AniList returned no data')
+      if (json.errors?.length) {
+        const error = new Error(`AniList GraphQL error: ${String(json.errors[0].message ?? 'unknown error').slice(0, 240)}`)
+        error.retryable = false
+        throw error
+      }
+      if (!json.data) {
+        const error = new Error('AniList returned no data')
+        error.retryable = false
+        throw error
+      }
       return json.data
     } catch (err) {
       lastError = err
+      if (err?.retryable === false) break
       if (attempt < 2) await sleep(400 * (attempt + 1))
     }
   }
-  // Surface upstream trouble as a 502 so clients can distinguish "AniList is
-  // down" from a bug in our own handlers (which stays a 500).
-  const failure =
-    lastError instanceof Error ? lastError : new Error('Metadata request failed')
-  if (failure.status === undefined) failure.status = 502
-  if (failure.code === undefined) failure.code = 'UPSTREAM_UNAVAILABLE'
-  // Raw undici messages ("fetch failed") are useless to a viewer; the error
-  // middleware sanitizes, so give it something human to pass through.
-  if (!failure.upstreamSafe) {
-    failure.message = 'Anime metadata service is unreachable right now. Please try again shortly.'
-    failure.upstreamSafe = true
-  }
+  // Keep the upstream cause in server logs for diagnosis while returning a
+  // stable message to clients (which distinguishes an outage from a bad route).
+  const failure = new Error(
+    'Anime metadata service is unreachable right now. Please try again shortly.',
+    lastError instanceof Error ? { cause: lastError } : undefined,
+  )
+  failure.status = 502
+  failure.code = 'UPSTREAM_UNAVAILABLE'
+  failure.upstreamSafe = true
   throw failure
 }
 
@@ -486,13 +506,28 @@ export async function seasonFranchises({ season = '', year } = {}) {
         Page(page: $page, perPage: 50) {
           media(season: $season, seasonYear: $seasonYear, type: ANIME, sort: POPULARITY_DESC, isAdult: false) {
             ${MEDIA_FIELDS}
-            relations { relationType nodes { id title { romaji english } seasonYear } }
+            relations {
+              edges {
+                relationType
+                node { id title { romaji english } seasonYear }
+              }
+            }
           }
         }
       }`,
       { season: resolved.season, seasonYear: resolved.year, page: 1 },
     )
-    const media = (data.Page?.media ?? []).map(normalize).filter(Boolean)
+    const media = (data.Page?.media ?? [])
+      .map((entry) => {
+        const record = normalize(entry)
+        if (!record) return null
+        record.relations = (entry.relations?.edges ?? []).map((edge) => ({
+          relationType: edge?.relationType,
+          node: edge?.node ?? null,
+        }))
+        return record
+      })
+      .filter(Boolean)
     return { season: resolved.season, year: resolved.year, media }
   })
 }
@@ -737,7 +772,7 @@ export async function getDetail(id) {
           startDate { year month day }
           endDate { year month day }
           streamingEpisodes { title thumbnail url site }
-          scoreDistribution { score amount }
+          stats { scoreDistribution { score amount } }
           rankings { rank type context year season allTime }
           characters(perPage: 12, sort: [ROLE, RELEVANCE, ID]) {
             edges {
@@ -862,7 +897,7 @@ export async function getDetail(id) {
           season: r.season ?? null,
           allTime: Boolean(r.allTime),
         })),
-      scoreBuckets: data.Media.scoreDistribution ?? [],
+      scoreBuckets: data.Media.stats?.scoreDistribution ?? [],
       characters: (data.Media.characters?.edges ?? [])
         .map((edge) => {
           const node = edge?.node

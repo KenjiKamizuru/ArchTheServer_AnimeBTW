@@ -191,11 +191,11 @@ export function buildBrowseQuery(filters) {
   } else if (filters.years) {
     if (filters.years.min !== undefined) {
       variables.yearMin = filters.years.min
-      media.push('seasonYear_greater: $yearMin')
+      media.push('startDate_greater: $yearMin')
     }
     if (filters.years.max !== undefined) {
       variables.yearMax = filters.years.max
-      media.push('seasonYear_lesser: $yearMax')
+      media.push('startDate_lesser: $yearMax')
     }
   }
 
