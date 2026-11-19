@@ -392,6 +392,12 @@ export const api = {
     return send<{ entry: ProgressEntry }>('/api/progress', 'PUT', record)
   },
 
+  // AV-157: per-show progress reset (every record of the media, this
+  // profile only) — callers must confirm before invoking.
+  resetProgress(mediaId: number) {
+    return send<{ removed: number }>('/api/progress', 'DELETE', { mediaId })
+  },
+
   saveWatchOrderNote(id: number, note: string) {
     return send<WatchOrderNote>(`/api/anime/${id}/watch-order`, 'PUT', { note })
   },

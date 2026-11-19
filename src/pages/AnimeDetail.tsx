@@ -19,6 +19,7 @@ import {
   Printer,
   Save,
   Undo2,
+  RotateCcw,
   Check,
   ShieldAlert,
   Sparkles,
@@ -39,7 +40,7 @@ import { useDetail } from '../components/MediaModal'
 import { useToast } from '../components/Toasts'
 import { useBookmarks, toggleBookmark } from '../lib/bookmarks'
 import { formatEpisodeCode, formatMediaType, formatSeason, inferSeasonFromTitle, relativeTime } from '../lib/format'
-import { isWatchedState, markUnwatchedPayload, markWatchedPayload, seasonKeyFor } from '../lib/progress'
+import { isWatchedState, markUnwatchedPayload, markWatchedPayload, rewindPayload, seasonKeyFor } from '../lib/progress'
 
 
 
@@ -81,6 +82,7 @@ function EpisodeRow({
   onDownload,
   watched,
   onToggleWatched,
+  onRewind,
 }: {
   episode: EpisodeEntry
   canPlay: boolean
@@ -88,6 +90,7 @@ function EpisodeRow({
   onDownload: () => void
   watched: boolean
   onToggleWatched: () => void
+  onRewind: () => void
 }) {
   const [imgFailed, setImgFailed] = useState(false)
   const date = episode.airDate ? new Date(episode.airDate) : null
@@ -154,6 +157,15 @@ function EpisodeRow({
           }
         >
           {watched ? <Undo2 size={12} /> : <Check size={12} />}
+        </button>
+        <button
+          type="button"
+          onClick={onRewind}
+          aria-label={`Rewind episode ${episode.number} to the beginning`}
+          title="Rewind to the beginning (keeps the watched mark)"
+          className="rounded-md bg-white/6 p-1.5 text-white/60 transition hover:bg-white/12 hover:text-white"
+        >
+          <RotateCcw size={12} />
         </button>
       </div>
     </li>
@@ -361,6 +373,33 @@ export default function AnimeDetailPage() {
       toast(watched ? `Episode ${episode.number} marked as not watched` : `Episode ${episode.number} marked as watched`)
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Could not update episode progress', 'err')
+    }
+  }
+
+  // Rewind (AV-157): position back to 0 keeping the watched mark — behind a
+  // confirmation, since it discards the saved position.
+  async function rewindEpisode(episode: EpisodeEntry) {
+    if (!window.confirm(`Rewind episode ${episode.number} to the beginning? Your watched mark is kept.`)) return
+    const season = seasonKeyFor(detail?.season, detail?.seasonYear)
+    try {
+      const res = await api.saveProgress(rewindPayload(mediaId, season, episode.number))
+      setEpisodeProgress((prev) => new Map(prev).set(episode.number, res.entry.state))
+      toast(`Episode ${episode.number} rewound to the beginning`)
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not rewind the episode', 'err')
+    }
+  }
+
+  // Reset (AV-157): remove EVERY progress record of this show for the
+  // signed-in profile — destructive, so it always confirms first.
+  async function resetShowProgress() {
+    if (!window.confirm('Reset all playback progress for this show? Every saved position and watched mark will be removed.')) return
+    try {
+      const res = await api.resetProgress(mediaId)
+      setEpisodeProgress(new Map())
+      toast(`Progress reset — ${res.removed} ${res.removed === 1 ? 'entry' : 'entries'} removed`)
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not reset progress', 'err')
     }
   }
 
@@ -718,6 +757,16 @@ export default function AnimeDetailPage() {
                   <span className="text-[10px] text-white/25">
                     {episodes.filter((e) => e.hasMetadata).length} with titles
                   </span>
+                  {episodeProgress.size > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => void resetShowProgress()}
+                      className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-white/35 transition hover:text-red-300"
+                      title="Reset all playback progress for this show"
+                    >
+                      <RotateCcw size={10} /> Reset progress
+                    </button>
+                  ) : null}
                 </span>
               ) : null
             }
@@ -733,6 +782,7 @@ export default function AnimeDetailPage() {
                     canPlay={Boolean(detail.airedEpisodes >= episode.number || detail.status === 'FINISHED')}
                     watched={isWatchedState(episodeProgress.get(episode.number))}
                     onToggleWatched={() => void toggleEpisodeWatched(episode)}
+                    onRewind={() => void rewindEpisode(episode)}
                     onPlay={() => openDetail(detail, { watch: true })}
                     onDownload={() => openDetail(detail)}
                   />

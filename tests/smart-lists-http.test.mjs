@@ -154,3 +154,21 @@ test('mark-as-watched and mark-as-unwatched payloads land correctly (AV-156)', a
   const entries = (await req('/api/progress')).body.entries
   assert.equal(entries.filter((entry) => entry.mediaId === 506 && entry.season === 'fall-2026' && entry.episode === 3).length, 1, 'marks upsert, never duplicate')
 })
+test('rewind keeps the mark, reset clears the show (AV-157)', async () => {
+  // Rewind contract (src/lib/progress.ts rewindPayload): position 0 with NO
+  // explicit state — the episode mark survives a deliberate rewatch.
+  await req('/api/progress', 'PUT', { mediaId: 507, season: 'winter-2026', episode: 1, positionSeconds: 500, state: 'completed', runtimeSeconds: 1440 })
+  const rewound = await req('/api/progress', 'PUT', { mediaId: 507, season: 'winter-2026', episode: 1, positionSeconds: 0 })
+  assert.equal(rewound.status, 200)
+  assert.equal(rewound.body.entry.positionSeconds, 0)
+  assert.equal(rewound.body.entry.state, 'completed', 'rewinding keeps the watched mark')
+  await req('/api/progress', 'PUT', { mediaId: 507, season: 'winter-2026', episode: 2, positionSeconds: 90, runtimeSeconds: 1440 })
+  await req('/api/progress', 'PUT', { mediaId: 508, season: 'winter-2026', episode: 1, positionSeconds: 30 })
+  // Reset contract (api.resetProgress): per-PROFILE, per-SHOW removal only.
+  const reset = await req('/api/progress', 'DELETE', { mediaId: 507 })
+  assert.equal(reset.status, 200)
+  assert.equal(reset.body.removed, 2, 'every record of the show is removed')
+  const entries = (await req('/api/progress')).body.entries
+  assert.ok(!entries.some((entry) => entry.mediaId === 507), 'no show records survive the reset')
+  assert.ok(entries.some((entry) => entry.mediaId === 508), 'other shows are untouched')
+})

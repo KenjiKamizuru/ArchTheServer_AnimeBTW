@@ -52,3 +52,17 @@ export function markUnwatchedPayload(
 ): { mediaId: number; season: string; episode: number; positionSeconds: number; state: 'started' } {
   return { mediaId, season, episode, positionSeconds: 0, state: 'started' }
 }
+
+/**
+ * Rewind (AV-157): position back to 0 with NO explicit state — the episode
+ * state is preserved (a completed/manual mark survives a deliberate
+ * rewatch; AV-154 semantics). Distinct from markUnwatchedPayload, which
+ * clears the mark itself.
+ */
+export function rewindPayload(
+  mediaId: number,
+  season: string,
+  episode: number,
+): { mediaId: number; season: string; episode: number; positionSeconds: number } {
+  return { mediaId, season, episode, positionSeconds: 0 }
+}
