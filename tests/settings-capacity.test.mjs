@@ -117,3 +117,21 @@ test('player shortcuts persist and conflicts are rejected (AV-179)', async () =>
   assert.equal(run.status, 0, run.stderr)
   assert.deepEqual(JSON.parse(run.stdout), {}, 'shortcuts survive a restart')
 })
+
+test('skip intervals are configurable within bounds (AV-183/184)', async () => {
+  assert.equal(settings.get().skipForwardSeconds, 10)
+  assert.equal(settings.get().skipBackwardSeconds, 10)
+  await settings.save({ skipForwardSeconds: 30, skipBackwardSeconds: 15 })
+  assert.equal(settings.get().skipForwardSeconds, 30)
+  assert.equal(settings.get().skipBackwardSeconds, 15)
+  // out-of-range values clamp to the 5–600 window, never store nonsense
+  await settings.save({ skipForwardSeconds: 2 })
+  assert.equal(settings.get().skipForwardSeconds, 5)
+  await settings.save({ skipBackwardSeconds: 5000 })
+  assert.equal(settings.get().skipBackwardSeconds, 600)
+  await settings.save({ skipForwardSeconds: 10, skipBackwardSeconds: 10 })
+  const script = `import * as s from ${JSON.stringify(new URL('../server/settings.mjs', import.meta.url).href)}; await s.init(); console.log(JSON.stringify([s.get().skipForwardSeconds, s.get().skipBackwardSeconds]))`
+  const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, ANIMEVAULT_DATA: dir }, encoding: 'utf8' })
+  assert.equal(run.status, 0, run.stderr)
+  assert.deepEqual(JSON.parse(run.stdout), [10, 10], 'intervals survive a restart')
+})

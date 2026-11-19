@@ -4,7 +4,7 @@
 // Scope decisions (recorded):
 // - The action set is the player's own controls: play/pause, seek ±, prev/
 //   next episode, mute, close. Fullscreen is AV-190's scope; the skip
-//   INTERVALS are AV-183/184's (seek step is a fixed constant here).
+//   INTERVALS are settings (AV-183/184), not shortcut concerns.
 // - Keys are normalized KeyboardEvent.key values: single characters
 //   lowercased (' ' for space survives — it is not trimmed), named keys
 //   verbatim ('ArrowLeft', 'Escape'), legacy 'Space'/'spacebar' mapped to
@@ -12,8 +12,6 @@
 //   and what conflict detection can keep unambiguous.
 // - Conflicts (two actions on one key) are DETECTED here and REJECTED at
 //   the settings boundary, so resolution is always unambiguous.
-
-export const SEEK_STEP_SECONDS = 10
 
 export const SHORTCUT_ACTIONS = [
   'play-pause',

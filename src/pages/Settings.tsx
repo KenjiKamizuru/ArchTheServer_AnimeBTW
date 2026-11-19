@@ -54,6 +54,8 @@ function editable(s: AppSettings) {
     autoplayNextEpisode: s.autoplayNextEpisode,
     privateHistoryMode: s.privateHistoryMode,
     playerShortcuts: s.playerShortcuts,
+    skipForwardSeconds: s.skipForwardSeconds,
+    skipBackwardSeconds: s.skipBackwardSeconds,
     allowedHostsText: (s.allowedExternalHosts ?? []).join('\n'),
     theme: s.theme,
     systemTheme: s.systemTheme,
@@ -1651,6 +1653,8 @@ export default function SettingsPage() {
         autoplayNextEpisode: draft.autoplayNextEpisode,
         privateHistoryMode: draft.privateHistoryMode,
         playerShortcuts: draft.playerShortcuts,
+        skipForwardSeconds: draft.skipForwardSeconds,
+        skipBackwardSeconds: draft.skipBackwardSeconds,
         allowedExternalHosts,
         theme: draft.theme,
         systemTheme: draft.systemTheme,
@@ -1966,6 +1970,32 @@ export default function SettingsPage() {
             <span className="mt-1 block text-[11px] text-white/35">
               How often the player stores your playback position while watching (5–300 seconds). The position is also saved when playback stops.
             </span>
+          </label>
+
+          <label className="block">
+            <span className="mb-1 block text-[11px] text-white/45">Skip forward (seconds)</span>
+            <input
+              type="number"
+              min={5}
+              max={600}
+              value={draft.skipForwardSeconds}
+              onChange={(event) => set('skipForwardSeconds', Number(event.target.value))}
+              className="w-full rounded-lg bg-ink-800 px-2.5 py-2 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-accent/60"
+            />
+            <span className="mt-1 block text-[11px] text-white/35">How far the seek-forward shortcut jumps (5–600 seconds).</span>
+          </label>
+
+          <label className="block">
+            <span className="mb-1 block text-[11px] text-white/45">Skip backward (seconds)</span>
+            <input
+              type="number"
+              min={5}
+              max={600}
+              value={draft.skipBackwardSeconds}
+              onChange={(event) => set('skipBackwardSeconds', Number(event.target.value))}
+              className="w-full rounded-lg bg-ink-800 px-2.5 py-2 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-accent/60"
+            />
+            <span className="mt-1 block text-[11px] text-white/35">How far the seek-backward shortcut jumps (5–600 seconds).</span>
           </label>
 
           <label className="flex items-center gap-2 sm:col-span-2">

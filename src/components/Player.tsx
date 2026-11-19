@@ -17,7 +17,7 @@ import { createWatchSession } from '../lib/watchSession'
 import { playerLoadingPhase, readinessLabels } from '../lib/playerLoading'
 import { recoveryActionLabel, recoveryActions } from '../lib/playerRecovery'
 import { shouldTogglePlayback } from '../lib/playerControls'
-import { actionForKey, effectiveShortcuts, SEEK_STEP_SECONDS } from '../lib/playerShortcuts'
+import { actionForKey, effectiveShortcuts } from '../lib/playerShortcuts'
 import { concatBytes, Mp4BoxTracker, selectMseMimeType } from '../lib/mp4'
 import type { LibraryItem } from '../types'
 
@@ -211,9 +211,11 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
         if (video.paused) void video.play().catch(() => {})
         else video.pause()
       } else if (action === 'seek-back' && video) {
-        video.currentTime = Math.max(0, video.currentTime - SEEK_STEP_SECONDS)
+        // AV-183/184: the skip intervals are user settings (5–600 s).
+        video.currentTime = Math.max(0, video.currentTime - settings.skipBackwardSeconds)
       } else if (action === 'seek-forward' && video) {
-        video.currentTime = Math.min(video.duration || video.currentTime + SEEK_STEP_SECONDS, video.currentTime + SEEK_STEP_SECONDS)
+        const step = settings.skipForwardSeconds
+        video.currentTime = Math.min(video.duration || video.currentTime + step, video.currentTime + step)
       } else if (action === 'prev-episode') {
         source.onPrev?.()
       } else if (action === 'next-episode') {
@@ -229,7 +231,7 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
       document.removeEventListener('keydown', onKey)
       document.body.style.overflow = previous
     }
-  }, [onClose, source, settings.playerShortcuts])
+  }, [onClose, source, settings.playerShortcuts, settings.skipBackwardSeconds, settings.skipForwardSeconds])
 
   const videoSrc = `${urls.video}${urls.video.includes('?') ? '&' : '?'}attempt=${attempt}`
   const subtitleSrc = urls.subtitle

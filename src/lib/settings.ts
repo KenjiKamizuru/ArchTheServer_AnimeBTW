@@ -15,6 +15,8 @@ let state: AppSettings = {
   autoplayNextEpisode: true,
   privateHistoryMode: false,
   playerShortcuts: {},
+  skipForwardSeconds: 10,
+  skipBackwardSeconds: 10,
   allowedExternalHosts: [],
   envExternalHostsConfigured: false,
   theme: 'dark',

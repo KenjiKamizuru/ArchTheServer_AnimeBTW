@@ -76,6 +76,8 @@ const DEFAULTS = {
   autoplayNextEpisode: true,
   privateHistoryMode: false,
   playerShortcuts: {},
+  skipForwardSeconds: 10,
+  skipBackwardSeconds: 10,
   allowedExternalHosts: [],
   theme: 'dark',
   systemTheme: false,
@@ -132,6 +134,9 @@ export async function init() {
         // AV-179: player shortcut overrides (action → normalized key);
         // {} means the built-in defaults. Conflicts are rejected on save.
         playerShortcuts: sanitizeShortcuts(parsed.playerShortcuts),
+        // AV-183/184: skip intervals for the seek actions (5–600 seconds).
+        skipForwardSeconds: clampInt(parsed.skipForwardSeconds, 5, 600, 10),
+        skipBackwardSeconds: clampInt(parsed.skipBackwardSeconds, 5, 600, 10),
         allowedExternalHosts: Array.isArray(parsed.allowedExternalHosts)
           ? safeNormalizeHosts(parsed.allowedExternalHosts)
           : [],
@@ -194,6 +199,8 @@ export function get() {
     autoplayNextEpisode: state.autoplayNextEpisode,
     privateHistoryMode: state.privateHistoryMode,
     playerShortcuts: state.playerShortcuts,
+    skipForwardSeconds: state.skipForwardSeconds,
+    skipBackwardSeconds: state.skipBackwardSeconds,
     allowedExternalHosts: [...state.allowedExternalHosts],
     envExternalHostsConfigured: Boolean(String(process.env.ALLOWED_SOURCE_HOSTS ?? '').trim()),
     theme: state.theme,
@@ -255,6 +262,14 @@ export async function save(patch = {}) {
 
   if (patch.playerShortcuts !== undefined) {
     next.playerShortcuts = sanitizeShortcuts(patch.playerShortcuts, true)
+  }
+
+  if (patch.skipForwardSeconds !== undefined) {
+    next.skipForwardSeconds = clampInt(patch.skipForwardSeconds, 5, 600, next.skipForwardSeconds)
+  }
+
+  if (patch.skipBackwardSeconds !== undefined) {
+    next.skipBackwardSeconds = clampInt(patch.skipBackwardSeconds, 5, 600, next.skipBackwardSeconds)
   }
 
   if (patch.registrationOpen !== undefined) {

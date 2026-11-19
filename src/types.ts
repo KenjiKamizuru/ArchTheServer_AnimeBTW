@@ -460,6 +460,8 @@ export interface AppSettings {
   autoplayNextEpisode: boolean
   privateHistoryMode: boolean
   playerShortcuts: Record<string, string>
+  skipForwardSeconds: number
+  skipBackwardSeconds: number
   allowedExternalHosts: string[]
   envExternalHostsConfigured: boolean
   theme: 'dark' | 'light'
