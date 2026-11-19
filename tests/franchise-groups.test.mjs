@@ -2,8 +2,10 @@
 // partitioning + relations.continuationKind annotations.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildFranchiseGroups } from '../server/explore.mjs'
+import { buildFranchiseGroups, franchiseGroupSummaries } from '../server/explore.mjs'
 import { continuationKind } from '../server/relations.mjs'
+import { normalize } from '../server/anilist.mjs'
+import { createAnimeRecord } from '../server/catalog.mjs'
 
 const slimeS1 = {
   id: 98459,
@@ -82,4 +84,58 @@ test('continuationKind annotates related seasons (split-cour from official title
   )
   assert.equal(continuationKind({ relationType: 'PREQUEL' }), 'prequel')
   assert.equal(continuationKind({ relationType: 'SPIN_OFF' }), 'spin-off')
+})
+
+// ── AV-133b wiring: API media → normalize → record → buildFranchiseGroups ──
+// (The production path previously DROPPED relations in normalize/createAnimeRecord,
+// so buildFranchiseGroups saw none and /api/franchises returned only singletons.)
+
+test('wiring: GraphQL relation edges survive normalize and record building', () => {
+  const raw = {
+    id: 98459,
+    title: { romaji: 'Tensura', english: 'Slime' },
+    seasonYear: 2018,
+    relations: {
+      edges: [
+        { relationType: 'SEQUEL', node: { id: 114745, type: 'ANIME', format: 'TV', title: { english: 'S2' } } },
+        { relationType: 'OTHER', node: { id: 999999, type: 'ANIME' } },
+      ],
+    },
+  }
+  const record = normalize(raw)
+  assert.deepEqual(record.relations, [
+    { relationType: 'SEQUEL', node: { id: 114745 }, format: 'TV' },
+    { relationType: 'OTHER', node: { id: 999999 } },
+  ])
+  const s2 = normalize({
+    id: 114745,
+    title: { romaji: 'Tensura 2nd Season' },
+    seasonYear: 2021,
+    relations: { edges: [{ relationType: 'PREQUEL', node: { id: 98459 } }] },
+  })
+  const groups = buildFranchiseGroups([record, s2])
+  assert.equal(groups.length, 1, 'the pair unions into one franchise')
+  assert.equal(groups[0].count, 2)
+  assert.equal(groups[0].media.some((m) => m.id === 98459 && m.relationKind === 'main'), true)
+})
+
+test('records drop malformed relation edges and default to none', () => {
+  const record = createAnimeRecord({
+    id: 1,
+    relations: [{ relationType: 'SEQUEL', node: { id: 'x' } }, null, { node: { id: 5 } }, { relationType: 7, node: { id: 6 } }],
+  })
+  assert.deepEqual(record.relations, [
+    { relationType: null, node: { id: 5 } },
+    { relationType: null, node: { id: 6 } },
+  ])
+  assert.deepEqual(createAnimeRecord({ id: 2 }).relations, [], 'records without relations carry none')
+})
+
+test('franchise group summaries list members and ungrouped ids (AV-133b)', () => {
+  const { groups, ungrouped } = franchiseGroupSummaries([slimeS1, slimeS2], [98459, 114745, 42])
+  assert.equal(groups.length, 1)
+  assert.deepEqual(groups[0].mediaIds.sort((a, b) => a - b), [98459, 114745])
+  assert.equal(groups[0].title, slimeS1.title)
+  assert.deepEqual(ungrouped, [42], 'ids without franchise partners stay ungrouped')
+  assert.deepEqual(franchiseGroupSummaries([], [1, 2]), { groups: [], ungrouped: [1, 2] })
 })

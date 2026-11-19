@@ -9,6 +9,24 @@
  * and Unix seconds for nextEpisode.airingAt. The factory supplies stable
  * defaults and copies collections so adapter inputs cannot mutate the record.
  */
+// Franchise relation edges (AV-133b wiring fix): the exact shape
+// explore.buildFranchiseGroups consumes — [{ relationType, node: { id }, format? }].
+// Malformed edges are dropped rather than failing the whole record.
+function normalizeRelations(input) {
+  if (!Array.isArray(input)) return []
+  const edges = []
+  for (const edge of input.slice(0, 100)) {
+    const id = Number(edge?.node?.id)
+    if (!Number.isSafeInteger(id) || id <= 0) continue
+    edges.push({
+      relationType: typeof edge?.relationType === 'string' ? edge.relationType : null,
+      node: { id },
+      ...(typeof edge?.format === 'string' ? { format: edge.format } : {}),
+    })
+  }
+  return edges
+}
+
 export function createAnimeRecord(input, options = {}) {
   if (!input || typeof input !== 'object' || !Number.isSafeInteger(input.id) || input.id <= 0) {
     throw new TypeError('Anime record requires a positive safe integer id')
@@ -84,6 +102,9 @@ export function createAnimeRecord(input, options = {}) {
     characterNames: normalizeNameList(input.characterNames),
     // Franchise neighbourhood for relationship search (AV-060).
     relationNames: normalizeNameList(input.relationNames),
+    // Verified relation edges for franchise grouping (AV-133b): records built
+    // before this field existed simply carry none (treated as []).
+    relations: normalizeRelations(input.relations),
     relationTypes: normalizeNameList(input.relationTypes),
     // Episode-title index for episode search (AV-062).
     episodeTitles: normalizeNameList(input.episodeTitles, 24),

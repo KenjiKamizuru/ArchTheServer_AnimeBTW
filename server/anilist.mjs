@@ -194,7 +194,7 @@ function airedEpisodes(media) {
   return media.episodes ?? 0
 }
 
-function normalize(media) {
+export function normalize(media) {
   if (!media) return null
   const links = normalizeExternalLinks(media.externalLinks)
   const title = media.title?.english || media.title?.romaji || media.title?.native || `Anime #${media.id}`
@@ -288,6 +288,16 @@ function normalize(media) {
         .filter((e) => e?.node?.type === 'ANIME')
         .map((e) => e?.node?.title?.english || e?.node?.title?.romaji || e?.node?.title?.native),
     ),
+    // Relation EDGES for franchise grouping (AV-133b wiring fix): carried in
+    // the shape explore.buildFranchiseGroups consumes; the record normalizer
+    // re-validates them.
+    relations: (media.relations?.edges ?? [])
+      .filter((e) => Number.isSafeInteger(Number(e?.node?.id)) && Number(e?.node?.id) > 0)
+      .map((e) => ({
+        relationType: e?.relationType ?? null,
+        node: { id: Number(e.node.id) },
+        ...(typeof e?.node?.format === 'string' ? { format: e.node.format } : {}),
+      })),
     relationTypes: normalizeNameList(
       (media.relations?.edges ?? [])
         .filter((e) => e?.node?.type === 'ANIME')
@@ -568,7 +578,7 @@ export async function seasonFranchises({ season = '', year } = {}) {
         Page(page: $page, perPage: 50) {
           media(season: $season, seasonYear: $seasonYear, type: ANIME, sort: POPULARITY_DESC, isAdult: false) {
             ${MEDIA_FIELDS}
-            relations { relationType nodes { id title { romaji english } seasonYear } }
+            relations { edges { relationType node { id format } } }
           }
         }
       }`,
@@ -577,6 +587,29 @@ export async function seasonFranchises({ season = '', year } = {}) {
     const media = (data.Page?.media ?? []).map(normalize).filter(Boolean)
     return { season: resolved.season, year: resolved.year, media }
   })
+}
+
+/** Media with relation EDGES for a set of ids (AV-133b): batched `id_in`
+ * pages, cached per chunk. Ids the API does not return are silently absent. */
+export async function mediaWithRelations(ids) {
+  const unique = [...new Set((Array.isArray(ids) ? ids : []).map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))]
+  const out = []
+  for (let i = 0; i < unique.length; i += 50) {
+    const chunk = unique.slice(i, i + 50)
+    const media = await cached(`media-relations:${chunk.join(',')}`, async () => {
+      const data = await gql(
+        `query MediaRelations($id_in: [Int], $page: Int) {
+          Page(page: $page, perPage: 50) {
+            media(id_in: $id_in, type: ANIME) { ${MEDIA_FIELDS} relations { edges { relationType node { id format } } } }
+          }
+        }`,
+        { id_in: chunk, page: 1 },
+      )
+      return (data.Page?.media ?? []).map(normalize).filter(Boolean)
+    })
+    out.push(...media)
+  }
+  return out
 }
 
 /** Newest catalog entries (highest IDs first). */

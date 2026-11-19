@@ -239,6 +239,18 @@ export function buildFranchiseGroups(media) {
     .sort((a, b) => b.count - a.count || a.title.localeCompare(b.title))
 }
 
+/** Compact franchise group cards for list grouping (AV-133b). */
+export function franchiseGroupSummaries(media, allIds = []) {
+  const groups = buildFranchiseGroups(media).map((group) => ({
+    key: group.key,
+    title: group.title,
+    count: group.count,
+    mediaIds: group.media.map((member) => member.id),
+  }))
+  const grouped = new Set(groups.flatMap((group) => group.mediaIds))
+  return { groups, ungrouped: allIds.filter((id) => !grouped.has(id)) }
+}
+
 /** Human label for a decade chip, e.g. 1990 → "1990s". */
 export function decadeLabel(year) {
   // `Number(null) === 0` and `Number('') === 0`, so guard those before coercing

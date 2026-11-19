@@ -1735,6 +1735,17 @@ app.post('/api/lists/:id/move', limitMutations, wrap(async (req, res) => {
   res.json(await listStore.moveEntries(req.params.id, req.body?.to, req.body?.mediaIds))
 }))
 
+// Franchise grouping for a saved list (AV-133b): refetches RELATION data
+// (online relationship data, batched + cached) for the list's media ids —
+// never title matching.
+app.get('/api/lists/:id/franchise-groups', limitOutbound, wrap(async (req, res) => {
+  const list = listStore.readList(req.params.id)
+  const ids = list.entries.map((entry) => entry.mediaId)
+  if (!ids.length) return res.json({ groups: [], ungrouped: [] })
+  const media = await anilist.mediaWithRelations(ids)
+  res.json(explore.franchiseGroupSummaries(media, ids))
+}))
+
 // Bulk removal with undo snapshots + restore (AV-135).
 app.post('/api/lists/:id/remove', limitMutations, wrap(async (req, res) => {
   res.json(await listStore.removeEntries(req.params.id, req.body?.mediaIds))

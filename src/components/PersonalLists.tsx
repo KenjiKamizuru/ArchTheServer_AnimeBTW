@@ -15,7 +15,11 @@ type UndoRecord = { media: Media; status: string | null; addedAt: number; note: 
 // relations refetch (online relationship data) and is deliberately separate.
 const SEASON_LABELS: Record<string, string> = { WINTER: 'Winter', SPRING: 'Spring', SUMMER: 'Summer', FALL: 'Fall' }
 
-function buildGroups(entries: Entry[], groupBy: 'none' | 'season' | 'genre') {
+function buildGroups(
+  entries: Entry[],
+  groupBy: 'none' | 'season' | 'genre' | 'franchise',
+  franchiseLabels?: Map<number, { key: string; label: string }>,
+) {
   if (groupBy === 'none') return [{ key: '', label: '', items: entries }]
   const SEASON_ORDER: Record<string, number> = { WINTER: 0, SPRING: 1, SUMMER: 2, FALL: 3 }
   const buckets = new Map<string, { label: string; sort: number; items: Entry[] }>()
@@ -30,6 +34,11 @@ function buildGroups(entries: Entry[], groupBy: 'none' | 'season' | 'genre') {
       label = key === 'unknown' ? 'Unknown season' : key
       // Numeric (year, season) so ordering is chronological, not lexical.
       sort = key === 'unknown' ? -1 : (year ?? 0) * 10 + (SEASON_ORDER[season ?? 'WINTER'] ?? 0)
+    } else if (groupBy === 'franchise') {
+      const found = franchiseLabels?.get(entry.mediaId)
+      key = found ? found.key : 'standalone'
+      label = found ? found.label : 'Standalone'
+      sort = 0
     } else {
       const genre = entry.media.genres[0] ?? ''
       key = genre || 'none'
@@ -41,8 +50,8 @@ function buildGroups(entries: Entry[], groupBy: 'none' | 'season' | 'genre') {
     buckets.set(key, bucket)
   }
   return [...buckets.entries()].map(([key, bucket]) => ({ key, ...bucket })).sort((a, b) => {
-    if (a.key === 'unknown' || a.key === 'none') return 1
-    if (b.key === 'unknown' || b.key === 'none') return -1
+    if (a.key === 'unknown' || a.key === 'none' || a.key === 'standalone') return 1
+    if (b.key === 'unknown' || b.key === 'none' || b.key === 'standalone') return -1
     return groupBy === 'season' ? b.sort - a.sort : a.label.localeCompare(b.label)
   })
 }
@@ -95,7 +104,8 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
   const [selected, setSelected] = useState<Set<number>>(() => new Set())
   const [moveTarget, setMoveTarget] = useState('')
   const [undo, setUndo] = useState<{ listId: string; records: UndoRecord[]; count: number } | null>(null)
-  const [groupBy, setGroupBy] = useState<'none' | 'season' | 'genre'>('none')
+  const [groupBy, setGroupBy] = useState<'none' | 'season' | 'genre' | 'franchise'>('none')
+  const [franchiseLabels, setFranchiseLabels] = useState<Map<number, { key: string; label: string }>>(new Map())
   useEffect(() => {
     let cancelled = false
     setList(null)
@@ -161,6 +171,21 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
     const timer = setTimeout(() => setUndo(null), 10_000)
     return () => clearTimeout(timer)
   }, [undo])
+  // Franchise grouping (AV-133b): groups come from the server's relations
+  // refetch (online relationship data) for the current list.
+  useEffect(() => {
+    if (groupBy !== 'franchise') return
+    let cancelled = false
+    request<{ groups: { key: string; title: string; mediaIds: number[] }[] }>(`/api/lists/${encodeURIComponent(active)}/franchise-groups`)
+      .then((res) => {
+        if (cancelled) return
+        const map = new Map<number, { key: string; label: string }>()
+        for (const group of res.groups) for (const id of group.mediaIds) map.set(id, { key: group.key, label: group.title })
+        setFranchiseLabels(map)
+      })
+      .catch((err: Error) => { if (!cancelled) setError(err.message) })
+    return () => { cancelled = true }
+  }, [groupBy, active, revision])
   const button = 'rounded-lg bg-white/10 px-3 py-2 text-xs text-white hover:bg-white/20 disabled:opacity-50'
   // Capacity warnings (AV-140): surface at 90% of the installation caps so
   // users can clean up before adds start failing; users can disable them.
@@ -299,10 +324,11 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
             <option value="order">Custom order</option>
           </select>
           <label className="text-sm text-white/70" htmlFor="list-group">Group by</label>
-          <select id="list-group" className={input} value={groupBy} onChange={(event) => setGroupBy(event.target.value as 'none' | 'season' | 'genre')}>
+          <select id="list-group" className={input} value={groupBy} onChange={(event) => setGroupBy(event.target.value as 'none' | 'season' | 'genre' | 'franchise')}>
             <option value="none">No grouping</option>
             <option value="season">Season</option>
             <option value="genre">Genre</option>
+            <option value="franchise">Franchise</option>
           </select>
         </div>
         {pick && <p role="status" className="mt-3 text-sm text-white/70">Try <Link className="text-white underline" to={`/anime/${pick.mediaId}`}>{pick.media.title}</Link></p>}
@@ -314,7 +340,7 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
           </select>
           <button className={button} disabled={busy || !bookmarkId}>Add to list</button>
         </form>
-        {list.entries.length === 0 ? <p className="mt-3 text-sm text-white/50">No titles in this list yet.</p> : buildGroups(list.entries, groupBy).map((group) => (
+        {list.entries.length === 0 ? <p className="mt-3 text-sm text-white/50">No titles in this list yet.</p> : buildGroups(list.entries, groupBy, franchiseLabels).map((group) => (
           <div key={group.key || 'all'}>
             {groupBy !== 'none' ? (
               <h4 className="mt-4 text-xs font-semibold uppercase tracking-wide text-white/40">{group.label} · {group.items.length}</h4>
