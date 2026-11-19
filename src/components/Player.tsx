@@ -15,6 +15,7 @@ import { useSettings } from '../lib/settings'
 import { createProgressWriter } from '../lib/progressWriter'
 import { createWatchSession } from '../lib/watchSession'
 import { playerLoadingPhase, readinessLabels } from '../lib/playerLoading'
+import { recoveryActionLabel, recoveryActions } from '../lib/playerRecovery'
 import { concatBytes, Mp4BoxTracker, selectMseMimeType } from '../lib/mp4'
 import type { LibraryItem } from '../types'
 
@@ -784,38 +785,75 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
             </div>
           ) : null}
 
-          {error ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 rounded-xl bg-black/85 px-6 text-center">
-              <AlertTriangle size={28} className="text-amber-300" />
-              <p className="max-w-md text-sm leading-relaxed text-white/70">{error}</p>
-              <div className="flex flex-wrap items-center justify-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
+          {/* AV-177: a real error screen — clear heading, the specific
+              detail, and the ordered recovery actions (retry, path switch,
+              escape hatches, close) from the tested selection logic. */}
+          {error
+            ? (() => {
+                const actions = recoveryActions({
+                  sourceKind: source.kind,
+                  onPrimaryPath:
+                    source.kind === 'live' ? useMse : Boolean(source.directPlayable && !localRemuxFallback),
+                  downloadAvailable: Boolean(urls.download),
+                })
+                const act = (action: string) => {
+                  if (action === 'retry') {
                     setError(null)
                     setLoading(true)
                     setMseFallback(false)
                     setLocalRemuxFallback(false)
                     setAttempt((value) => value + 1)
-                  }}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-black transition hover:bg-accent-600"
-                >
-                  <RotateCw size={13} />
-                  Try again
-                </button>
-                {urls.download ? (
-                  <a
-                    href={urls.download}
-                    download={urls.fileName ?? undefined}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-2 text-xs font-medium text-white/85 ring-1 ring-white/15 transition hover:bg-white/15"
-                  >
-                    <Download size={13} />
-                    Save file to device
-                  </a>
-                ) : null}
-              </div>
-            </div>
-          ) : null}
+                  } else if (action === 'alternative') {
+                    setError(null)
+                    setLoading(true)
+                    if (source.kind === 'live') setMseFallback(true)
+                    else setLocalRemuxFallback(true)
+                    setAttempt((value) => value + 1)
+                  } else if (action === 'close') {
+                    onClose()
+                  }
+                }
+                return (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 rounded-xl bg-black/85 px-6 text-center">
+                    <AlertTriangle size={28} className="text-amber-300" />
+                    <h3 className="text-sm font-semibold text-white">
+                      Couldn't play this {source.kind === 'local' ? 'file' : 'stream'}
+                    </h3>
+                    <p className="max-w-md text-sm leading-relaxed text-white/70">{error}</p>
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      {actions.map((action) =>
+                        action === 'download' ? (
+                          <a
+                            key={action}
+                            href={urls.download ?? undefined}
+                            download={urls.fileName ?? undefined}
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-2 text-xs font-medium text-white/85 ring-1 ring-white/15 transition hover:bg-white/15"
+                          >
+                            <Download size={13} />
+                            {recoveryActionLabel(action, source.kind)}
+                          </a>
+                        ) : (
+                          <button
+                            key={action}
+                            type="button"
+                            onClick={() => act(action)}
+                            className={
+                              action === 'retry'
+                                ? 'inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-black transition hover:bg-accent-600'
+                                : 'inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-2 text-xs font-medium text-white/85 ring-1 ring-white/15 transition hover:bg-white/15'
+                            }
+                          >
+                            {action === 'retry' ? <RotateCw size={13} /> : null}
+                            {action === 'close' ? <X size={13} /> : null}
+                            {recoveryActionLabel(action, source.kind)}
+                          </button>
+                        ),
+                      )}
+                    </div>
+                  </div>
+                )
+              })()
+            : null}
         </div>
       </div>
     </div>
