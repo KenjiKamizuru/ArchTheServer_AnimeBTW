@@ -33,6 +33,15 @@ export function canUsePictureInPicture(env: {
 }
 
 /**
+ * AV-190: what the Escape key means. While fullscreen is active it exits
+ * fullscreen FIRST — closing the player instead would be the classic
+ * unreliable-exit trap (the user's one escape hatch nuking the session).
+ */
+export function escapeAction(fullscreenActive: boolean): 'exit-fullscreen' | 'close' {
+  return fullscreenActive ? 'exit-fullscreen' : 'close'
+}
+
+/**
  * Whether a click at `offsetY` (relative to the video element's top edge,
  * in CSS pixels) should toggle play/pause. False inside the bottom
  * controls strip, outside the element, and for degenerate heights where

@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { AlertTriangle, ChevronLeft, ChevronRight, Download, HardDrive, Loader2, PictureInPicture2, Radio, RotateCw, X } from 'lucide-react'
+import { AlertTriangle, ChevronLeft, ChevronRight, Download, HardDrive, Loader2, Maximize, Minimize, PictureInPicture2, Radio, RotateCw, X } from 'lucide-react'
 import { api } from '../lib/api'
 import { formatEpisodeCode } from '../lib/format'
 import { useSettings } from '../lib/settings'
@@ -16,7 +16,7 @@ import { createProgressWriter } from '../lib/progressWriter'
 import { createWatchSession } from '../lib/watchSession'
 import { playerLoadingPhase, readinessLabels } from '../lib/playerLoading'
 import { recoveryActionLabel, recoveryActions } from '../lib/playerRecovery'
-import { canUsePictureInPicture, normalizePlaybackSpeed, PLAYBACK_SPEEDS, shouldTogglePlayback } from '../lib/playerControls'
+import { canUsePictureInPicture, escapeAction, normalizePlaybackSpeed, PLAYBACK_SPEEDS, shouldTogglePlayback } from '../lib/playerControls'
 import { actionForKey, effectiveShortcuts } from '../lib/playerShortcuts'
 import { saveSettings } from '../lib/settings'
 import { concatBytes, Mp4BoxTracker, selectMseMimeType } from '../lib/mp4'
@@ -170,6 +170,8 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
   const [autoCountdown, setAutoCountdown] = useState<number | null>(null)
   const [autoCancelled, setAutoCancelled] = useState(false)
   const [pipActive, setPipActive] = useState(false)
+  const [fsActive, setFsActive] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const autoPlayedRef = useRef(false)
   const settings = useSettings()
@@ -207,7 +209,12 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
       event.preventDefault()
       const video = videoRef.current
       if (action === 'close') {
-        onClose()
+        // AV-190: Escape exits fullscreen FIRST — never closes the player.
+        if (escapeAction(Boolean(document.fullscreenElement)) === 'exit-fullscreen') {
+          void document.exitFullscreen().catch(() => {})
+        } else {
+          onClose()
+        }
       } else if (action === 'play-pause') {
         if (!video) return
         if (video.paused) void video.play().catch(() => {})
@@ -366,6 +373,14 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
       video.removeEventListener('leavepictureinpicture', onLeave)
     }
   }, [videoSrc, useMse])
+
+  // AV-190: fullscreen state follows `fullscreenchange`, so the button,
+  // Esc handling, and the browser's own exit (Esc, F11) never disagree.
+  useEffect(() => {
+    const onChange = () => setFsActive(document.fullscreenElement === containerRef.current)
+    document.addEventListener('fullscreenchange', onChange)
+    return () => document.removeEventListener('fullscreenchange', onChange)
+  }, [])
 
   // Auto-advance (AV-160): when the toggle is on, the next episode starts
   // after a short countdown the viewer can cancel — or take immediately.
@@ -630,6 +645,7 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
 
   return (
     <div
+      ref={containerRef}
       className="fixed inset-0 z-[60] flex flex-col bg-ink-950/95 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
@@ -679,6 +695,28 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
             <ChevronRight size={18} />
           </button>
         ) : null}
+
+        {/* AV-190: fullscreen with reliable exit (button AND Esc both
+            leave fullscreen before the player can ever close). */}
+        <button
+          type="button"
+          onClick={() => {
+            void (async () => {
+              try {
+                if (document.fullscreenElement) await document.exitFullscreen()
+                else await containerRef.current?.requestFullscreen()
+              } catch {
+                // Best-effort: unsupported contexts refuse; state stays
+                // truthful via fullscreenchange either way.
+              }
+            })()
+          }}
+          className="shrink-0 rounded-full bg-white/5 p-2 text-white/60 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-white"
+          aria-label={fsActive ? 'Exit fullscreen' : 'Enter fullscreen'}
+          title={fsActive ? 'Exit fullscreen' : 'Enter fullscreen'}
+        >
+          {fsActive ? <Minimize size={18} /> : <Maximize size={18} />}
+        </button>
 
         {/* AV-189: picture-in-picture, only where the browser allows it. */}
         {canUsePictureInPicture(document) ? (

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { canUsePictureInPicture, NATIVE_CONTROLS_ZONE_PX, normalizePlaybackSpeed, shouldTogglePlayback } from '../src/lib/playerControls.ts'
+import { canUsePictureInPicture, escapeAction, NATIVE_CONTROLS_ZONE_PX, normalizePlaybackSpeed, shouldTogglePlayback } from '../src/lib/playerControls.ts'
 
 test('click-to-toggle covers the picture area only (AV-178)', () => {
   // a 400px-tall video: picture area is 0…352, controls strip 352…400
@@ -36,4 +36,9 @@ test('picture-in-picture is offered only where allowed (AV-189)', () => {
   assert.equal(canUsePictureInPicture({ pictureInPictureEnabled: false }), false, 'disabled by policy — hidden')
   assert.equal(canUsePictureInPicture({}), false, 'no API — hidden')
   assert.equal(canUsePictureInPicture({ pictureInPictureEnabled: undefined }), false)
+})
+
+test('escape exits fullscreen before closing the player (AV-190)', () => {
+  assert.equal(escapeAction(true), 'exit-fullscreen', 'the one escape hatch must not close the player')
+  assert.equal(escapeAction(false), 'close')
 })
