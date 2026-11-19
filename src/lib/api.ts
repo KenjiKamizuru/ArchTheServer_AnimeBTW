@@ -548,7 +548,7 @@ export const api = {
   },
 
   listGuests() {
-    return get<{ guests: { id: string; name: string; createdAt: number | null }[] }>('/api/auth/guests', false)
+    return get<{ guests: { id: string; name: string; createdAt: number | null; pinProtected: boolean }[] }>('/api/auth/guests', false)
   },
 
   createGuest(name: string) {
@@ -568,7 +568,7 @@ export const api = {
   },
 
   activeGuest() {
-    return get<{ guest: { id: string; name: string } | null }>('/api/auth/guests/active', false)
+    return get<{ guest: { id: string; name: string; pinProtected: boolean } | null }>('/api/auth/guests/active', false)
   },
 
   /** Device-profile resolution (AV-123): who is using this device and with which preferences. */

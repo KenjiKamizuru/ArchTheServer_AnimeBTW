@@ -22,6 +22,7 @@
 //   separate from the owner's preferences.
 
 import { randomBytes } from 'node:crypto'
+import { verifyPassword } from './accounts.mjs'
 import { normalizePreferencesUpdate } from './userPreferences.mjs'
 
 export const MAX_GUESTS = 6
@@ -38,7 +39,76 @@ export function normalizeGuestName(input) {
 }
 
 function publicGuest(record) {
-  return { id: record?.id ?? null, name: record?.name ?? null, createdAt: record?.createdAt ?? null }
+  return {
+    id: record?.id ?? null,
+    name: record?.name ?? null,
+    createdAt: record?.createdAt ?? null,
+    pinProtected: hasGuestPin(record),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Profile PIN lock (AV-124a) — for shared living-room devices.
+//
+// Scope decisions (recorded per task rules):
+// - A PIN is 4–6 DIGITS (trimmed input), stored HASH-ONLY per guest
+//   (`pin: { salt, hash }`, scrypt via the shared password primitives) —
+//   exactly the account-password storage pattern. The hash NEVER appears in
+//   any guest view; views expose only `pinProtected: boolean`.
+// - The PIN gates SELECTING a locked profile on a device that already has a
+//   signed-in account session (household members on a shared screen). It is
+//   owner-managed (set/change/remove via session-authenticated routes), and
+//   it is NOT an account credential: it never authorizes anything on its own.
+// - Attempted brute force is bounded by the existing per-account mutation
+//   rate limit on the select route.
+// ---------------------------------------------------------------------------
+
+export const PIN_PATTERN = /^\d{4,6}$/
+
+export function normalizePin(input) {
+  const raw = String(input ?? '').trim()
+  if (!PIN_PATTERN.test(raw)) return { ok: false, error: 'A PIN is 4 to 6 digits' }
+  return { ok: true, value: raw }
+}
+
+export function hasGuestPin(record) {
+  return Boolean(record?.pin?.salt && record?.pin?.hash)
+}
+
+/** Store a PIN from pre-computed salt+hash (hash-only; the raw PIN never reaches storage). */
+export function setGuestPin(record, { salt, hash } = {}) {
+  if (!salt || !hash) return { ok: false, error: 'PIN salt and hash are required' }
+  record.pin = { salt: String(salt), hash: String(hash) }
+  return { ok: true }
+}
+
+export function clearGuestPin(record) {
+  delete record.pin
+  return { ok: true }
+}
+
+/** Timing-safe PIN check (scrypt). Fails closed: a guest without a PIN never "verifies". */
+export function verifyGuestPin(record, pin, { verify = verifyPassword } = {}) {
+  if (!hasGuestPin(record)) return false
+  return Boolean(verify(String(pin ?? ''), record.pin.salt, record.pin.hash))
+}
+
+/** Raw guest record lookup (for owner-side management routes). */
+export function findGuest(user, guestId) {
+  const id = String(guestId ?? '')
+  return (Array.isArray(user?.guests) ? user.guests : []).find((entry) => entry?.id === id) ?? null
+}
+
+/** Gate for SELECTING a profile (AV-124): resolves the guest and enforces its PIN.
+ * Returns { ok: true, value: record } or { ok: false, status, error }. */
+export function authorizeGuestSelection(user, guestId, pin, { verify = verifyPassword } = {}) {
+  const record = findGuest(user, guestId)
+  if (!record) return { ok: false, status: 404, error: 'Guest not found' }
+  if (!hasGuestPin(record)) return { ok: true, value: record }
+  const provided = pin === undefined || pin === null ? '' : String(pin)
+  if (!provided) return { ok: false, status: 403, error: 'This profile requires a PIN' }
+  if (!verifyGuestPin(record, provided, { verify })) return { ok: false, status: 403, error: 'Incorrect PIN' }
+  return { ok: true, value: record }
 }
 
 export function listGuests(user) {

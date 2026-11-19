@@ -11,9 +11,17 @@ import {
   guestPreferencesView,
   setGuestPreferences,
   resolveDeviceProfile,
+  normalizePin,
+  setGuestPin,
+  clearGuestPin,
+  hasGuestPin,
+  verifyGuestPin,
+  findGuest,
+  authorizeGuestSelection,
   MAX_GUESTS,
   MAX_GUEST_NAME,
 } from '../server/guestProfiles.mjs'
+import { hashPassword, verifyPassword } from '../server/accounts.mjs'
 
 test('guest names: trimmed, bounded, no control characters', () => {
   assert.deepEqual(normalizeGuestName('  Aki  '), { ok: true, value: 'Aki' })
@@ -35,7 +43,7 @@ test('add/remove guests: caps, case-insensitive uniqueness, owner-scoped ids', (
   assert.deepEqual(listGuests(user), [], 'no guests before any are added')
 
   const first = addGuest(user, 'Aki', { now: 1_000, makeId })
-  assert.deepEqual(first.value, { id: 'g1', name: 'Aki', createdAt: 1_000 })
+  assert.deepEqual(first.value, { id: 'g1', name: 'Aki', createdAt: 1_000, pinProtected: false })
   const dup = addGuest(user, ' aki ', { makeId })
   assert.equal(dup.ok, false, 'names are unique case-insensitively')
   assert.match(dup.error, /already exists/)
@@ -160,4 +168,75 @@ test('guest selection never mutates account session records (AV-123b pin)', () =
   assert.equal(user.guests.length, 0, 'guest list returns to baseline after removal')
   assert.deepEqual(user.sessions, snapshot.sessions, 'sessions identical to the pre-switch snapshot')
   assert.deepEqual(user.preferences, snapshot.preferences, 'owner preferences untouched')
+})
+
+test('profile PIN: normalization, hash-only storage, views never leak (AV-124a)', () => {
+  // PINs are 4–6 digits (trimmed).
+  for (const pin of ['1234', '123456', '  0042  ']) {
+    const parsed = normalizePin(pin)
+    assert.equal(parsed.ok, true, `accepts ${JSON.stringify(pin)}`)
+  }
+  assert.equal(normalizePin('  0042  ').value, '0042', 'input is trimmed')
+  for (const pin of ['123', '1234567', '12a4', '', null, undefined, '12 34', '١٢٣٤']) {
+    assert.equal(normalizePin(pin).ok, false, `rejects ${JSON.stringify(pin)}`)
+  }
+
+  // Lifecycle: set (from pre-computed salt+hash) → verify → clear.
+  const user = { username: 'kenji', guests: [] }
+  addGuest(user, 'Kenji', { makeId: () => 'g1' })
+  const record = findGuest(user, 'g1')
+  assert.equal(hasGuestPin(record), false)
+
+  const salt = 'aabbcc'
+  const hash = hashPassword('4242', salt)
+  assert.equal(setGuestPin(record, { salt, hash }).ok, true)
+  assert.equal(hasGuestPin(record), true)
+  assert.deepEqual(record.pin, { salt, hash }, 'stored as salt+hash only')
+
+  // Real scrypt round-trip (timing-safe primitive shared with passwords).
+  assert.equal(verifyGuestPin(record, '4242', { verify: verifyPassword }), true)
+  assert.equal(verifyGuestPin(record, '4243', { verify: verifyPassword }), false)
+  assert.equal(verifyGuestPin(record, '', { verify: verifyPassword }), false)
+  // Fails closed: a guest without a PIN never "verifies".
+  assert.equal(verifyGuestPin({ name: 'x' }, '4242', { verify: verifyPassword }), false)
+
+  // Views expose pinProtected only — never salt/hash (field-set pinned).
+  const view = resolveActiveGuest(user, 'g1')
+  assert.equal(view.pinProtected, true)
+  assert.deepEqual(Object.keys(view).sort(), ['createdAt', 'id', 'name', 'pinProtected', 'prefs'])
+  assert.equal(JSON.stringify(listGuests(user)).includes('aabbcc'), false, 'listGuests never leaks pin material')
+
+  clearGuestPin(record)
+  assert.equal(hasGuestPin(record), false)
+  assert.equal(resolveActiveGuest(user, 'g1').pinProtected, false)
+})
+
+test('selection gate enforces the PIN lock (AV-124a)', () => {
+  const user = { username: 'kenji', guests: [] }
+  addGuest(user, 'Kenji', { makeId: () => 'g1' })
+  addGuest(user, 'Aki', { makeId: () => 'g2' })
+  setGuestPin(findGuest(user, 'g1'), { salt: 's', hash: hashPassword('9999', 's') })
+
+  // Unknown guest → 404.
+  assert.deepEqual(
+    (({ ok, status }) => ({ ok, status }))(authorizeGuestSelection(user, 'g404', '9999')),
+    { ok: false, status: 404 },
+  )
+
+  // Unlocked guest selects with no PIN.
+  assert.equal(authorizeGuestSelection(user, 'g2', undefined).ok, true)
+
+  // Locked guest: missing PIN and wrong PIN are 403 with distinct errors;
+  // the correct PIN selects.
+  const missing = authorizeGuestSelection(user, 'g1', undefined)
+  assert.equal(missing.ok, false)
+  assert.equal(missing.status, 403)
+  assert.equal(missing.error, 'This profile requires a PIN')
+  const wrong = authorizeGuestSelection(user, 'g1', '0000')
+  assert.equal(wrong.ok, false)
+  assert.equal(wrong.status, 403)
+  assert.equal(wrong.error, 'Incorrect PIN')
+  const right = authorizeGuestSelection(user, 'g1', '9999')
+  assert.equal(right.ok, true)
+  assert.equal(right.value.id, 'g1')
 })

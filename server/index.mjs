@@ -47,7 +47,7 @@ import { normalizeShowActivity, buildActivitySummary } from './profileActivity.m
 import { buildAccountExport } from './accountExport.mjs'
 import { validateDeletionConfirmation, DELETION_ARTIFACTS } from './accountDeletion.mjs'
 import { listUserSessions, shouldRevoke, isSessionHash } from './sessionManagement.mjs'
-import { listGuests, addGuest, removeGuest, resolveActiveGuest, guestPreferencesView, setGuestPreferences, resolveDeviceProfile } from './guestProfiles.mjs'
+import { listGuests, addGuest, removeGuest, resolveActiveGuest, guestPreferencesView, setGuestPreferences, resolveDeviceProfile, authorizeGuestSelection, findGuest, normalizePin, setGuestPin, clearGuestPin } from './guestProfiles.mjs'
 import { atomicWriteFile } from './security.mjs'
 
 const EMAIL_VERIFY_TTL_MS = 24 * 60 * 60 * 1000
@@ -1412,6 +1412,36 @@ app.delete(
 // Guest usage semantics (AV-122b): the `av_guest` cookie is a non-secret
 // selection marker, validated against the signed-in account's guest list on
 // every use; the account session is what authorizes.
+// PIN lock (AV-124a): owner-managed, hash-only storage on the guest record.
+app.put(
+  '/api/auth/guests/:id/pin',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user, users } = await requireSessionUser(req)
+    const record = findGuest(user, req.params.id)
+    if (!record) throw Object.assign(new Error('Guest not found'), { status: 404 })
+    const parsed = normalizePin(req.body?.pin)
+    if (!parsed.ok) throw Object.assign(new Error(parsed.error), { status: 400 })
+    const saltHex = crypto.randomBytes(16).toString('hex')
+    setGuestPin(record, { salt: saltHex, hash: hashPassword(parsed.value, saltHex) })
+    await kv.set('users', users)
+    res.json({ guest: resolveActiveGuest(user, record.id) })
+  }),
+)
+
+app.delete(
+  '/api/auth/guests/:id/pin',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user, users } = await requireSessionUser(req)
+    const record = findGuest(user, req.params.id)
+    if (!record) throw Object.assign(new Error('Guest not found'), { status: 404 })
+    clearGuestPin(record)
+    await kv.set('users', users)
+    res.json({ ok: true })
+  }),
+)
+
 app.get(
   '/api/auth/guests/active',
   wrap(async (req, res) => {
@@ -1439,10 +1469,13 @@ app.post(
   limitMutations,
   wrap(async (req, res) => {
     const { user } = await requireSessionUser(req)
-    const guest = resolveActiveGuest(user, req.params.id)
-    if (!guest) throw Object.assign(new Error('Guest not found'), { status: 404 })
-    res.cookie(GUEST_COOKIE, guest.id, { httpOnly: true, sameSite: 'lax', maxAge: 30 * 24 * 60 * 60 * 1000 })
-    res.json({ guest })
+    // AV-124: a PIN-locked profile requires its PIN to be selected on this
+    // device. The gate resolves the guest and enforces the lock (403 on
+    // missing/incorrect PIN; 404 unknown).
+    const gate = authorizeGuestSelection(user, req.params.id, req.body?.pin)
+    if (!gate.ok) throw Object.assign(new Error(gate.error), { status: gate.status })
+    res.cookie(GUEST_COOKIE, gate.value.id, { httpOnly: true, sameSite: 'lax', maxAge: 30 * 24 * 60 * 60 * 1000 })
+    res.json({ guest: resolveActiveGuest(user, gate.value.id) })
   }),
 )
 
