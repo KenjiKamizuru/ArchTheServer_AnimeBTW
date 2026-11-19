@@ -3,6 +3,18 @@
 // All helpers here are pure: they take already-fetched AniList payloads (or a
 // caller-supplied fetch function) and return deterministic, testable shapes.
 
+import { classifyEdge } from './relations.mjs'
+
+/** Verified kinds that connect a franchise (AV-117d1). 'other'/'character'/
+ * 'adaptation'/'source' (e.g. crossovers) deliberately do NOT union groups. */
+const FRANCHISE_CONNECTING_KINDS = new Set([
+  'sequel', 'prequel', 'next-season', 'split-cour', 'parent-story',
+  'side-story', 'spin-off', 'special', 'ova', 'ona', 'movie',
+])
+
+/** Main-line kinds — everything else is a branch (spin-off/special/movie…). */
+const SEASON_KINDS = new Set(['main', 'sequel', 'prequel', 'next-season', 'split-cour'])
+
 /** Buckets used by the A–Z index: Latin letters, digits, and kana rows. */
 export const LATIN_BUCKETS = ['#', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')]
 export const KANA_ROWS = ['あ', 'か', 'さ', 'た', 'な', 'は', 'ま', 'や', 'ら', 'わ']
@@ -146,6 +158,12 @@ export function groupByYear(media) {
  * they are an explicit PREQUEL/SEQUEL/PARENT of one another; an undirected
  * union-find keeps chains ("S1 → S2 → S3") in one group even when a middle
  * entry is missing from the input.
+ *
+ * AV-117d1: edges join on VERIFIED relationship kinds (relations.mjs) instead
+ * of raw type names — spin-offs/side stories connect to their franchise — and
+ * every member is annotated with its `relationKind`, partitioned into
+ * `seasons` (main line) and `branches` (spin-offs/specials/movies/OVAs), so a
+ * franchise group is never presented as one season list.
  */
 export function buildFranchiseGroups(media) {
   const byId = new Map()
@@ -173,7 +191,10 @@ export function buildFranchiseGroups(media) {
 
   for (const item of byId.values()) {
     for (const rel of item.relations ?? []) {
-      if (!['PREQUEL', 'SEQUEL', 'PARENT', 'SIDE_STORY'].includes(rel?.relationType)) continue
+      // Verified franchise-connecting kinds (AV-117d1): continuations and
+      // branches connect; 'other'/'character'/'adaptation'/'source' edges
+      // (e.g. crossovers) deliberately do NOT union franchises.
+      if (!FRANCHISE_CONNECTING_KINDS.has(classifyEdge(rel))) continue
       const target = rel?.node?.id
       if (Number.isInteger(target) && byId.has(target)) union(item.id, target)
     }
@@ -192,11 +213,27 @@ export function buildFranchiseGroups(media) {
       const sorted = list.slice().sort(
         (a, b) => (a.seasonYear ?? 9999) - (b.seasonYear ?? 9999) || (a.id ?? 0) - (b.id ?? 0),
       )
+      const memberIds = new Set(sorted.map((member) => member.id))
+      const relationKindFor = (member) => {
+        for (const rel of member.relations ?? []) {
+          const target = rel?.node?.id
+          if (target === member.id || !memberIds.has(target)) continue
+          const kind = classifyEdge(rel)
+          if (kind !== 'unknown') return kind
+        }
+        return 'main'
+      }
+      const annotated = sorted.map((member) => ({ ...member, relationKind: relationKindFor(member) }))
+      // The earliest main-line member is the franchise head.
+      const head = annotated.find((member) => SEASON_KINDS.has(member.relationKind))
+      if (head) head.relationKind = 'main'
       return {
         key: `franchise-${sorted[0].id}`,
         count: sorted.length,
         title: sorted[0].title,
-        media: sorted,
+        media: annotated,
+        seasons: annotated.filter((member) => SEASON_KINDS.has(member.relationKind)),
+        branches: annotated.filter((member) => !SEASON_KINDS.has(member.relationKind)),
       }
     })
     .sort((a, b) => b.count - a.count || a.title.localeCompare(b.title))

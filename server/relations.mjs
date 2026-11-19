@@ -379,6 +379,16 @@ function refineContinuation(kind, a, b) {
   return kind === 'sequel' ? 'next-season' : 'prequel'
 }
 
+/** Kind of one continuation edge for related-season lists (AV-117d1):
+ * sequel edges become 'next-season' or 'split-cour' from official titles. */
+export function continuationKind(edge, { titleA, titleB } = {}) {
+  const kind = classifyEdge(edge)
+  if (kind === 'sequel') {
+    return titleA && titleB && isSplitCourPair(titleA, titleB) ? 'split-cour' : 'next-season'
+  }
+  return kind
+}
+
 function record({ type, confidence, source, sourceIds, verification, uncertain, reasons, roles, now }) {
   return {
     type,

@@ -7,6 +7,8 @@
 
 import { readResponseTextLimited, sanitizeCoverUrl, sanitizePublicHttpUrl } from './security.mjs'
 import { normalizeExternalLinks } from './links.mjs'
+import { continuationKind } from './relations.mjs'
+import { lookupEvidence as anilistLookupEvidence } from './metadata/providers/anilist.mjs'
 import { parseBrowseFilters } from './browse.mjs'
 import { createAnimeRecord, normalizeExternalIds, normalizePartialDate, normalizeNameList, withFetchFailure } from './catalog.mjs'
 import { describeFreshness } from './refreshPolicy.mjs'
@@ -1000,6 +1002,8 @@ export async function getDetail(id) {
       },
     }))
     const seasonOrder = { WINTER: 0, SPRING: 1, SUMMER: 2, FALL: 3 }
+    const currentSeasonTitle =
+      data.Media.title?.english || data.Media.title?.romaji || data.Media.title?.native || ''
     const relatedSeasons = (data.Media.relations?.edges ?? [])
       .filter(
         (edge) =>
@@ -1013,6 +1017,7 @@ export async function getDetail(id) {
         return {
           id: node.id,
           relationType: edge.relationType,
+          kind: continuationKind(edge, { titleA: currentSeasonTitle, titleB: title }),
           title,
           romaji: node.title?.romaji ?? null,
           format: node.format ?? null,
@@ -1211,4 +1216,10 @@ export async function getMany(ids) {
     )
     return (data.Page.media ?? []).map(normalize).filter(Boolean)
   })
+}
+
+/** Metadata registry wiring (AV-117d1): the relations-online evidence lookup,
+ * backed by this module's quota-managed, cached GraphQL client. */
+export async function mediaEvidence(input) {
+  return anilistLookupEvidence(input, { gql })
 }
