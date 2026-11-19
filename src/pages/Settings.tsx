@@ -100,6 +100,8 @@ function AccountsCard() {
   const [privacyError, setPrivacyError] = useState<string | null>(null)
   const [prefLanguage, setPrefLanguage] = useState('')
   const [prefLocale, setPrefLocale] = useState('')
+  const [prefSubtitle, setPrefSubtitle] = useState('')
+  const [prefAudio, setPrefAudio] = useState('')
   const [prefsBusy, setPrefsBusy] = useState(false)
   const [prefsError, setPrefsError] = useState<string | null>(null)
 
@@ -149,10 +151,14 @@ function AccountsCard() {
       .then((res) => {
         setPrefLanguage(res.preferredLanguage ?? '')
         setPrefLocale(res.locale ?? '')
+        setPrefSubtitle(res.defaultSubtitle ?? '')
+        setPrefAudio(res.defaultAudio ?? '')
       })
       .catch(() => {
         setPrefLanguage('')
         setPrefLocale('')
+        setPrefSubtitle('')
+        setPrefAudio('')
       })
   }, [user])
 
@@ -373,9 +379,16 @@ function AccountsCard() {
     setPrefsBusy(true)
     setPrefsError(null)
     try {
-      const res = await api.updatePreferences({ preferredLanguage: prefLanguage, locale: prefLocale })
+      const res = await api.updatePreferences({
+        preferredLanguage: prefLanguage,
+        locale: prefLocale,
+        defaultSubtitle: prefSubtitle,
+        defaultAudio: prefAudio,
+      })
       setPrefLanguage(res.preferredLanguage ?? '')
       setPrefLocale(res.locale ?? '')
+      setPrefSubtitle(res.defaultSubtitle ?? '')
+      setPrefAudio(res.defaultAudio ?? '')
       toast('Preferences saved')
     } catch (err) {
       setPrefsError(err instanceof Error ? err.message : 'Could not save preferences')
@@ -646,6 +659,20 @@ function AccountsCard() {
                   placeholder="Formatting locale (e.g. en-US)"
                   className="w-48 rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
                 />
+                <input
+                  type="text"
+                  value={prefSubtitle}
+                  onChange={(event) => setPrefSubtitle(event.target.value.slice(0, 20))}
+                  placeholder="Subtitles (en, or off)"
+                  className="w-44 rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
+                />
+                <input
+                  type="text"
+                  value={prefAudio}
+                  onChange={(event) => setPrefAudio(event.target.value.slice(0, 20))}
+                  placeholder="Audio language (e.g. ja)"
+                  className="w-48 rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
+                />
                 <button
                   type="button"
                   onClick={() => void savePreferences()}
@@ -656,7 +683,7 @@ function AccountsCard() {
                 </button>
               </div>
               <p className="mt-1 text-[11px] text-white/40">
-                Language tags like &quot;en&quot;, &quot;pt-BR&quot;, or &quot;zh-Hant&quot;. Stored for display choices — the UI is not translated yet.
+                Language tags like &quot;en&quot;, &quot;pt-BR&quot;, or &quot;zh-Hant&quot;. Subtitles accept &quot;off&quot; for none. Stored for display and playback choices — the UI is not translated yet.
               </p>
               {prefsError ? <p className="mt-2 text-[11px] text-red-300">{prefsError}</p> : null}
             </div>

@@ -4,6 +4,8 @@ import assert from 'node:assert/strict'
 import {
   normalizePreferredLanguage,
   normalizeLocale,
+  normalizeDefaultSubtitle,
+  normalizeDefaultAudio,
   normalizePreferencesUpdate,
 } from '../server/userPreferences.mjs'
 
@@ -41,4 +43,27 @@ test('preference updates are partial and strict', () => {
   assert.equal(bad.ok, false)
   const partialBad = normalizePreferencesUpdate({ preferredLanguage: 'en', locale: 'bad locale' })
   assert.equal(partialBad.ok, false, 'one invalid field rejects the update')
+})
+
+test('playback defaults: subtitle sentinel, language tags, strict updates', () => {
+  assert.deepEqual(normalizeDefaultSubtitle('off'), { ok: true, value: 'off' })
+  assert.deepEqual(normalizeDefaultSubtitle(' EN '), { ok: true, value: 'en' })
+  assert.deepEqual(normalizeDefaultSubtitle(''), { ok: true, value: null })
+  assert.equal(normalizeDefaultSubtitle('offside').ok, false, "'offside' is not the sentinel and not a tag")
+  assert.equal(normalizeDefaultSubtitle('<img onerror>').ok, false)
+  assert.deepEqual(normalizeDefaultAudio('ja'), { ok: true, value: 'ja' })
+  assert.deepEqual(normalizeDefaultAudio(null), { ok: true, value: null })
+  assert.equal(normalizeDefaultAudio('japanese please').ok, false)
+
+  assert.deepEqual(normalizePreferencesUpdate({ defaultSubtitle: 'off', defaultAudio: 'ja' }), {
+    ok: true,
+    value: { defaultSubtitle: 'off', defaultAudio: 'ja' },
+  })
+  assert.deepEqual(normalizePreferencesUpdate({ defaultSubtitle: '', preferredLanguage: 'en' }), {
+    ok: true,
+    value: { defaultSubtitle: null, preferredLanguage: 'en' },
+  })
+  const bad = normalizePreferencesUpdate({ defaultSubtitle: 'none at all' })
+  assert.equal(bad.ok, false)
+  assert.deepEqual(normalizePreferencesUpdate({ other: 1 }), { ok: true, value: {} }, 'unknown keys are ignored')
 })

@@ -1258,13 +1258,21 @@ app.get(
   }),
 )
 
-// Language & locale preferences (AV-112): stored per user; the app has no
-// i18n layer yet, so these are exposed for display choices and future work.
+// Language & locale preferences (AV-112) + playback defaults (AV-113):
+// stored per user; the app has no i18n layer yet, so these are exposed for
+// display choices and future work.
+const preferencesView = (user) => ({
+  preferredLanguage: user.preferredLanguage ?? null,
+  locale: user.locale ?? null,
+  defaultSubtitle: user.defaultSubtitle ?? null,
+  defaultAudio: user.defaultAudio ?? null,
+})
+
 app.get(
   '/api/auth/preferences',
   wrap(async (req, res) => {
     const { user } = await requireSessionUser(req)
-    res.json({ preferredLanguage: user.preferredLanguage ?? null, locale: user.locale ?? null })
+    res.json(preferencesView(user))
   }),
 )
 
@@ -1277,7 +1285,7 @@ app.put(
     if (!parsed.ok) throw Object.assign(new Error(parsed.error), { status: 400 })
     Object.assign(user, parsed.value)
     await kv.set('users', users)
-    res.json({ preferredLanguage: user.preferredLanguage ?? null, locale: user.locale ?? null })
+    res.json(preferencesView(user))
   }),
 )
 
