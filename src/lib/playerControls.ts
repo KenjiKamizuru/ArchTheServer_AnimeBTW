@@ -66,6 +66,14 @@ export function seekFractionToTime(fraction: number, durationSeconds: number): n
   return Math.min(durationSeconds, Math.max(0, fraction * durationSeconds))
 }
 
+// AV-182: tap-to-seek on touch — map a pointer position along the seek
+// track to a playback time. Positions outside the track clamp to its
+// ends; degenerate tracks (non-finite or zero width) refuse to 0.
+export function trackTapToTime(clientX: number, trackLeft: number, trackWidth: number, durationSeconds: number): number {
+  if (!Number.isFinite(clientX) || !Number.isFinite(trackLeft) || !Number.isFinite(trackWidth) || trackWidth <= 0) return 0
+  return seekFractionToTime((clientX - trackLeft) / trackWidth, durationSeconds)
+}
+
 // AV-186: the central play/pause fades when idle. Paused always shows it
 // (the obvious affordance); while playing it follows recent activity.
 export const CENTER_BUTTON_IDLE_MS = 2000

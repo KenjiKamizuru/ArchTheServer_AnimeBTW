@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { canUsePictureInPicture, CENTER_BUTTON_IDLE_MS, centerButtonVisible, controlBarVisible, escapeAction, formatClock, NATIVE_CONTROLS_ZONE_PX, normalizePlaybackSpeed, seekFractionToTime, shouldTogglePlayback } from '../src/lib/playerControls.ts'
+import { canUsePictureInPicture, CENTER_BUTTON_IDLE_MS, centerButtonVisible, controlBarVisible, escapeAction, formatClock, NATIVE_CONTROLS_ZONE_PX, normalizePlaybackSpeed, seekFractionToTime, shouldTogglePlayback, trackTapToTime } from '../src/lib/playerControls.ts'
 
 test('click-to-toggle covers the picture area only (AV-178)', () => {
   // a 400px-tall video: picture area is 0…352, controls strip 352…400
@@ -76,4 +76,14 @@ test('the bar and centre button share one chrome policy (AV-187)', () => {
   assert.equal(controlBarVisible(false, true), false, 'bar hides when idle while playing')
   assert.equal(controlBarVisible(false, false), true, 'bar reappears on pointer movement')
   assert.equal(controlBarVisible(true, true), true, 'paused keeps the bar up')
+})
+
+test('touch taps map track positions to seek times (AV-182)', () => {
+  assert.equal(trackTapToTime(50, 0, 100, 200), 100, 'centre of the track')
+  assert.equal(trackTapToTime(25, 10, 100, 200), 30, 'offset track')
+  assert.equal(trackTapToTime(-10, 0, 100, 200), 0, 'left of the track clamps to 0')
+  assert.equal(trackTapToTime(500, 0, 100, 200), 200, 'right of the track clamps to duration')
+  assert.equal(trackTapToTime(50, 0, 0, 200), 0, 'degenerate track refuses')
+  assert.equal(trackTapToTime(50, 0, 100, 0), 0, 'unknown duration refuses')
+  assert.equal(trackTapToTime(Number.NaN, 0, 100, 200), 0, 'non-finite position refuses')
 })

@@ -16,7 +16,7 @@ import { createProgressWriter } from '../lib/progressWriter'
 import { createWatchSession } from '../lib/watchSession'
 import { playerLoadingPhase, readinessLabels } from '../lib/playerLoading'
 import { recoveryActionLabel, recoveryActions } from '../lib/playerRecovery'
-import { CENTER_BUTTON_IDLE_MS, canUsePictureInPicture, centerButtonVisible, controlBarVisible, escapeAction, formatClock, normalizePlaybackSpeed, PLAYBACK_SPEEDS, seekFractionToTime, shouldTogglePlayback } from '../lib/playerControls'
+import { CENTER_BUTTON_IDLE_MS, canUsePictureInPicture, centerButtonVisible, controlBarVisible, escapeAction, formatClock, normalizePlaybackSpeed, PLAYBACK_SPEEDS, seekFractionToTime, shouldTogglePlayback, trackTapToTime } from '../lib/playerControls'
 import { actionForKey, effectiveShortcuts } from '../lib/playerShortcuts'
 import { saveSettings } from '../lib/settings'
 import { concatBytes, Mp4BoxTracker, selectMseMimeType } from '../lib/mp4'
@@ -943,6 +943,17 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
                   const video = videoRef.current
                   if (!video) return
                   video.currentTime = seekFractionToTime(Number(event.target.value), durationSeconds)
+                }}
+                onPointerDown={(event) => {
+                  // AV-182: explicit tap-to-seek on touch — mobile range
+                  // track-tap behavior varies by browser; this maps the
+                  // touch point deterministically. Where the native jump
+                  // also applies, both land on the same time (idempotent).
+                  if (event.pointerType !== 'touch') return
+                  const video = videoRef.current
+                  if (!video) return
+                  const rect = event.currentTarget.getBoundingClientRect()
+                  video.currentTime = trackTapToTime(event.clientX, rect.left, rect.width, durationSeconds)
                 }}
                 aria-label="Seek"
                 className="h-1.5 flex-1 cursor-pointer accent-[var(--color-accent)]"
