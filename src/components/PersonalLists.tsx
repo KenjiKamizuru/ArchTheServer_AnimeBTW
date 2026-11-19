@@ -37,6 +37,7 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
   const [sort, setSort] = useState('added')
   const [list, setList] = useState<List | null>(null)
   const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
   const [bookmarkId, setBookmarkId] = useState('')
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
@@ -74,10 +75,13 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
         ))}
       </div>
       <form className="mt-4 flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); void perform(async () => {
-        const result = await request<{ list: ListSummary }>('/api/lists', 'POST', { name }); setName(''); setActive(result.list.id)
+        const result = await request<{ list: ListSummary }>('/api/lists', 'POST', { name, description })
+        setName(''); setDescription(''); setActive(result.list.id)
       }) }}>
         <label className="sr-only" htmlFor="new-list-name">New list name</label>
         <input id="new-list-name" className={input} placeholder="New list name" maxLength={80} value={name} onChange={(e) => setName(e.target.value)} />
+        <label className="sr-only" htmlFor="new-list-description">New list description (optional)</label>
+        <input id="new-list-description" className={input} placeholder="Description (optional)" maxLength={500} value={description} onChange={(e) => setDescription(e.target.value)} />
         <button className={button} disabled={busy || !name.trim()}>Create list</button>
         <button type="button" className={button} disabled={busy || !bookmarks.length} onClick={() => void perform(async () => {
           const result = await request<{ migrated: number; skipped: number }>('/api/lists/migrate', 'POST')
@@ -102,7 +106,10 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
       </div>
       {list && <div className="mt-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="font-medium text-white">{list.name}</h3>
+          <div>
+            <h3 className="font-medium text-white">{list.name}</h3>
+            {list.description ? <p className="mt-1 text-xs text-white/50">{list.description}</p> : null}
+          </div>
           <div className="flex flex-wrap gap-2">
             <button type="button" className={button} disabled={busy || list.count === 0} onClick={() => {
               setBusy(true); setError('')
