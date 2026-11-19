@@ -22,6 +22,7 @@ import { formatMediaType, formatSeason, inferSeasonFromTitle, relativeTime } fro
 import { ImdbArtworkModal } from '../components/ImdbArtworkModal'
 import { CardSkeletons } from '../components/MediaCard'
 import { MediaRow } from '../components/MediaRow'
+import { ContinueWatching } from '../components/ContinueWatching'
 import { useDetail } from '../components/MediaModal'
 import { useToast } from '../components/Toasts'
 
@@ -90,6 +91,8 @@ export default function Home() {
       ) : null}
 
       {hero ? <Hero media={hero} /> : <HeroSkeleton />}
+
+      <ContinueWatching />
 
       <div className="mt-9 space-y-9">
         {season.loading && !seasonMedia.length ? (

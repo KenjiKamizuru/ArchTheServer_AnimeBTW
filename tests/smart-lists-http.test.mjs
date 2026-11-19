@@ -172,3 +172,36 @@ test('rewind keeps the mark, reset clears the show (AV-157)', async () => {
   assert.ok(!entries.some((entry) => entry.mediaId === 507), 'no show records survive the reset')
   assert.ok(entries.some((entry) => entry.mediaId === 508), 'other shows are untouched')
 })
+test('continue watching answers with its payload shape (AV-158)', async () => {
+  // Signed-out: friendly 401.
+  const saved = cookie
+  cookie = ''
+  const unauth = await req('/api/progress/continue')
+  assert.equal(unauth.status, 401)
+  assert.equal(unauth.body.error, 'Sign in to see continue watching')
+  cookie = saved
+  // Empty fast-path: no in-progress records → empty WITHOUT any network.
+  // Earlier tests left records behind (the fixture accumulates), so wipe the
+  // profile first — this test runs last in the file.
+  await req('/api/progress', 'DELETE', {})
+  await req('/api/progress', 'PUT', { mediaId: 509, season: 's1', episode: 1, positionSeconds: 120, state: 'completed' })
+  const empty = await req('/api/progress/continue')
+  assert.equal(empty.status, 200)
+  assert.equal(empty.body.unavailable, false, 'the empty fast-path never touches the network')
+  assert.deepEqual(empty.body.entries, [])
+  // With an in-progress record the route enriches via AniList: online the
+  // row appears with its media, offline it degrades — both are valid.
+  await req('/api/progress', 'PUT', { mediaId: 509, season: 's1', episode: 2, positionSeconds: 300, runtimeSeconds: 1440 })
+  const r = await req('/api/progress/continue')
+  assert.equal(r.status, 200)
+  assert.equal(typeof r.body.unavailable, 'boolean')
+  if (r.body.unavailable) {
+    assert.deepEqual(r.body.entries, [], 'an upstream failure yields an empty rail, not junk')
+  } else {
+    const row = r.body.entries.find((entry) => entry.mediaId === 509)
+    assert.ok(row, 'the in-progress episode is listed')
+    assert.equal(row.episode, 2)
+    assert.equal(row.positionSeconds, 300)
+    assert.ok(row.media && row.media.title, 'the row carries its media for the rail')
+  }
+})

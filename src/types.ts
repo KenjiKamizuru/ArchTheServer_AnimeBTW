@@ -198,6 +198,16 @@ export interface ProgressEntry {
   updatedAt: number
 }
 
+export interface ContinueEntry {
+  mediaId: number
+  season: string
+  episode: number
+  positionSeconds: number
+  runtimeSeconds: number | null
+  updatedAt: number
+  media: Media
+}
+
 export interface EpisodeEntry {
   number: number
   title: string | null

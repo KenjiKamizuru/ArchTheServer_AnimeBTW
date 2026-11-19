@@ -194,3 +194,38 @@ export function newEpisodesAvailable(entries, progress, recordsById) {
   rows.sort((a, b) => b.newCount - a.newCount || String(a.media?.title ?? '').localeCompare(String(b.media?.title ?? '')) || a.mediaId - b.mediaId)
   return rows
 }
+
+// ── Continue watching (AV-158) ─────────────────────────────────────────
+// A computed view over the viewer's progress: shows with an IN-PROGRESS
+// episode (state 'started' with position > 0 — a rewound position of 0 is
+// not resume material; 'completed'/'manual' marks are finished, not
+// continue-watching). One row per media: its most recently touched
+// in-progress episode, sorted most-recent first. Pure: progress records
+// are injected; media enrichment happens in the route.
+
+/** Rows: `[{ mediaId, season, episode, positionSeconds, runtimeSeconds, updatedAt }]`. */
+export function continueWatching(progress, { limit = 20 } = {}) {
+  const bestByMedia = new Map()
+  for (const record of Array.isArray(progress) ? progress : []) {
+    const mediaId = Number(record?.mediaId)
+    const episode = Number(record?.episode)
+    const positionSeconds = Number(record?.positionSeconds)
+    const updatedAt = Number(record?.updatedAt)
+    if (!Number.isSafeInteger(mediaId) || mediaId <= 0 || !Number.isInteger(episode) || episode <= 0) continue
+    if (record.state !== 'started' || !Number.isFinite(positionSeconds) || positionSeconds <= 0 || !Number.isFinite(updatedAt)) continue
+    const runtimeSeconds = Number(record?.runtimeSeconds)
+    const row = {
+      mediaId,
+      season: typeof record?.season === 'string' ? record.season : 'unknown',
+      episode,
+      positionSeconds,
+      runtimeSeconds: Number.isInteger(runtimeSeconds) && runtimeSeconds > 0 ? runtimeSeconds : null,
+      updatedAt,
+    }
+    const best = bestByMedia.get(mediaId)
+    if (!best || row.updatedAt > best.updatedAt) bestByMedia.set(mediaId, row)
+  }
+  return [...bestByMedia.values()]
+    .sort((a, b) => b.updatedAt - a.updatedAt || a.mediaId - b.mediaId)
+    .slice(0, Math.max(0, Math.min(Number.isInteger(limit) ? limit : 20, 50)))
+}

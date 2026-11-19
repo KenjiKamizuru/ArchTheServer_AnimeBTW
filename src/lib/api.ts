@@ -19,6 +19,7 @@ import type {
   LibraryResponse,
   Media,
   MediaDetail,
+  ContinueEntry,
   ProgressEntry,
   ProviderEpisodesResult,
   ProviderMatch,
@@ -396,6 +397,11 @@ export const api = {
   // profile only) — callers must confirm before invoking.
   resetProgress(mediaId: number) {
     return send<{ removed: number }>('/api/progress', 'DELETE', { mediaId })
+  },
+
+  // AV-158: continue-watching rail data (in-progress episodes + media).
+  continueWatching() {
+    return get<{ entries: ContinueEntry[]; count: number; unavailable: boolean }>('/api/progress/continue', false)
   },
 
   saveWatchOrderNote(id: number, note: string) {

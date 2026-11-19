@@ -241,3 +241,56 @@ test('malformed progress rows are ignored; rows are deduped and sorted', () => {
   assert.deepEqual(rows.map((row) => [row.mediaId, row.newCount]), [[2, 9], [3, 7], [1, 3]], 'sorted by most new first (2 with 9, then 3 with 7, then 1 with 3)')
   assert.equal(newEpisodesAvailable([], null, null).length, 0, 'sparse inputs are safe')
 })
+
+// ── Continue watching (AV-158) ─────────────────────────────────────────
+import { continueWatching } from '../server/smartLists.mjs'
+
+const prog = (mediaId, episode, positionSeconds, state, updatedAt, over = {}) => ({
+  mediaId, season: 'winter-2024', episode, positionSeconds, runtimeSeconds: 1440, state, updatedAt, ...over,
+})
+
+test('only in-progress episodes qualify (AV-158)', () => {
+  const rows = continueWatching([
+    prog(1, 3, 300, 'started', 100),
+    prog(2, 3, 300, 'completed', 100),
+    prog(3, 3, 300, 'manual', 100),
+    prog(4, 3, 0, 'started', 100),
+    prog(5, 3, -5, 'started', 100),
+  ])
+  assert.deepEqual(rows.map((row) => row.mediaId), [1], 'started with a real position only')
+})
+test('one row per media: the most recently touched in-progress episode wins', () => {
+  const rows = continueWatching([
+    prog(1, 1, 500, 'started', 30),
+    prog(1, 2, 700, 'started', 90),
+    prog(1, 3, 100, 'completed', 200), // finished e3 later — the in-progress e2 still continues
+    prog(2, 1, 100, 'started', 50),
+  ])
+  assert.equal(rows.length, 2)
+  const first = rows.find((row) => row.mediaId === 1)
+  assert.equal(first.episode, 2, 'the newest STARTED episode, not the newest record overall')
+  assert.equal(first.positionSeconds, 700)
+  assert.deepEqual(rows.map((row) => row.mediaId), [1, 2], 'most recently touched show first')
+})
+test('runtime survives only when valid; malformed rows are ignored', () => {
+  const rows = continueWatching([
+    prog(1, 1, 10, 'started', 5, { runtimeSeconds: null }),
+    prog(2, 1, 10, 'started', 4, { runtimeSeconds: 0 }),
+    prog(3, 1, 10, 'started', 3, { runtimeSeconds: 1440 }),
+    prog(4, 1, 10, 'started', 2, { season: 7 }),
+    null,
+    prog(0, 1, 10, 'started', 1),
+    prog(6, 'x', 10, 'started', 1),
+  ])
+  assert.deepEqual(rows.map((row) => [row.mediaId, row.runtimeSeconds]), [[1, null], [2, null], [3, 1440], [4, 1440]], 'invalid runtimes become null, valid ones survive')
+  assert.equal(rows.find((row) => row.mediaId === 4).season, 'unknown', 'a non-string season key falls back to unknown')
+})
+test('the list caps and orders deterministically', () => {
+  const records = Array.from({ length: 25 }, (_, index) => prog(index + 1, 1, 10, 'started', index))
+  assert.equal(continueWatching(records).length, 20, 'default cap')
+  assert.equal(continueWatching(records, { limit: 5 }).length, 5)
+  assert.equal(continueWatching(records, { limit: 999 }).length, 25, 'no hard growth past the cap of 50 is not enforced on this side — the route caps')
+  const tie = continueWatching([prog(9, 1, 10, 'started', 5), prog(8, 1, 10, 'started', 5)])
+  assert.deepEqual(tie.map((row) => row.mediaId), [8, 9], 'ties break by mediaId')
+  assert.equal(continueWatching(null).length, 0, 'sparse input is safe')
+})

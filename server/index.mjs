@@ -45,7 +45,7 @@ import {
 import { normalizePreferencesUpdate } from './userPreferences.mjs'
 import { normalizeBetaOptInsUpdate, setBetaOptIns, betaOptInsView } from './featureFlags.mjs'
 import { parseMalExport, matchResolved, toImportDocument } from './malImport.mjs'
-import { stalledUnfinished, clampIdleDays, returningSoon, newEpisodesAvailable } from './smartLists.mjs'
+import { stalledUnfinished, clampIdleDays, returningSoon, newEpisodesAvailable, continueWatching } from './smartLists.mjs'
 import { normalizeShowActivity, buildActivitySummary } from './profileActivity.mjs'
 import { buildAccountExport } from './accountExport.mjs'
 import { validateDeletionConfirmation, DELETION_ARTIFACTS } from './accountDeletion.mjs'
@@ -1786,6 +1786,35 @@ app.get('/api/lists/smart/stalled', wrap(async (req, res) => {
   const progress = progressStore.listProgress(progressProfileId(user, req))
   const rows = stalledUnfinished(entries, progress, { now: Date.now(), idleDays: days })
   res.json({ name: 'Stalled shows', days, entries: rows, count: rows.length })
+}))
+
+// Continue watching (AV-158): per-profile, in-progress episodes (started
+// with a real position), most recently touched first, enriched with media
+// for the homepage rail. Session-gated like /api/progress; media comes
+// from AniList (cached) and upstream failure degrades to `unavailable`.
+app.get('/api/progress/continue', limitOutbound, wrap(async (req, res) => {
+  let user
+  try {
+    ;({ user } = await requireSessionUser(req))
+  } catch (error) {
+    if (error?.status === 401) throw Object.assign(new Error('Sign in to see continue watching'), { status: 401 })
+    throw error
+  }
+  const rows = continueWatching(progressStore.listProgress(progressProfileId(user, req)))
+  if (!rows.length) {
+    res.json({ entries: [], count: 0, unavailable: false })
+    return
+  }
+  try {
+    const recordsById = new Map()
+    for (const record of await anilist.mediaWithRelations(rows.map((row) => row.mediaId))) recordsById.set(record.id, record)
+    const entries = rows
+      .map((row) => ({ ...row, media: recordsById.get(row.mediaId) ?? null }))
+      .filter((row) => row.media)
+    res.json({ entries, count: entries.length, unavailable: false })
+  } catch {
+    res.json({ entries: [], count: 0, unavailable: true })
+  }
 }))
 
 // Smart list (AV-138): "returning soon" — entries with a SEQUEL relation
