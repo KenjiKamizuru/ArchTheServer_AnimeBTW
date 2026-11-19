@@ -12,7 +12,12 @@ after(async () => { await store.flush(); await rm(dir, { recursive: true, force:
 const media = (id, title = `Title ${id}`) => ({ id, title, cover: 'https://example.com/cover.jpg', genres: ['Drama'] })
 let custom
 
-test('five built-in status lists', () => assert.equal(store.summary().statuses.length, 5))
+test('five built-in status lists: Watching/Planned/Completed/Paused/Dropped (AV-126)', () => {
+  const { statuses } = store.summary()
+  assert.deepEqual(statuses.map((s) => s.id), ['status:watching', 'status:planned', 'status:completed', 'status:paused', 'status:dropped'])
+  assert.deepEqual(statuses.map((s) => s.name), ['Watching', 'Planned', 'Completed', 'Paused', 'Dropped'])
+  assert.ok(statuses.every((s) => s.count === 0))
+})
 test('lists start empty', () => assert.equal(store.summary().totalEntries, 0))
 test('unknown status rejected', () => assert.throws(() => store.readList('status:bad'), { status: 404 }))
 test('missing custom list rejected', () => assert.throws(() => store.readList('nope'), { status: 404 }))
