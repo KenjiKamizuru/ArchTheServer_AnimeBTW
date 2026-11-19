@@ -20,6 +20,7 @@ import type {
   Media,
   MediaDetail,
   ContinueEntry,
+  PlaybackSession,
   ProgressEntry,
   ProviderEpisodesResult,
   ProviderMatch,
@@ -410,6 +411,19 @@ export const api = {
   // AV-164: batch variant — one call removes exactly the listed entries.
   removeProgressEntries(items: { mediaId: number; season: string; episode: number }[]) {
     return send<{ removed: number }>('/api/progress', 'DELETE', { entries: items })
+  },
+
+  // AV-166: record one playback session (start, end, watched duration).
+  // session is null when private-history mode skipped it (AV-165).
+  saveSession(record: {
+    mediaId: number
+    season: string
+    episode: number
+    startedAt: number
+    endedAt: number
+    watchedSeconds: number
+  }) {
+    return send<{ session: PlaybackSession | null; skipped?: boolean }>('/api/sessions', 'PUT', record)
   },
 
   // AV-158: continue-watching rail data (in-progress episodes + media).

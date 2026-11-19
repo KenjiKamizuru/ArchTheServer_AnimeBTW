@@ -198,6 +198,18 @@ export interface ProgressEntry {
   updatedAt: number
 }
 
+/** Playback-session record (AV-166): one watched session of one episode. */
+export interface PlaybackSession {
+  id: string
+  profileId: string
+  mediaId: number
+  season: string
+  episode: number
+  startedAt: number
+  endedAt: number
+  watchedSeconds: number
+}
+
 export interface ContinueEntry {
   mediaId: number
   season: string

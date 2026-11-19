@@ -13,6 +13,7 @@ import { api } from '../lib/api'
 import { formatEpisodeCode } from '../lib/format'
 import { useSettings } from '../lib/settings'
 import { createProgressWriter } from '../lib/progressWriter'
+import { createWatchSession } from '../lib/watchSession'
 import { concatBytes, Mp4BoxTracker, selectMseMimeType } from '../lib/mp4'
 import type { LibraryItem } from '../types'
 
@@ -266,6 +267,35 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
       video.removeEventListener('play', onPlay)
     }
   }, [videoSrc, useMse])
+
+  // Playback sessions (AV-166): one record per playback of this source —
+  // armed at first play, saved once at ended/unmount. Private mode records
+  // nothing (AV-165). Deps follow the <video> key like the writer's; a
+  // stream retry remounts and honestly records a second session.
+  useEffect(() => {
+    const video = videoRef.current
+    const mediaId = source.mediaId
+    const season = source.seasonKey
+    const episode = source.episode
+    if (!video || !mediaId || !season || !episode || settings.privateHistoryMode) return
+    const session = createWatchSession({
+      save: (record) => {
+        void api.saveSession({ mediaId, season, episode, ...record }).catch(() => {})
+      },
+    })
+    const onPlay = () => session.play()
+    const onTime = () => session.tick(video.currentTime)
+    const onEnded = () => session.stop()
+    video.addEventListener('play', onPlay)
+    video.addEventListener('timeupdate', onTime)
+    video.addEventListener('ended', onEnded)
+    return () => {
+      video.removeEventListener('play', onPlay)
+      video.removeEventListener('timeupdate', onTime)
+      video.removeEventListener('ended', onEnded)
+      session.stop()
+    }
+  }, [videoSrc, useMse, settings.privateHistoryMode])
 
   // Auto-advance (AV-160): when the toggle is on, the next episode starts
   // after a short countdown the viewer can cancel — or take immediately.
