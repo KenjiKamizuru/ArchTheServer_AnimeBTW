@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { Loader2, RotateCcw, Trash2 } from 'lucide-react'
 import type { Media, ProgressEntry } from '../types'
 import { api } from '../lib/api'
-import { filterWatchHistory, watchHistoryRows, type WatchHistoryRow } from '../lib/history'
+import { filterWatchHistory, searchWatchHistory, watchHistoryRows, type WatchHistoryRow } from '../lib/history'
 import { relativeTime } from '../lib/format'
 import { useToast } from '../components/Toasts'
 
@@ -31,7 +31,7 @@ export default function History() {
   const [mediaById, setMediaById] = useState<Map<number, Media>>(new Map())
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
-  const [title, setTitle] = useState('')
+  const [query, setQuery] = useState('')
 
   useEffect(() => {
     let alive = true
@@ -52,8 +52,10 @@ export default function History() {
     () => (records ? watchHistoryRows(records, mediaById) : []),
     [records, mediaById],
   )
-  const filtered = useMemo(() => filterWatchHistory(rows, { from, to, title }), [rows, from, to, title])
-  const filtersActive = Boolean(from || to || title.trim())
+  // AV-162: free-text search spans titles AND dates; the structured date
+  // bounds stay as the precise filter.
+  const filtered = useMemo(() => filterWatchHistory(searchWatchHistory(rows, query), { from, to }), [rows, from, to, query])
+  const filtersActive = Boolean(from || to || query.trim())
 
   // AV-163: per-entry deletion. The entry IS the progress record, so
   // removing it clears the episode's watch mark and resume position too.
@@ -137,12 +139,12 @@ export default function History() {
           />
         </label>
         <label className="block min-w-48 flex-1">
-          <span className="mb-1 block text-[11px] text-white/45">Title contains</span>
+          <span className="mb-1 block text-[11px] text-white/45">Search titles or dates</span>
           <input
             type="text"
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="Search titles…"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder='e.g. "frieren march 2024"'
             className="w-full rounded-lg bg-ink-800 px-2.5 py-2 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-accent/60"
           />
         </label>
@@ -152,7 +154,7 @@ export default function History() {
             onClick={() => {
               setFrom('')
               setTo('')
-              setTitle('')
+              setQuery('')
             }}
             className="flex items-center gap-1.5 rounded-full bg-white/10 px-3.5 py-2 text-xs font-medium text-white/80 transition hover:bg-white/20"
           >

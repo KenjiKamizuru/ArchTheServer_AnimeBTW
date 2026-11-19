@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { filterWatchHistory, watchHistoryRows } from '../src/lib/history.ts'
+import { filterWatchHistory, searchWatchHistory, watchHistoryRows } from '../src/lib/history.ts'
 
 const day = (iso) => Date.parse(iso)
 
@@ -66,4 +66,24 @@ test('history filters: inclusive UTC day bounds and case-insensitive title (AV-1
   )
   // an empty filter keeps everything
   assert.deepEqual(filterWatchHistory(rows, {}), rows)
+})
+
+test('history search spans titles and dates with AND tokens (AV-162)', () => {
+  const rows = watchHistoryRows(records, mediaById)
+  // case-insensitive title substring
+  assert.deepEqual(searchWatchHistory(rows, 'SPY').map((row) => row.mediaId), [2])
+  // ISO day / month / year prefixes against the UTC day
+  assert.deepEqual(searchWatchHistory(rows, '2024-03-05').map((row) => row.mediaId), [2, 3])
+  assert.deepEqual(searchWatchHistory(rows, '2024-03').map((row) => row.mediaId), [2, 3, 1])
+  assert.deepEqual(searchWatchHistory(rows, '2023').map((row) => row.mediaId), [])
+  // English month names, full and abbreviated
+  assert.deepEqual(searchWatchHistory(rows, 'march').map((row) => row.mediaId), [2, 3, 1])
+  assert.deepEqual(searchWatchHistory(rows, 'mar 2024').map((row) => row.mediaId), [2, 3, 1])
+  // tokens AND together across dimensions
+  assert.deepEqual(searchWatchHistory(rows, 'family march').map((row) => row.mediaId), [2])
+  assert.deepEqual(searchWatchHistory(rows, 'family 2024-03-01').map((row) => row.mediaId), [])
+  // medialess rows match only date tokens; empty/whitespace query keeps all
+  assert.deepEqual(searchWatchHistory(rows, 'frieren').map((row) => row.mediaId), [1])
+  assert.deepEqual(searchWatchHistory(rows, 'unknown'), [])
+  assert.deepEqual(searchWatchHistory(rows, '  '), rows)
 })

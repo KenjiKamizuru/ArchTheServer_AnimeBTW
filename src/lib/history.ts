@@ -46,6 +46,38 @@ export function watchHistoryRows(
 
 const utcDay = (updatedAt: number): string => new Date(updatedAt).toISOString().slice(0, 10)
 
+// English month tokens (full + 3-letter) for the free-text date search.
+const MONTHS: Record<string, number> = {
+  jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4,
+  may: 5, jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8, sep: 9, sept: 9,
+  september: 9, oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12,
+}
+
+/**
+ * Free-text search across titles AND dates (AV-162). Whitespace-separated
+ * tokens AND together; each token matches the row if it is a
+ * case-insensitive title substring OR a date form of the UTC day:
+ * ISO day/month/year prefixes ("2024-03-05", "2024-03", "2024") and
+ * English month names ("march", "mar"). So "family march 2024" means
+ * title-family AND March AND 2024. Rows without media match only date
+ * tokens.
+ */
+export function searchWatchHistory(rows: WatchHistoryRow[], query: string): WatchHistoryRow[] {
+  const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (tokens.length === 0) return rows
+  return rows.filter((row) => {
+    const day = utcDay(row.updatedAt)
+    const title = row.media?.title?.toLowerCase() ?? ''
+    return tokens.every((token) => {
+      if (title && title.includes(token)) return true
+      if (/^\d{4}(-\d{2}){0,2}$/.test(token) && day.startsWith(token)) return true
+      const month = MONTHS[token]
+      if (month !== undefined && Number(day.slice(5, 7)) === month) return true
+      return false
+    })
+  })
+}
+
 /**
  * Filters preserve the row order. Day bounds are INCLUSIVE and compare
  * against the record's UTC day, so the filter is deterministic regardless of
