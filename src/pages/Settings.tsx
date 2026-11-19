@@ -18,7 +18,9 @@ import { focusObjectClass, removeArtwork, useArtwork } from '../lib/artwork'
 import { refreshDownloads, refreshLibrary } from '../lib/downloads'
 import { saveSettings, useSettings } from '../lib/settings'
 import { ImdbArtworkModal } from '../components/ImdbArtworkModal'
-import { UserPlus, LogIn, LogOut, KeyRound, Send } from 'lucide-react'
+import { UserPlus, LogIn, LogOut, KeyRound, Send, Fingerprint } from 'lucide-react'
+import { passkeysSupported, registerPasskeyCeremony, signInWithPasskey } from '../lib/passkeys'
+import type { PasskeyCredential } from '../types'
 import type { RegisteredUser } from '../types'
 import { useToast } from '../components/Toasts'
 import type { AppSettings, ResolverStatus } from '../types'
@@ -73,6 +75,11 @@ function AccountsCard() {
   const [applyError, setApplyError] = useState<string | null>(null)
   const [bioDraft, setBioDraft] = useState('')
   const [bioBusy, setBioBusy] = useState(false)
+  const [passkeys, setPasskeys] = useState<PasskeyCredential[]>([])
+  const [passkeyName, setPasskeyName] = useState('')
+  const [passkeyBusy, setPasskeyBusy] = useState(false)
+  const [passkeyError, setPasskeyError] = useState<string | null>(null)
+  const [passkeySupported] = useState(() => passkeysSupported())
 
   useEffect(() => {
     setBioDraft(user?.bio ?? '')
@@ -83,6 +90,17 @@ function AccountsCard() {
       .then((res) => setUser(res.user))
       .catch(() => setUser(null))
   }, [])
+
+  useEffect(() => {
+    if (!user) {
+      setPasskeys([])
+      return
+    }
+    api
+      .listPasskeys()
+      .then((res) => setPasskeys(res.passkeys))
+      .catch(() => setPasskeys([]))
+  }, [user])
 
   async function signIn() {
     setSignInBusy(true)
@@ -107,6 +125,49 @@ function AccountsCard() {
       toast('Signed out')
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Could not sign out', 'err')
+    }
+  }
+
+  async function registerPasskey() {
+    setPasskeyBusy(true)
+    setPasskeyError(null)
+    try {
+      const res = await registerPasskeyCeremony(passkeyName.trim())
+      setPasskeys((prev) => [...prev, res.credential])
+      setPasskeyName('')
+      toast('Passkey registered')
+    } catch (err) {
+      setPasskeyError(err instanceof Error ? err.message : 'Could not register a passkey')
+    } finally {
+      setPasskeyBusy(false)
+    }
+  }
+
+  async function signInPasskey() {
+    setSignInBusy(true)
+    setSignInError(null)
+    try {
+      const res = await signInWithPasskey()
+      setUser(res.user)
+      toast(`Signed in as ${res.user.username}`)
+    } catch (err) {
+      setSignInError(err instanceof Error ? err.message : 'Could not sign in with a passkey')
+    } finally {
+      setSignInBusy(false)
+    }
+  }
+
+  async function removePasskey(credentialId: string) {
+    setPasskeyBusy(true)
+    setPasskeyError(null)
+    try {
+      await api.removePasskey(credentialId)
+      setPasskeys((prev) => prev.filter((item) => item.credentialId !== credentialId))
+      toast('Passkey removed')
+    } catch (err) {
+      setPasskeyError(err instanceof Error ? err.message : 'Could not remove the passkey')
+    } finally {
+      setPasskeyBusy(false)
     }
   }
 
@@ -265,6 +326,50 @@ function AccountsCard() {
                 {bioBusy ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} Save bio
               </button>
             </div>
+            {passkeySupported ? (
+              <div className="mt-3 border-t border-white/5 pt-3">
+                <h3 className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-white/30">
+                  <Fingerprint size={11} /> Passkeys
+                </h3>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <input
+                    type="text"
+                    value={passkeyName}
+                    onChange={(event) => setPasskeyName(event.target.value.slice(0, 60))}
+                    placeholder="Name (e.g. My laptop)"
+                    className="w-52 rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void registerPasskey()}
+                    disabled={passkeyBusy}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[11px] font-semibold text-black transition hover:bg-accent-600 disabled:opacity-40"
+                  >
+                    {passkeyBusy ? <Loader2 size={12} className="animate-spin" /> : <Fingerprint size={12} />} Register a passkey
+                  </button>
+                </div>
+                {passkeys.length > 0 ? (
+                  <ul className="mt-2 space-y-1">
+                    {passkeys.map((item) => (
+                      <li key={item.credentialId} className="flex items-center gap-2 text-[11px] text-white/70">
+                        <Fingerprint size={11} className="shrink-0" />
+                        <span className="truncate">{item.name || 'Unnamed passkey'}</span>
+                        <button
+                          type="button"
+                          onClick={() => void removePasskey(item.credentialId)}
+                          disabled={passkeyBusy}
+                          title="Remove this passkey"
+                          className="ml-auto inline-flex items-center gap-1 rounded-lg px-2 py-1 text-white/40 transition hover:bg-white/5 hover:text-red-300 disabled:opacity-40"
+                        >
+                          <Trash2 size={11} /> Remove
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                {passkeyError ? <p className="mt-2 text-[11px] text-red-300">{passkeyError}</p> : null}
+              </div>
+            ) : null}
           </div>
           </>
         ) : (
@@ -291,6 +396,16 @@ function AccountsCard() {
             >
               {signInBusy ? <Loader2 size={12} className="animate-spin" /> : <LogIn size={12} />} Sign in
             </button>
+            {passkeySupported ? (
+              <button
+                type="button"
+                onClick={() => void signInPasskey()}
+                disabled={signInBusy}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-white/5 px-3 py-1.5 text-[11px] font-semibold text-white ring-1 ring-white/10 transition hover:bg-white/10 disabled:opacity-40"
+              >
+                {signInBusy ? <Loader2 size={12} className="animate-spin" /> : <Fingerprint size={12} />} Sign in with a passkey
+              </button>
+            ) : null}
             {signInError ? <p className="w-full text-[11px] text-red-300">{signInError}</p> : null}
           </div>
         )}

@@ -32,6 +32,7 @@ import type {
   StaffDetail,
   RegistrationStatus,
   RegisteredUser,
+  PasskeyCredential,
 } from '../types'
 
 export interface BrowseFilters {
@@ -459,6 +460,26 @@ export const api = {
 
   updateProfile(payload: { bio: string | null }) {
     return send<{ user: RegisteredUser }>('/api/auth/profile', 'PUT', payload)
+  },
+
+  passkeyChallenge(purpose: 'register' | 'authenticate') {
+    return send<{ challenge: string }>('/api/auth/passkey/challenge', 'POST', { purpose })
+  },
+
+  passkeyRegister(payload: { clientDataJSON: string; attestationObject: string; name?: string }) {
+    return send<{ credential: PasskeyCredential }>('/api/auth/passkey/register', 'POST', payload)
+  },
+
+  passkeyAuthenticate(payload: { credentialId: string; clientDataJSON: string; authenticatorData: string; signature: string }) {
+    return send<{ user: RegisteredUser }>('/api/auth/passkey/authenticate', 'POST', payload)
+  },
+
+  listPasskeys() {
+    return get<{ passkeys: PasskeyCredential[] }>('/api/auth/passkey', false)
+  },
+
+  removePasskey(credentialId: string) {
+    return send<{ ok: boolean }>(`/api/auth/passkey/${encodeURIComponent(credentialId)}`, 'DELETE')
   },
 
   resolverStatus() {

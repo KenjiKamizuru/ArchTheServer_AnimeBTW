@@ -320,6 +320,14 @@ export interface RegisteredUser {
   createdAt: number
 }
 
+export interface PasskeyCredential {
+  credentialId: string
+  name: string | null
+  createdAt: number
+  lastUsedAt: number | null
+  counter: number
+}
+
 export interface WatchOrderRecommendation {
   recommended: 'release' | 'chronological'
   label: string
