@@ -540,6 +540,14 @@ export const api = {
     return get<{ user: RegisteredUser; visibility: string }>(`/api/profile/${encodeURIComponent(userId)}${qs}`, false)
   },
 
+  preferences() {
+    return get<{ preferredLanguage: string | null; locale: string | null }>('/api/auth/preferences', false)
+  },
+
+  updatePreferences(body: { preferredLanguage?: string | null; locale?: string | null }) {
+    return send<{ preferredLanguage: string | null; locale: string | null }>('/api/auth/preferences', 'PUT', body)
+  },
+
   resolverStatus() {
     return get<ResolverStatus>('/api/resolver/status', false)
   },

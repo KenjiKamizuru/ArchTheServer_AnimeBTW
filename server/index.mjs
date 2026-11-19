@@ -42,6 +42,7 @@ import {
   getOrCreateProfileLink,
   rotateProfileLink,
 } from './profilePrivacy.mjs'
+import { normalizePreferencesUpdate } from './userPreferences.mjs'
 import { atomicWriteFile } from './security.mjs'
 
 const EMAIL_VERIFY_TTL_MS = 24 * 60 * 60 * 1000
@@ -1254,6 +1255,29 @@ app.get(
     const view = canViewProfile(user, { viewerId, token: req.query.token ?? null })
     if (!view.ok) throw notFound()
     res.json({ user: publicUser(user), visibility: user.profileVisibility ?? 'public' })
+  }),
+)
+
+// Language & locale preferences (AV-112): stored per user; the app has no
+// i18n layer yet, so these are exposed for display choices and future work.
+app.get(
+  '/api/auth/preferences',
+  wrap(async (req, res) => {
+    const { user } = await requireSessionUser(req)
+    res.json({ preferredLanguage: user.preferredLanguage ?? null, locale: user.locale ?? null })
+  }),
+)
+
+app.put(
+  '/api/auth/preferences',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user, users } = await requireSessionUser(req)
+    const parsed = normalizePreferencesUpdate(req.body)
+    if (!parsed.ok) throw Object.assign(new Error(parsed.error), { status: 400 })
+    Object.assign(user, parsed.value)
+    await kv.set('users', users)
+    res.json({ preferredLanguage: user.preferredLanguage ?? null, locale: user.locale ?? null })
   }),
 )
 

@@ -18,7 +18,7 @@ import { focusObjectClass, removeArtwork, useArtwork } from '../lib/artwork'
 import { refreshDownloads, refreshLibrary } from '../lib/downloads'
 import { saveSettings, useSettings } from '../lib/settings'
 import { ImdbArtworkModal } from '../components/ImdbArtworkModal'
-import { UserPlus, LogIn, LogOut, KeyRound, Send, Fingerprint, Shield } from 'lucide-react'
+import { UserPlus, LogIn, LogOut, KeyRound, Send, Fingerprint, Shield, Globe } from 'lucide-react'
 import { passkeysSupported, registerPasskeyCeremony, signInWithPasskey } from '../lib/passkeys'
 import type { PasskeyCredential } from '../types'
 import type { RegisteredUser } from '../types'
@@ -98,6 +98,10 @@ function AccountsCard() {
   const [profileLinkPath, setProfileLinkPath] = useState('')
   const [privacyBusy, setPrivacyBusy] = useState(false)
   const [privacyError, setPrivacyError] = useState<string | null>(null)
+  const [prefLanguage, setPrefLanguage] = useState('')
+  const [prefLocale, setPrefLocale] = useState('')
+  const [prefsBusy, setPrefsBusy] = useState(false)
+  const [prefsError, setPrefsError] = useState<string | null>(null)
 
   useEffect(() => {
     setBioDraft(user?.bio ?? '')
@@ -139,6 +143,16 @@ function AccountsCard() {
       .catch(() => {
         setProfileVisibility('public')
         setProfileLinkToken('')
+      })
+    api
+      .preferences()
+      .then((res) => {
+        setPrefLanguage(res.preferredLanguage ?? '')
+        setPrefLocale(res.locale ?? '')
+      })
+      .catch(() => {
+        setPrefLanguage('')
+        setPrefLocale('')
       })
   }, [user])
 
@@ -352,6 +366,21 @@ function AccountsCard() {
       setPrivacyError(err instanceof Error ? err.message : 'Could not rotate the link')
     } finally {
       setPrivacyBusy(false)
+    }
+  }
+
+  async function savePreferences() {
+    setPrefsBusy(true)
+    setPrefsError(null)
+    try {
+      const res = await api.updatePreferences({ preferredLanguage: prefLanguage, locale: prefLocale })
+      setPrefLanguage(res.preferredLanguage ?? '')
+      setPrefLocale(res.locale ?? '')
+      toast('Preferences saved')
+    } catch (err) {
+      setPrefsError(err instanceof Error ? err.message : 'Could not save preferences')
+    } finally {
+      setPrefsBusy(false)
     }
   }
 
@@ -597,6 +626,39 @@ function AccountsCard() {
                     : 'Anyone can view your profile.'}
               </p>
               {privacyError ? <p className="mt-2 text-[11px] text-red-300">{privacyError}</p> : null}
+            </div>
+            <div className="mt-3 border-t border-white/5 pt-3">
+              <h3 className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-white/30">
+                <Globe size={11} /> Language &amp; locale
+              </h3>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <input
+                  type="text"
+                  value={prefLanguage}
+                  onChange={(event) => setPrefLanguage(event.target.value.slice(0, 20))}
+                  placeholder="Content language (e.g. ja)"
+                  className="w-48 rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
+                />
+                <input
+                  type="text"
+                  value={prefLocale}
+                  onChange={(event) => setPrefLocale(event.target.value.slice(0, 20))}
+                  placeholder="Formatting locale (e.g. en-US)"
+                  className="w-48 rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
+                />
+                <button
+                  type="button"
+                  onClick={() => void savePreferences()}
+                  disabled={prefsBusy}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[11px] font-semibold text-black transition hover:bg-accent-600 disabled:opacity-40"
+                >
+                  {prefsBusy ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} Save
+                </button>
+              </div>
+              <p className="mt-1 text-[11px] text-white/40">
+                Language tags like &quot;en&quot;, &quot;pt-BR&quot;, or &quot;zh-Hant&quot;. Stored for display choices — the UI is not translated yet.
+              </p>
+              {prefsError ? <p className="mt-2 text-[11px] text-red-300">{prefsError}</p> : null}
             </div>
             {passkeySupported ? (
               <div className="mt-3 border-t border-white/5 pt-3">
