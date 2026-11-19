@@ -1241,7 +1241,12 @@ app.get(
     const { user, users } = await requireSessionUser(req)
     const { token } = getOrCreateProfileLink(user)
     await kv.set('users', users)
-    res.json({ token, path: `/profile/${user.id}`, visibility: user.profileVisibility ?? 'public' })
+    res.json({
+      token,
+      path: `/profile/${user.id}`,
+      visibility: user.profileVisibility ?? 'public',
+      showActivity: Boolean(user.showActivity),
+    })
   }),
 )
 

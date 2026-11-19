@@ -524,7 +524,11 @@ export const api = {
   },
 
   profileSettings() {
-    return get<{ token: string; path: string; visibility: string }>('/api/auth/profile-link', false)
+    return get<{ token: string; path: string; visibility: string; showActivity: boolean }>('/api/auth/profile-link', false)
+  },
+
+  setProfileActivity(showActivity: boolean) {
+    return send<{ showActivity: boolean }>('/api/auth/profile-activity', 'PUT', { showActivity })
   },
 
   setProfileVisibility(visibility: 'public' | 'private' | 'link-only') {
@@ -537,7 +541,7 @@ export const api = {
 
   viewProfile(userId: string, token?: string | null) {
     const qs = token ? `?token=${encodeURIComponent(token)}` : ''
-    return get<{ user: RegisteredUser; visibility: string }>(`/api/profile/${encodeURIComponent(userId)}${qs}`, false)
+    return get<{ user: RegisteredUser; visibility: string; activity: { memberSince: number | null; activeSessions: number } | null }>(`/api/profile/${encodeURIComponent(userId)}${qs}`, false)
   },
 
   preferences() {

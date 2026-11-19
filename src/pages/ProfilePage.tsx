@@ -12,6 +12,7 @@ export default function ProfilePage() {
   const token = searchParams.get('token')
   const [user, setUser] = useState<RegisteredUser | null>(null)
   const [visibility, setVisibility] = useState<string>('public')
+  const [activity, setActivity] = useState<{ memberSince: number | null; activeSessions: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [avatarBroken, setAvatarBroken] = useState(false)
@@ -25,6 +26,7 @@ export default function ProfilePage() {
       .then((res) => {
         setUser(res.user)
         setVisibility(res.visibility)
+        setActivity(res.activity)
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Profile not found'))
       .finally(() => setLoading(false))
@@ -62,6 +64,16 @@ export default function ProfilePage() {
             </div>
           </div>
           {user.bio ? <p className="mt-4 whitespace-pre-wrap text-sm text-white/80">{user.bio}</p> : null}
+          {activity ? (
+            <div className="mt-4 flex flex-wrap gap-3 text-[11px] text-white/60">
+              {activity.memberSince ? (
+                <span>Member since {new Date(activity.memberSince).toLocaleDateString()}</span>
+              ) : null}
+              <span>
+                {activity.activeSessions} active session{activity.activeSessions === 1 ? '' : 's'}
+              </span>
+            </div>
+          ) : null}
           <p className="mt-4 flex items-center gap-1.5 text-[11px] text-white/40">
             <Shield size={11} /> {visibility === 'link-only' ? 'Link-only profile' : visibility === 'private' ? 'Private profile' : 'Public profile'}
           </p>

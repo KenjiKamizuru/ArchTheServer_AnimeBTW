@@ -96,6 +96,7 @@ function AccountsCard() {
   const [profileVisibility, setProfileVisibility] = useState('public')
   const [profileLinkToken, setProfileLinkToken] = useState('')
   const [profileLinkPath, setProfileLinkPath] = useState('')
+  const [showActivity, setShowActivity] = useState(false)
   const [privacyBusy, setPrivacyBusy] = useState(false)
   const [privacyError, setPrivacyError] = useState<string | null>(null)
   const [prefLanguage, setPrefLanguage] = useState('')
@@ -145,10 +146,12 @@ function AccountsCard() {
         setProfileVisibility(res.visibility)
         setProfileLinkToken(res.token)
         setProfileLinkPath(res.path)
+        setShowActivity(res.showActivity)
       })
       .catch(() => {
         setProfileVisibility('public')
         setProfileLinkToken('')
+        setShowActivity(false)
       })
     api
       .preferences()
@@ -357,6 +360,20 @@ function AccountsCard() {
       toast('Profile visibility updated')
     } catch (err) {
       setPrivacyError(err instanceof Error ? err.message : 'Could not update visibility')
+    } finally {
+      setPrivacyBusy(false)
+    }
+  }
+
+  async function changeShowActivity(value: boolean) {
+    setPrivacyBusy(true)
+    setPrivacyError(null)
+    try {
+      const res = await api.setProfileActivity(value)
+      setShowActivity(res.showActivity)
+      toast(res.showActivity ? 'Activity summary is visible on your profile' : 'Activity summary hidden')
+    } catch (err) {
+      setPrivacyError(err instanceof Error ? err.message : 'Could not update the activity setting')
     } finally {
       setPrivacyBusy(false)
     }
@@ -658,6 +675,16 @@ function AccountsCard() {
                     ? 'Only you can view your profile.'
                     : 'Anyone can view your profile.'}
               </p>
+              <label className="mt-2 flex items-center gap-2 text-[11px] text-white/70">
+                <input
+                  type="checkbox"
+                  checked={showActivity}
+                  disabled={privacyBusy}
+                  onChange={(event) => void changeShowActivity(event.target.checked)}
+                  className="h-3.5 w-3.5 accent-[color:var(--color-accent,#e11d48)]"
+                />
+                Show an activity summary (member since, active sessions) on my profile
+              </label>
               {privacyError ? <p className="mt-2 text-[11px] text-red-300">{privacyError}</p> : null}
             </div>
             <div className="mt-3 border-t border-white/5 pt-3">
