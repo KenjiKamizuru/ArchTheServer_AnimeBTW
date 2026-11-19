@@ -31,6 +31,7 @@ export async function init() {
       const media = sanitizeBookmarkMedia(entry?.media)
       if (!media || media.id !== entry.mediaId || mediaIds.has(media.id) || (entry.status !== null && !STATUSES.includes(entry.status)) || !Array.isArray(entry.listIds) || entry.listIds.some((id) => !ids.has(id)) || new Set(entry.listIds).size !== entry.listIds.length || !Number.isFinite(entry.addedAt)) throw new Error('Invalid list entry')
       if (entry.notes !== undefined && (!Array.isArray(entry.notes) || entry.notes.length > MAX_LISTS + 1 || entry.notes.some((note) => !note || typeof note.listId !== 'string' || typeof note.text !== 'string' || note.text.length > 1000 || !((note.listId === `status:${entry.status}`) || entry.listIds.includes(note.listId))) || new Set(entry.notes.map((note) => note.listId)).size !== entry.notes.length)) throw new Error('Invalid entry notes')
+      if (entry.ratings !== undefined && (!Array.isArray(entry.ratings) || entry.ratings.length > MAX_LISTS + 1 || entry.ratings.some((r) => !r || !((r.listId === `status:${entry.status}`) || entry.listIds.includes(r.listId)) || (r.priority !== null && (!Number.isInteger(r.priority) || r.priority < 1 || r.priority > 5)) || (r.rating !== null && (!Number.isInteger(r.rating) || r.rating < 1 || r.rating > 10))) || new Set(entry.ratings.map((r) => r.listId)).size !== entry.ratings.length)) throw new Error('Invalid entry ratings')
       mediaIds.add(media.id)
       entry.media = media
     }
@@ -64,7 +65,7 @@ function includes(entry, id) {
 }
 export function readList(id) {
   const meta = info(id)
-  const entries = state.entries.filter((item) => includes(item, id)).sort((a, b) => b.addedAt - a.addedAt).map(({ notes, ...item }) => ({ ...item, note: notes?.find((n) => n.listId === id)?.text ?? '' }))
+  const entries = state.entries.filter((item) => includes(item, id)).sort((a, b) => b.addedAt - a.addedAt).map(({ notes, ratings, ...item }) => ({ ...item, note: notes?.find((n) => n.listId === id)?.text ?? '', priority: ratings?.find((r) => r.listId === id)?.priority ?? null, rating: ratings?.find((r) => r.listId === id)?.rating ?? null }))
   return { ...meta, count: entries.length, entries }
 }
 export function summary() {
@@ -90,6 +91,7 @@ export async function deleteList(id) {
   for (const entry of state.entries) {
     entry.listIds = entry.listIds.filter((item) => item !== id)
     if (entry.notes) entry.notes = entry.notes.filter((note) => note.listId !== id)
+    if (entry.ratings) entry.ratings = entry.ratings.filter((r) => r.listId !== id)
   }
   state.entries = state.entries.filter((entry) => entry.status || entry.listIds.length)
   await persist()
@@ -108,7 +110,10 @@ export async function add(id, rawMedia, addedAt = Date.now()) {
   if (list.custom) {
     if (!entry.listIds.includes(id)) entry.listIds.push(id)
   } else {
-    if (entry.status !== id.slice(7) && entry.notes) entry.notes = entry.notes.filter((note) => note.listId !== `status:${entry.status}`)
+    if (entry.status !== id.slice(7)) {
+      if (entry.notes) entry.notes = entry.notes.filter((note) => note.listId !== `status:${entry.status}`)
+      if (entry.ratings) entry.ratings = entry.ratings.filter((r) => r.listId !== `status:${entry.status}`)
+    }
     entry.status = id.slice(7)
   }
   await persist()
@@ -121,6 +126,7 @@ export async function remove(id, rawId) {
   const entry = state.entries.find((item) => item.mediaId === mediaId)
   if (!entry || !includes(entry, id)) return { removed: false }
   if (entry.notes) entry.notes = entry.notes.filter((note) => note.listId !== id)
+  if (entry.ratings) entry.ratings = entry.ratings.filter((r) => r.listId !== id)
   if (list.custom) entry.listIds = entry.listIds.filter((item) => item !== id)
   else {
     // Removing a status removes that status; custom memberships remain intact.
@@ -142,6 +148,23 @@ export async function setNote(id, rawId, text) {
   if (text.trim()) entry.notes.push({ listId: id, text })
   await persist()
   return { mediaId, note: text.trim() ? text : '' }
+}
+export async function setRating(id, rawId, patch) {
+  info(id)
+  const mediaId = Number(rawId)
+  if (!Number.isInteger(mediaId) || mediaId <= 0) throw error('Invalid media id')
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch) || !Object.keys(patch).length || Object.keys(patch).some((key) => !['priority', 'rating'].includes(key))) throw error('Expected priority and/or rating')
+  for (const [key, max] of [['priority', 5], ['rating', 10]]) {
+    if (key in patch && patch[key] !== null && (!Number.isInteger(patch[key]) || patch[key] < 1 || patch[key] > max)) throw error(`${key} must be null or an integer from 1 to ${max}`)
+  }
+  const entry = state.entries.find((item) => item.mediaId === mediaId)
+  if (!entry || !includes(entry, id)) throw error('Entry not found in list', 404)
+  const previous = entry.ratings?.find((r) => r.listId === id)
+  const next = { listId: id, priority: patch.priority === undefined ? previous?.priority ?? null : patch.priority, rating: patch.rating === undefined ? previous?.rating ?? null : patch.rating }
+  entry.ratings = (entry.ratings ?? []).filter((r) => r.listId !== id)
+  if (next.priority !== null || next.rating !== null) entry.ratings.push(next)
+  await persist()
+  return { mediaId, priority: next.priority, rating: next.rating }
 }
 export async function migrateBookmarks(bookmarks) {
   let migrated = 0, skipped = 0

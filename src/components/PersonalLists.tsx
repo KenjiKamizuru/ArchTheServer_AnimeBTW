@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import type { Media } from '../types'
 
 type ListSummary = { id: string; name: string; count: number; description?: string }
-type Entry = { mediaId: number; media: Media; status: string | null; note: string }
+type Entry = { mediaId: number; media: Media; status: string | null; note: string; priority: number | null; rating: number | null }
 type Overview = { statuses: ListSummary[]; lists: ListSummary[] }
 type List = ListSummary & { entries: Entry[]; custom: boolean }
 
@@ -140,6 +140,22 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
               {overview?.statuses.map((status) => <option key={status.id} value={status.id.slice(7)}>{status.name}</option>)}
             </select>
             <button type="button" className={button} disabled={busy} aria-label={`Remove ${entry.media.title} from ${list.name}`} onClick={() => void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}/entries/${entry.mediaId}`, 'DELETE') })}>Remove</button>
+            <label className="sr-only" htmlFor={`priority-${entry.mediaId}`}>Priority for {entry.media.title}</label>
+            <select id={`priority-${entry.mediaId}`} className={input} disabled={busy} value={entry.priority ?? ''} onChange={(event) => {
+              const priority = event.target.value ? Number(event.target.value) : null
+              void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}/entries/${entry.mediaId}/rating`, 'PUT', { priority }) })
+            }}>
+              <option value="">No priority</option>
+              {[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>Priority {value}</option>)}
+            </select>
+            <label className="sr-only" htmlFor={`rating-${entry.mediaId}`}>Personal rating for {entry.media.title}</label>
+            <select id={`rating-${entry.mediaId}`} className={input} disabled={busy} value={entry.rating ?? ''} onChange={(event) => {
+              const rating = event.target.value ? Number(event.target.value) : null
+              void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}/entries/${entry.mediaId}/rating`, 'PUT', { rating }) })
+            }}>
+              <option value="">Unrated</option>
+              {Array.from({ length: 10 }, (_, i) => i + 1).map((value) => <option key={value} value={value}>{value}/10</option>)}
+            </select>
             <EntryNote entry={entry} listId={active} busy={busy} onSave={(note) => void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}/entries/${entry.mediaId}/note`, 'PUT', { note }) })} />
           </li>)}
         </ul>}

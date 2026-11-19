@@ -670,6 +670,9 @@ app.delete('/api/lists/:id', limitMutations, wrap(async (req, res) => {
 app.post('/api/lists/:id/entries', limitMutations, wrap(async (req, res) => {
   res.json({ entry: await listStore.add(req.params.id, req.body?.media) })
 }))
+app.put('/api/lists/:id/entries/:mediaId/rating', limitMutations, wrap(async (req, res) => {
+  res.json(await listStore.setRating(req.params.id, req.params.mediaId, req.body))
+}))
 app.put('/api/lists/:id/entries/:mediaId/note', limitMutations, wrap(async (req, res) => {
   res.json(await listStore.setNote(req.params.id, req.params.mediaId, req.body?.note))
 }))

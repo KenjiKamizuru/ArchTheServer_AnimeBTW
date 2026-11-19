@@ -2,7 +2,7 @@
 export function exportListJson(list) {
   return JSON.stringify({
     format: 'animevault-list', version: 1,
-    list: { name: list.name, description: list.description ?? '', entries: list.entries.map(({ mediaId, media, status, addedAt, note }) => ({ mediaId, media, status, addedAt, note: note ?? '' })) },
+    list: { name: list.name, description: list.description ?? '', entries: list.entries.map(({ mediaId, media, status, addedAt, note, priority, rating }) => ({ mediaId, media, status, addedAt, note: note ?? '', priority: priority ?? null, rating: rating ?? null })) },
   }, null, 2)
 }
 
@@ -14,10 +14,10 @@ export function csvCell(value) {
   return `"${text.replace(/"/g, '""')}"`
 }
 export function exportListCsv(list) {
-  const rows = [['mediaId', 'title', 'status', 'addedAt', 'note']]
+  const rows = [['mediaId', 'title', 'status', 'addedAt', 'note', 'priority', 'rating']]
   for (const entry of list.entries) {
     const date = new Date(entry.addedAt)
-    rows.push([entry.mediaId, entry.media.title, entry.status ?? '', Number.isFinite(date.getTime()) ? date.toISOString() : '', entry.note ?? ''])
+    rows.push([entry.mediaId, entry.media.title, entry.status ?? '', Number.isFinite(date.getTime()) ? date.toISOString() : '', entry.note ?? '', entry.priority ?? '', entry.rating ?? ''])
   }
   return rows.map((row) => row.map(csvCell).join(',')).join('\r\n') + '\r\n'
 }
