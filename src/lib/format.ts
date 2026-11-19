@@ -225,3 +225,10 @@ export function clampEpisode(value: number, max: number): number {
   if (!Number.isFinite(value)) return 1
   return Math.min(Math.max(1, Math.floor(value)), Math.max(1, max))
 }
+
+/** The next episode number, or null when there is none (AV-159). */
+export function nextEpisodeNumber(current: number, max: number): number | null {
+  if (!Number.isInteger(current) || current < 1) return null
+  const episode = clampEpisode(current, max)
+  return episode < Math.max(1, Math.floor(max)) ? episode + 1 : null
+}

@@ -64,6 +64,7 @@ import {
   formatSeason,
   formatSpeed,
   inferSeasonFromTitle,
+  nextEpisodeNumber,
   pickSharedSeriesTitle,
   relativeTime,
   safeExternalHref,
@@ -303,8 +304,64 @@ function DetailSheet({
       ...localItemToPlayback(item),
       mediaId: media?.id ?? item.mediaId ?? null,
       seasonKey: seasonKeyFor(media?.season, media?.seasonYear),
+      onNext: item.episode ? nextEpisodeAction(item.episode) : undefined,
     })
     onClose()
+  }
+
+  // AV-159: the player's "next episode" action. Returns the action only
+  // when a next episode exists; the callback is STATE-FREE (no setState) so
+  // it keeps working after this modal has closed.
+  function nextEpisodeAction(ep: number): (() => void) | undefined {
+    const next = nextEpisodeNumber(ep, maxEpisode)
+    return next ? () => { void playEpisode(next) } : undefined
+  }
+
+  /** Resolves local-first like onWatch, falling back to live streaming. */
+  async function playEpisode(n: number) {
+    if (!media) return
+    const ep = clampEpisode(n, maxEpisode)
+    const seasonKey = seasonKeyFor(media.season, media.seasonYear)
+    const localCopy = localByEpisode.get(ep)
+    const openLocal = () => {
+      if (!localCopy) return
+      player.open({
+        ...localItemToPlayback(localCopy),
+        mediaId: media.id,
+        seasonKey,
+        onNext: nextEpisodeAction(ep),
+      })
+    }
+    if (localCopy && settings.preferLocalPlayback) {
+      openLocal()
+      return
+    }
+    const query = providerQuery.trim() || media.title
+    try {
+      await api.watch({
+        query,
+        resultIndex: providerIndex,
+        episode: ep,
+        quality: selectedQuality,
+        dub: settings.dub,
+        mediaId: media.id,
+        title: providerTitle ?? undefined,
+      })
+      player.open({
+        kind: 'live',
+        title: media.title,
+        episode: ep,
+        query,
+        resultIndex: providerIndex,
+        quality: selectedQuality,
+        dub: settings.dub,
+        mediaId: media.id,
+        seasonKey,
+        onNext: nextEpisodeAction(ep),
+      })
+    } catch {
+      openLocal()
+    }
   }
 
   /**
@@ -344,6 +401,7 @@ function DetailSheet({
         dub: settings.dub,
         mediaId: media.id,
         seasonKey: seasonKeyFor(media.season, media.seasonYear),
+        onNext: nextEpisodeAction(ep),
       })
       onClose()
     } catch (err) {

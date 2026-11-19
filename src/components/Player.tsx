@@ -60,6 +60,7 @@ export type PlaybackSource =
       dub?: boolean
       mediaId?: number | null
       seasonKey?: string
+      onNext?: () => void
     }
   | {
       kind: 'local'
@@ -72,6 +73,7 @@ export type PlaybackSource =
       directPlayable: boolean
       mediaId?: number | null
       seasonKey?: string
+      onNext?: () => void
     }
 
 export function localItemToPlayback(item: LibraryItem): PlaybackSource {
@@ -151,6 +153,7 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
   const [error, setError] = useState<string | null>(null)
   const [mseFallback, setMseFallback] = useState(false)
   const [localRemuxFallback, setLocalRemuxFallback] = useState(false)
+  const [ended, setEnded] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
   const autoPlayedRef = useRef(false)
   const settings = useSettings()
@@ -169,14 +172,45 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
     setError(null)
     setMseFallback(false)
     setLocalRemuxFallback(false)
+    setEnded(false)
     autoPlayedRef.current = false
   }, [source])
+
+
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.body.style.overflow = previous
+    }
+  }, [onClose])
+
+  const videoSrc = `${urls.video}${urls.video.includes('?') ? '&' : '?'}attempt=${attempt}`
+  const subtitleSrc = urls.subtitle
+    ? `${urls.subtitle}${urls.subtitle.includes('?') ? '&' : '?'}attempt=${attempt}`
+    : null
+  const heading =
+    source.kind === 'local'
+      ? source.episode
+        ? `${source.title} · ${formatEpisodeCode(source.season, source.episode)}`
+        : source.title
+      : source.episode
+        ? `${source.title} · EP ${source.episode}`
+        : source.title
 
   // Playback-position writer (AV-153): stores the position at the
   // configured interval while playing, and flushes on stop/ended/unmount.
   // Only sources with a STABLE identity report (mediaId + season key + a
   // real episode number) — the server derives completion (AV-155) and
-  // preserves manual marks (AV-154/156).
+  // preserves manual marks (AV-154/156). Deps follow the <video> key
+  // (videoSrc/useMse): a stream retry REMOUNTS the element, and the
+  // listeners must re-bind to the new one.
   useEffect(() => {
     const video = videoRef.current
     const mediaId = source.mediaId
@@ -208,33 +242,22 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
       video.removeEventListener('ended', onEnded)
       void writer.stop()
     }
-  }, [source, settings.progressSaveIntervalSeconds])
+  }, [videoSrc, useMse, settings.progressSaveIntervalSeconds])
 
+  // Completion (AV-159): track the ended state so the next-episode action
+  // can appear; replaying hides it again. Same re-bind deps as the writer.
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKey)
-    const previous = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+    const video = videoRef.current
+    if (!video) return
+    const onEnded = () => setEnded(true)
+    const onPlay = () => setEnded(false)
+    video.addEventListener('ended', onEnded)
+    video.addEventListener('play', onPlay)
     return () => {
-      document.removeEventListener('keydown', onKey)
-      document.body.style.overflow = previous
+      video.removeEventListener('ended', onEnded)
+      video.removeEventListener('play', onPlay)
     }
-  }, [onClose])
-
-  const videoSrc = `${urls.video}${urls.video.includes('?') ? '&' : '?'}attempt=${attempt}`
-  const subtitleSrc = urls.subtitle
-    ? `${urls.subtitle}${urls.subtitle.includes('?') ? '&' : '?'}attempt=${attempt}`
-    : null
-  const heading =
-    source.kind === 'local'
-      ? source.episode
-        ? `${source.title} · ${formatEpisodeCode(source.season, source.episode)}`
-        : source.title
-      : source.episode
-        ? `${source.title} · EP ${source.episode}`
-        : source.title
+  }, [videoSrc, useMse])
 
   useEffect(() => {
     autoPlayedRef.current = false
@@ -574,6 +597,33 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
               <div className="flex items-center gap-2 rounded-full bg-black/70 px-4 py-2 text-xs text-white/70 ring-1 ring-white/10">
                 <Loader2 size={14} className="animate-spin text-accent" />
                 {urls.live ? 'Resolving stream…' : 'Opening local file…'}
+              </div>
+            </div>
+          ) : null}
+
+          {/* Completion (AV-159): the next-episode action after playback
+              ends. The native controls stay usable underneath. */}
+          {ended && !error && source.onNext ? (
+            <div className="pointer-events-none absolute inset-0 flex items-end justify-center rounded-xl bg-gradient-to-t from-black/80 to-transparent pb-14">
+              <div className="pointer-events-auto flex items-center gap-3 rounded-full bg-black/80 px-5 py-3 ring-1 ring-white/10">
+                <span className="text-sm text-white/80">Episode finished</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEnded(false)
+                    source.onNext?.()
+                  }}
+                  className="rounded-full bg-accent px-4 py-1.5 text-xs font-semibold text-black transition hover:bg-accent/85"
+                >
+                  Play next episode
+                </button>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="rounded-full bg-white/10 px-4 py-1.5 text-xs font-medium text-white/80 transition hover:bg-white/20"
+                >
+                  Close
+                </button>
               </div>
             </div>
           ) : null}
