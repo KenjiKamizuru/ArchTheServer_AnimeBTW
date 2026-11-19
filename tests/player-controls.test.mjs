@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { NATIVE_CONTROLS_ZONE_PX, normalizePlaybackSpeed, shouldTogglePlayback } from '../src/lib/playerControls.ts'
+import { canUsePictureInPicture, NATIVE_CONTROLS_ZONE_PX, normalizePlaybackSpeed, shouldTogglePlayback } from '../src/lib/playerControls.ts'
 
 test('click-to-toggle covers the picture area only (AV-178)', () => {
   // a 400px-tall video: picture area is 0…352, controls strip 352…400
@@ -29,4 +29,11 @@ test('playback speeds snap to the ladder within range (AV-188)', () => {
   assert.equal(normalizePlaybackSpeed(99), 2, 'clamped to the range first')
   assert.equal(normalizePlaybackSpeed(-5), 0.25)
   assert.equal(normalizePlaybackSpeed(Number.NaN), 1, 'non-finite falls back to normal speed')
+})
+
+test('picture-in-picture is offered only where allowed (AV-189)', () => {
+  assert.equal(canUsePictureInPicture({ pictureInPictureEnabled: true }), true)
+  assert.equal(canUsePictureInPicture({ pictureInPictureEnabled: false }), false, 'disabled by policy — hidden')
+  assert.equal(canUsePictureInPicture({}), false, 'no API — hidden')
+  assert.equal(canUsePictureInPicture({ pictureInPictureEnabled: undefined }), false)
 })

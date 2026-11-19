@@ -22,6 +22,17 @@ export function normalizePlaybackSpeed(value: number): number {
 }
 
 /**
+ * AV-189: picture-in-picture is offered only where the browser allows it
+ * — the API exists AND the document-level toggle is on. Anything else
+ * (older engines, disabled-by-policy embeds) hides the control entirely.
+ */
+export function canUsePictureInPicture(env: {
+  pictureInPictureEnabled?: boolean
+}): boolean {
+  return env.pictureInPictureEnabled === true
+}
+
+/**
  * Whether a click at `offsetY` (relative to the video element's top edge,
  * in CSS pixels) should toggle play/pause. False inside the bottom
  * controls strip, outside the element, and for degenerate heights where

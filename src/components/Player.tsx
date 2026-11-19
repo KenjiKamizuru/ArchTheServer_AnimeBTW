@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { AlertTriangle, ChevronLeft, ChevronRight, Download, HardDrive, Loader2, Radio, RotateCw, X } from 'lucide-react'
+import { AlertTriangle, ChevronLeft, ChevronRight, Download, HardDrive, Loader2, PictureInPicture2, Radio, RotateCw, X } from 'lucide-react'
 import { api } from '../lib/api'
 import { formatEpisodeCode } from '../lib/format'
 import { useSettings } from '../lib/settings'
@@ -16,7 +16,7 @@ import { createProgressWriter } from '../lib/progressWriter'
 import { createWatchSession } from '../lib/watchSession'
 import { playerLoadingPhase, readinessLabels } from '../lib/playerLoading'
 import { recoveryActionLabel, recoveryActions } from '../lib/playerRecovery'
-import { normalizePlaybackSpeed, PLAYBACK_SPEEDS, shouldTogglePlayback } from '../lib/playerControls'
+import { canUsePictureInPicture, normalizePlaybackSpeed, PLAYBACK_SPEEDS, shouldTogglePlayback } from '../lib/playerControls'
 import { actionForKey, effectiveShortcuts } from '../lib/playerShortcuts'
 import { saveSettings } from '../lib/settings'
 import { concatBytes, Mp4BoxTracker, selectMseMimeType } from '../lib/mp4'
@@ -169,6 +169,7 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
   const [buffering, setBuffering] = useState(false)
   const [autoCountdown, setAutoCountdown] = useState<number | null>(null)
   const [autoCancelled, setAutoCancelled] = useState(false)
+  const [pipActive, setPipActive] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
   const autoPlayedRef = useRef(false)
   const settings = useSettings()
@@ -350,6 +351,21 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
     const video = videoRef.current
     if (video) video.playbackRate = normalizePlaybackSpeed(settings.playbackSpeed)
   }, [videoSrc, useMse, settings.playbackSpeed])
+
+  // AV-189: PiP state follows the element's own events (enter/leave),
+  // re-bound on every keyed remount like the other listeners.
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+    const onEnter = () => setPipActive(true)
+    const onLeave = () => setPipActive(false)
+    video.addEventListener('enterpictureinpicture', onEnter)
+    video.addEventListener('leavepictureinpicture', onLeave)
+    return () => {
+      video.removeEventListener('enterpictureinpicture', onEnter)
+      video.removeEventListener('leavepictureinpicture', onLeave)
+    }
+  }, [videoSrc, useMse])
 
   // Auto-advance (AV-160): when the toggle is on, the next episode starts
   // after a short countdown the viewer can cancel — or take immediately.
@@ -661,6 +677,33 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
             title="Next episode"
           >
             <ChevronRight size={18} />
+          </button>
+        ) : null}
+
+        {/* AV-189: picture-in-picture, only where the browser allows it. */}
+        {canUsePictureInPicture(document) ? (
+          <button
+            type="button"
+            onClick={() => {
+              const video = videoRef.current
+              if (!video) return
+              void (async () => {
+                try {
+                  if (document.pictureInPictureElement) await document.exitPictureInPicture()
+                  else await video.requestPictureInPicture()
+                } catch {
+                  // Best-effort: gesture/autoplay policies can refuse; the
+                  // control stays available and the state never lies.
+                }
+              })()
+            }}
+            className={`shrink-0 rounded-full p-2 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-white ${
+              pipActive ? 'bg-accent/20 text-accent' : 'bg-white/5 text-white/60'
+            }`}
+            aria-label="Picture in picture"
+            title="Picture in picture"
+          >
+            <PictureInPicture2 size={18} />
           </button>
         ) : null}
 
