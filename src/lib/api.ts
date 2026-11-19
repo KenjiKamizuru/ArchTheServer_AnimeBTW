@@ -426,6 +426,17 @@ export const api = {
     return send<{ session: PlaybackSession | null; skipped?: boolean }>('/api/sessions', 'PUT', record)
   },
 
+  // AV-175: preview or apply the interior-gap repair (manual marks).
+  repairProgress(dryRun: boolean) {
+    return send<{
+      dryRun: boolean
+      gaps: { mediaId: number; season: string; missing: number[] }[]
+      planned: number
+      filled?: number
+      rejected?: number
+    }>('/api/progress/repair', 'POST', { dryRun })
+  },
+
   // AV-173: watched-progress import from a MAL export — explicit manual
   // marks + watch statuses. Resolution is anime_id via the server.
   importMalProgress(entries: unknown[]) {

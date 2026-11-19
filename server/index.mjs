@@ -48,6 +48,7 @@ import { parseMalExport, matchResolved, toImportDocument } from './malImport.mjs
 import { stalledUnfinished, clampIdleDays, returningSoon, newEpisodesAvailable, continueWatching } from './smartLists.mjs'
 import { buildProgressExport } from './progressExport.mjs'
 import { mapWatchedProgress } from './malProgressImport.mjs'
+import { findProgressGaps, repairMarks } from './progressRepair.mjs'
 import { normalizeShowActivity, buildActivitySummary } from './profileActivity.mjs'
 import { buildAccountExport } from './accountExport.mjs'
 import { validateDeletionConfirmation, DELETION_ARTIFACTS } from './accountDeletion.mjs'
@@ -1964,6 +1965,34 @@ app.post('/api/progress/import/mal', limitMutations, limitOutbound, wrap(async (
     statusesApplied,
     truncated,
   })
+}))
+
+// Progress integrity repair (AV-175): fill INTERIOR episode gaps with
+// explicit manual marks. User-invoked ({dryRun: true} previews first),
+// idempotent — existing records are never touched.
+app.post('/api/progress/repair', limitMutations, wrap(async (req, res) => {
+  const { user } = await requireSessionUser(req)
+  const profileId = progressProfileId(user, req)
+  const gaps = findProgressGaps(progressStore.listProgress(profileId))
+  const marks = repairMarks(gaps)
+  if (req.body?.dryRun === true) {
+    res.json({ dryRun: true, gaps, planned: marks.length })
+    return
+  }
+  let filled = 0
+  let rejected = 0
+  for (const mark of marks) {
+    try {
+      await progressStore.saveProgress(profileId, mark, {
+        completionThresholdPercent: settings.get().episodeCompletionThresholdPercent,
+      })
+      filled += 1
+    } catch {
+      // e.g. the profile record cap — reported, never hidden.
+      rejected += 1
+    }
+  }
+  res.json({ dryRun: false, gaps, planned: marks.length, filled, rejected })
 }))
 
 // Smart list (AV-138): "returning soon" — entries with a SEQUEL relation

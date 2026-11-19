@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Download, Loader2, RotateCcw, Trash2, Upload } from 'lucide-react'
+import { Download, Loader2, RotateCcw, Trash2, Upload, Wrench } from 'lucide-react'
 import type { Media, ProgressEntry } from '../types'
 import { api } from '../lib/api'
 import { filterWatchHistory, searchWatchHistory, watchHistoryRows, type WatchHistoryRow } from '../lib/history'
@@ -93,6 +93,25 @@ export default function History() {
       }
     } catch {
         push('Could not remove the history entry', 'err')
+    }
+  }
+
+  // AV-175: repair interior episode gaps. Preview first (dryRun), confirm,
+  // then apply — only missing episodes are ever created.
+  async function repairGaps() {
+    try {
+      const preview = await api.repairProgress(true)
+      if (preview.planned === 0) {
+        push('No missing episodes found — your history is complete')
+        return
+      }
+      if (!window.confirm(`Fill ${preview.planned} missing episode ${preview.planned === 1 ? 'mark' : 'marks'} across ${preview.gaps.length} season ${preview.gaps.length === 1 ? 'row' : 'rows'}? They are added as watched marks; existing entries are never changed.`)) return
+      const result = await api.repairProgress(false)
+      push(`Repaired ${result.filled ?? 0} missing episode marks${(result.rejected ?? 0) > 0 ? `, ${result.rejected} rejected` : ''}`)
+      const progress = (await api.getProgress()).entries
+      setRecords(progress)
+    } catch (err) {
+      push(err instanceof Error ? err.message : 'Could not repair progress', 'err')
     }
   }
 
@@ -212,6 +231,13 @@ export default function History() {
         ) : null}
         {records !== null ? (
           <>
+            <button
+              type="button"
+              onClick={() => void repairGaps()}
+              className="flex items-center gap-1.5 rounded-full bg-white/10 px-3.5 py-2 text-xs font-medium text-white/80 transition hover:bg-white/20"
+            >
+              <Wrench size={13} /> Repair gaps
+            </button>
             <input
               ref={importInputRef}
               type="file"

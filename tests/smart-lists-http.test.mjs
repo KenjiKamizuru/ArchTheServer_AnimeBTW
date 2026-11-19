@@ -267,3 +267,28 @@ test('the MAL progress import rejects bad payloads and needs auth (AV-173)', asy
   assert.equal((await req('/api/progress/import/mal', 'POST', { entries: [{ title: 'no id' }] })).status, 400, 'strict parse rejects malformed entries')
   assert.equal((await req('/api/progress/import/mal', 'POST', { entries: [{ anime_id: 1, title: 'T', status: 'Not A Status', score: 0 }] })).status, 400, 'unknown statuses rejected')
 })
+
+// AV-175: gap repair — dry-run preview, idempotent apply, existing rows
+// never touched (all pure server logic, no network).
+test('the gap repair previews, fills once, and never touches existing rows (AV-175)', async () => {
+  const put = (episode, state) => req('/api/progress', 'PUT', { mediaId: 801, season: 's1', episode, positionSeconds: 100, runtimeSeconds: 1000, ...(state ? { state } : {}) })
+  await put(1, 'manual')
+  await put(2, 'manual')
+  await put(5, 'manual')
+  await req('/api/progress', 'PUT', { mediaId: 802, season: 's1', episode: 1, positionSeconds: 50, runtimeSeconds: 1000 })
+  const preview = await req('/api/progress/repair', 'POST', { dryRun: true })
+  assert.equal(preview.status, 200)
+  assert.equal(preview.body.planned, 2, 'episodes 3 and 4 of 801/s1')
+  assert.deepEqual(preview.body.gaps, [{ mediaId: 801, season: 's1', missing: [3, 4] }])
+  const applied = await req('/api/progress/repair', 'POST', {})
+  assert.equal(applied.body.filled, 2)
+  assert.equal(applied.body.rejected, 0)
+  const rows = (await req('/api/progress')).body.entries.filter((entry) => entry.mediaId === 801)
+  assert.deepEqual(rows.map((entry) => entry.episode).sort((a, b) => a - b), [1, 2, 3, 4, 5])
+  assert.ok(rows.filter((entry) => entry.episode === 3 || entry.episode === 4).every((entry) => entry.state === 'manual'))
+  assert.ok(rows.find((entry) => entry.episode === 1).positionSeconds === 100, 'existing rows are never touched')
+  // idempotent: nothing left to fill
+  const again = await req('/api/progress/repair', 'POST', {})
+  assert.equal(again.body.filled, 0)
+  assert.equal(again.body.planned, 0)
+})
