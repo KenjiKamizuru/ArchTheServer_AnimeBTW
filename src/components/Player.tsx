@@ -16,7 +16,7 @@ import { createProgressWriter } from '../lib/progressWriter'
 import { createWatchSession } from '../lib/watchSession'
 import { playerLoadingPhase, readinessLabels } from '../lib/playerLoading'
 import { recoveryActionLabel, recoveryActions } from '../lib/playerRecovery'
-import { CENTER_BUTTON_IDLE_MS, canUsePictureInPicture, centerButtonVisible, controlBarVisible, escapeAction, formatClock, normalizePlaybackSpeed, PLAYBACK_SPEEDS, seekFractionToTime, shouldTogglePlayback, trackTapToTime } from '../lib/playerControls'
+import { CENTER_BUTTON_IDLE_MS, canUsePictureInPicture, centerButtonVisible, classifyClickGap, controlBarVisible, DOUBLE_CLICK_MS, escapeAction, formatClock, normalizePlaybackSpeed, PLAYBACK_SPEEDS, seekFractionToTime, shouldTogglePlayback, trackTapToTime } from '../lib/playerControls'
 import { actionForKey, effectiveShortcuts } from '../lib/playerShortcuts'
 import { saveSettings } from '../lib/settings'
 import { concatBytes, Mp4BoxTracker, selectMseMimeType } from '../lib/mp4'
@@ -181,6 +181,9 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
   // AV-186: idle tracking for the central button's fade.
   const [idle, setIdle] = useState(false)
   const idleTimerRef = useRef<number | null>(null)
+  // AV-191: single/double-click arbitration on the picture.
+  const clickTimerRef = useRef<number | null>(null)
+  const lastClickAtRef = useRef(0)
   const videoRef = useRef<HTMLVideoElement>(null)
   const autoPlayedRef = useRef(false)
   const settings = useSettings()
@@ -425,6 +428,21 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
     }
   }, [videoSrc, useMse])
 
+  // AV-191: one fullscreen toggle, shared by the button and the picture's
+  // double-click (best-effort — unsupported contexts refuse; the state
+  // stays truthful via fullscreenchange either way).
+  const toggleFullscreen = useCallback(() => {
+    void (async () => {
+      try {
+        if (document.fullscreenElement) await document.exitFullscreen()
+        else await containerRef.current?.requestFullscreen()
+      } catch {
+        // Best-effort: unsupported contexts refuse; state stays
+        // truthful via fullscreenchange either way.
+      }
+    })()
+  }, [])
+
   // AV-186: activity resets a single fade timer — no interval, no
   // re-renders from pointer churn (only the timer outcome changes state).
   const noteActivity = useCallback(() => {
@@ -436,6 +454,7 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
     noteActivity()
     return () => {
       if (idleTimerRef.current !== null) window.clearTimeout(idleTimerRef.current)
+      if (clickTimerRef.current !== null) window.clearTimeout(clickTimerRef.current)
     }
   }, [noteActivity])
 
@@ -765,17 +784,7 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
             leave fullscreen before the player can ever close). */}
         <button
           type="button"
-          onClick={() => {
-            void (async () => {
-              try {
-                if (document.fullscreenElement) await document.exitFullscreen()
-                else await containerRef.current?.requestFullscreen()
-              } catch {
-                // Best-effort: unsupported contexts refuse; state stays
-                // truthful via fullscreenchange either way.
-              }
-            })()
-          }}
+          onClick={toggleFullscreen}
           className="shrink-0 rounded-full bg-white/5 p-2 text-white/60 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-white"
           aria-label={fsActive ? 'Exit fullscreen' : 'Enter fullscreen'}
           title={fsActive ? 'Exit fullscreen' : 'Enter fullscreen'}
@@ -850,7 +859,7 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
       </div>
 
       <div className="flex min-h-0 flex-1 items-center justify-center p-2 md:p-6">
-        <div className="relative w-full max-w-6xl" onPointerMove={noteActivity}>
+        <div className="relative w-full max-w-6xl touch-manipulation" onPointerMove={noteActivity}>
           <video
             ref={videoRef}
             key={`${videoSrc}${useMse ? '-mse' : ''}`}
@@ -860,11 +869,30 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
             playsInline
             onClick={(event) => {
               // AV-178: click the picture area to pause/resume — the
-              // native-controls strip is excluded (it already acts).
+              // control-bar strip is excluded (it already acts). AV-191:
+              // the single toggle is DEFERRED by the double-click window;
+              // a partner click cancels it and toggles fullscreen instead
+              // (the classic two-toggles-net-zero quirk is gone).
               const el = event.currentTarget
               if (!shouldTogglePlayback(event.nativeEvent.offsetY, el.getBoundingClientRect().height)) return
-              if (el.paused) void el.play().catch(() => {})
-              else el.pause()
+              const now = Date.now()
+              const gap = now - lastClickAtRef.current
+              lastClickAtRef.current = now
+              if (classifyClickGap(gap, DOUBLE_CLICK_MS) === 'double') {
+                if (clickTimerRef.current !== null) {
+                  window.clearTimeout(clickTimerRef.current)
+                  clickTimerRef.current = null
+                }
+                lastClickAtRef.current = 0
+                toggleFullscreen()
+                return
+              }
+              if (clickTimerRef.current !== null) window.clearTimeout(clickTimerRef.current)
+              clickTimerRef.current = window.setTimeout(() => {
+                clickTimerRef.current = null
+                if (el.paused) void el.play().catch(() => {})
+                else el.pause()
+              }, DOUBLE_CLICK_MS)
             }}
             onLoadedMetadata={() => {
               setLoading(false)

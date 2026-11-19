@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { canUsePictureInPicture, CENTER_BUTTON_IDLE_MS, centerButtonVisible, controlBarVisible, escapeAction, formatClock, NATIVE_CONTROLS_ZONE_PX, normalizePlaybackSpeed, seekFractionToTime, shouldTogglePlayback, trackTapToTime } from '../src/lib/playerControls.ts'
+import { canUsePictureInPicture, CENTER_BUTTON_IDLE_MS, centerButtonVisible, classifyClickGap, controlBarVisible, DOUBLE_CLICK_MS, escapeAction, formatClock, NATIVE_CONTROLS_ZONE_PX, normalizePlaybackSpeed, seekFractionToTime, shouldTogglePlayback, trackTapToTime } from '../src/lib/playerControls.ts'
 
 test('click-to-toggle covers the picture area only (AV-178)', () => {
   // a 400px-tall video: picture area is 0…352, controls strip 352…400
@@ -86,4 +86,13 @@ test('touch taps map track positions to seek times (AV-182)', () => {
   assert.equal(trackTapToTime(50, 0, 0, 200), 0, 'degenerate track refuses')
   assert.equal(trackTapToTime(50, 0, 100, 0), 0, 'unknown duration refuses')
   assert.equal(trackTapToTime(Number.NaN, 0, 100, 200), 0, 'non-finite position refuses')
+})
+
+test('click gaps classify single vs double (AV-191)', () => {
+  assert.equal(classifyClickGap(0), 'double', 'instant partner is a double')
+  assert.equal(classifyClickGap(250), 'double', 'the window edge is inclusive')
+  assert.equal(classifyClickGap(251), 'single', 'past the default window is a single')
+  assert.equal(classifyClickGap(251, 300), 'double', 'a wider custom window keeps it a double')
+  assert.equal(classifyClickGap(-5), 'single', 'negative gaps refuse to single')
+  assert.equal(classifyClickGap(Number.NaN), 'single', 'non-finite gaps refuse to single')
 })

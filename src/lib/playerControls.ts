@@ -89,6 +89,17 @@ export function controlBarVisible(paused: boolean, idle: boolean): boolean {
   return centerButtonVisible(paused, idle)
 }
 
+// AV-191: single/double-click arbitration on the picture. A click
+// arriving within the double-click window of the previous one is a
+// double-click (fullscreen); otherwise it is a single click (the deferred
+// play/pause toggle). Non-finite or negative gaps refuse to single.
+export const DOUBLE_CLICK_MS = 250
+
+export function classifyClickGap(gapMs: number, doubleClickMs = DOUBLE_CLICK_MS): 'single' | 'double' {
+  if (!Number.isFinite(gapMs) || gapMs < 0) return 'single'
+  return gapMs <= doubleClickMs ? 'double' : 'single'
+}
+
 /**
  * Whether a click at `offsetY` (relative to the video element's top edge,
  * in CSS pixels) should toggle play/pause. False inside the bottom
