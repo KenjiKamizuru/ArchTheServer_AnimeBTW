@@ -7,7 +7,13 @@
 | `tests/relations.test.mjs` | Relationship taxonomy + pair engine (AV-116a), Slime/Re:ZERO regressions | 6 | ✅ |
 | `tests/relations-online.test.mjs` | Online pipeline caching/failures (AV-116b) | 4 | ✅ |
 | `tests/metadata-core.test.mjs` | Unified model provenance merge + identity ladder (AV-117a/b) | 6 | ✅ |
-| all tests (`node --test tests/*.test.mjs`) | whole project | **476** | ✅ 0 fail |
+| `tests/metadata-transport.test.mjs` | Transport pacing/caching/retries + registry + AniList adapter (AV-117c1) | 6 | ✅ |
+| `tests/metadata-adapters.test.mjs` | Kitsu + Wikidata adapters (AV-117c2a) | 4 | ✅ |
+| `tests/metadata-adapters2.test.mjs` | MAL, AniDB, ANN, TMDB adapters (AV-117c2b) | 4 | ✅ |
+| `tests/franchise-groups.test.mjs` | Verified franchise grouping + season/branch partition (AV-117d1) | 2 | ✅ |
+| `tests/library-match.test.mjs` | Library identity matching + relationship store (AV-117d2) | 3 | ✅ |
+| `tests/metadata-regression.test.mjs` | End-to-end pipeline regressions (AV-117e) | 3 | ✅ |
+| all tests (`node --test tests/*.test.mjs`) | whole project | **498** | ✅ 0 fail |
 
 ## Regression examples (verified against real database records)
 
@@ -19,6 +25,12 @@ SLIME = `special`, Guren no Kizuna-hen = `movie`, and "Killing Slimes for 300
 Years" (similar title!) = `unrelated`.
 
 Re:ZERO — dash/no-dash variants = `same-entry` duplicates (`isDuplicateEntry`).
+
+Evidence-refinement note: Sukuwareru Ramiris types as `special` when the MAL
+"Other"+bonus cross-check is present (`tests/relations.test.mjs`) and `ona`
+from the AniList-only edge (`tests/metadata-regression.test.mjs`) — both are
+correct taxonomy answers; more sources refine the type. Neither treats it as a
+season.
 
 ## Known limitations
 
