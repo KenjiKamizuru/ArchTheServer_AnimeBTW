@@ -43,6 +43,7 @@ import {
   rotateProfileLink,
 } from './profilePrivacy.mjs'
 import { normalizePreferencesUpdate } from './userPreferences.mjs'
+import { normalizeShowActivity, buildActivitySummary } from './profileActivity.mjs'
 import { atomicWriteFile } from './security.mjs'
 
 const EMAIL_VERIFY_TTL_MS = 24 * 60 * 60 * 1000
@@ -1221,6 +1222,19 @@ app.put(
   }),
 )
 
+app.put(
+  '/api/auth/profile-activity',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { user, users } = await requireSessionUser(req)
+    const parsed = normalizeShowActivity(req.body?.showActivity)
+    if (!parsed.ok) throw Object.assign(new Error(parsed.error), { status: 400 })
+    user.showActivity = parsed.value
+    await kv.set('users', users)
+    res.json({ showActivity: parsed.value })
+  }),
+)
+
 app.get(
   '/api/auth/profile-link',
   wrap(async (req, res) => {
@@ -1254,7 +1268,20 @@ app.get(
     const viewerId = record && isSessionValid(record) ? record.userId : null
     const view = canViewProfile(user, { viewerId, token: req.query.token ?? null })
     if (!view.ok) throw notFound()
-    res.json({ user: publicUser(user), visibility: user.profileVisibility ?? 'public' })
+    // Activity summary (AV-117): opt-in, owner/visibility gated, and only
+    // truthfully attributable facts (see profileActivity.mjs).
+    let activeSessions = 0
+    if (viewerId === user.id || user.showActivity) {
+      for (const key of await kv.list('session:', { limit: 10_000 })) {
+        const session = await kv.get(key, null)
+        if (session?.userId === user.id && isSessionValid(session)) activeSessions += 1
+      }
+    }
+    const { activity } = buildActivitySummary(user, {
+      activeSessions,
+      viewerIsOwner: viewerId === user.id,
+    })
+    res.json({ user: publicUser(user), visibility: user.profileVisibility ?? 'public', activity })
   }),
 )
 
