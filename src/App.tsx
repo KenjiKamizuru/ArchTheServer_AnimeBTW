@@ -1,14 +1,17 @@
-import { Suspense } from 'react'
+import { Suspense, useEffect } from 'react'
 import type { ReactNode } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import Layout from './components/Layout'
 import { DetailProvider } from './components/MediaModal'
 import { PlayerProvider } from './components/Player'
-import { ToastProvider } from './components/Toasts'
+import { ToastProvider, useToast } from './components/Toasts'
+import { api } from './lib/api'
 import {
+  AdminInspectPage,
   AnimeDetailPage,
   BookmarksPage,
   BrowsePage,
+  CharacterDetailPage,
   DiscoverPage,
   DownloadedPage,
   DownloadsPage,
@@ -17,6 +20,7 @@ import {
   SchedulePage,
   SearchPage,
   SettingsPage,
+  StaffDetailPage,
   StudioPage,
   StudiosPage,
 } from './lib/routePrefetch'
@@ -38,9 +42,30 @@ function LazyPage({ children }: { children: ReactNode }) {
   )
 }
 
+/** Email verification links (AV-103): mail.mjs links carry ?verify-email=<token>
+ * and land on any app route, so the handler lives at the app root. */
+function VerifyEmailHandler() {
+  const toast = useToast()
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const token = params.get('verify-email')
+    if (!token) return
+    params.delete('verify-email')
+    const rest = params.toString()
+    window.history.replaceState(null, '', `${window.location.pathname}${rest ? `?${rest}` : ''}${window.location.hash}`)
+    api.verifyEmail(token).then(
+      (res) => toast(`Email verified for ${res.user?.username ?? 'account'}`),
+      (err) => toast(err instanceof Error ? err.message : 'Verification failed', 'err'),
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  return null
+}
+
 export default function App() {
   return (
     <ToastProvider>
+      <VerifyEmailHandler />
       <PlayerProvider>
         <DetailProvider>
           <Routes>
@@ -48,6 +73,8 @@ export default function App() {
               <Route index element={<LazyPage><HomePage /></LazyPage>} />
               <Route path="browse" element={<LazyPage><BrowsePage /></LazyPage>} />
               <Route path="anime/:id" element={<LazyPage><AnimeDetailPage /></LazyPage>} />
+              <Route path="characters/:id" element={<LazyPage><CharacterDetailPage /></LazyPage>} />
+              <Route path="staff/:id" element={<LazyPage><StaffDetailPage /></LazyPage>} />
               <Route path="discover" element={<LazyPage><DiscoverPage /></LazyPage>} />
               <Route path="schedule" element={<LazyPage><SchedulePage /></LazyPage>} />
               <Route path="studios" element={<LazyPage><StudiosPage /></LazyPage>} />
@@ -58,6 +85,8 @@ export default function App() {
               <Route path="downloaded" element={<LazyPage><DownloadedPage /></LazyPage>} />
               <Route path="bookmarks" element={<LazyPage><BookmarksPage /></LazyPage>} />
               <Route path="settings" element={<LazyPage><SettingsPage /></LazyPage>} />
+              <Route path="admin/inspect" element={<LazyPage><AdminInspectPage /></LazyPage>} />
+              <Route path="admin/inspect/:id" element={<LazyPage><AdminInspectPage /></LazyPage>} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
           </Routes>

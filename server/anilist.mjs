@@ -6,19 +6,26 @@
 // surfaces as metadata references.
 
 import { readResponseTextLimited, sanitizeCoverUrl, sanitizePublicHttpUrl } from './security.mjs'
+import { normalizeExternalLinks } from './links.mjs'
 import { parseBrowseFilters } from './browse.mjs'
-import { createAnimeRecord } from './catalog.mjs'
+import { createAnimeRecord, normalizeExternalIds, normalizePartialDate, normalizeNameList, withFetchFailure } from './catalog.mjs'
+import { describeFreshness } from './refreshPolicy.mjs'
+import { createQuotaTracker } from './quota.mjs'
+import { cacheTierForKey, cacheTtlFor } from './cachePolicy.mjs'
 
 const ENDPOINT = 'https://graphql.anilist.co'
 const MAX_GQL_BYTES = 6 * 1024 * 1024
-const TTL = 10 * 60 * 1000
 const MAX_ENTRIES = 300
 
 const cache = new Map()
+// Per-provider request quota + backoff (AV-020).
+const quotaTracker = createQuotaTracker()
 
 const MEDIA_FIELDS = `
   id
+  idMal
   title { romaji english native }
+  synonyms
   coverImage { extraLarge large color }
   bannerImage
   description(asHtml: false)
@@ -28,6 +35,9 @@ const MEDIA_FIELDS = `
   format
   season
   seasonYear
+  startDate { year month day }
+  endDate { year month day }
+  broadcast { dayOfWeek time }
   averageScore
   popularity
   favourites
@@ -35,9 +45,11 @@ const MEDIA_FIELDS = `
   tags { name rank isMediaSpoiler }
   source
   countryOfOrigin
+  ageRating
   siteUrl
   nextAiringEpisode { episode airingAt }
   studios(isMain: true) { nodes { name } }
+  producers: studios(isMain: false) { nodes { name } }
   externalLinks { site url type }
 `
 
@@ -79,6 +91,14 @@ async function gql(query, variables) {
   let lastError = null
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
+      const gate = quotaTracker.tryAcquire('anilist')
+      if (!gate.allowed) {
+        const err = new Error(`Metadata request quota reached; retry in ${gate.retryAfterSeconds}s.`)
+        err.status = 503
+        err.code = 'RATE_LIMITED'
+        err.upstreamSafe = true
+        throw err
+      }
       const res = await fetch(ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -88,6 +108,7 @@ async function gql(query, variables) {
       if (res.status === 429 || res.status >= 500) {
         await res.body?.cancel?.().catch(() => {})
         lastError = new Error(`AniList responded ${res.status}`)
+        quotaTracker.recordFailure('anilist')
         await sleep(500 * (attempt + 1))
         continue
       }
@@ -98,9 +119,17 @@ async function gql(query, variables) {
       const json = JSON.parse(await readResponseTextLimited(res, MAX_GQL_BYTES, 'AniList response'))
       if (json.errors?.length) throw new Error(json.errors[0].message)
       if (!json.data) throw new Error('AniList returned no data')
+      quotaTracker.recordSuccess('anilist')
       return json.data
     } catch (err) {
+      // Quota blocks surface immediately instead of burning retry sleeps.
+      if (err?.code === 'RATE_LIMITED') throw err
       lastError = err
+      // Only provider-health failures (network/timeouts) trigger backoff;
+      // GraphQL/JSON errors are client-side problems, not upstream trouble.
+      if (err?.name === 'TimeoutError' || err?.name === 'AbortError' || err instanceof TypeError) {
+        quotaTracker.recordFailure('anilist')
+      }
       if (attempt < 2) await sleep(400 * (attempt + 1))
     }
   }
@@ -119,10 +148,13 @@ async function gql(query, variables) {
   throw failure
 }
 
-/** TTL + LRU cache so repeat views are instant and we stay far under rate limits. */
+/** Tiered TTL + LRU cache so repeat views are instant and we stay far under rate limits. */
 async function cached(key, loader, { fresh = false } = {}) {
   const hit = cache.get(key)
-  if (!fresh && hit && Date.now() - hit.at < TTL) {
+  // Per-tier TTL (AV-021a): airing feeds expire in minutes, catalog metadata
+  // stays cached for an hour — see server/cachePolicy.mjs.
+  const ttl = cacheTtlFor(cacheTierForKey(key)) * 1000
+  if (!fresh && hit && Date.now() - hit.at < ttl) {
     cache.delete(key)
     cache.set(key, hit)
     return hit.value
@@ -162,12 +194,7 @@ function airedEpisodes(media) {
 
 function normalize(media) {
   if (!media) return null
-  const links = (media.externalLinks ?? [])
-    .map((l) => {
-      const safeUrl = l?.url ? sanitizePublicHttpUrl(l.url, { httpsOnly: false, maxLen: 512 }) : null
-      return safeUrl && l?.site ? { site: String(l.site).slice(0, 80), url: safeUrl, type: l.type } : null
-    })
-    .filter(Boolean)
+  const links = normalizeExternalLinks(media.externalLinks)
   const title = media.title?.english || media.title?.romaji || media.title?.native || `Anime #${media.id}`
   const streams = links
     .filter((l) => l.type === 'STREAMING' || STREAM_SITES.has(l.site))
@@ -177,15 +204,31 @@ function normalize(media) {
   // to AniDB's own search so every entry still resolves on AniDB.
   const directAnidb = links.find((l) => /anidb/i.test(l.site ?? '') || /anidb\.net/i.test(l.url))?.url ?? null
   const anidb = directAnidb ?? `https://anidb.net/search/anime?adb.search=${encodeURIComponent(title)}`
+  // Provider identifier collection (AV-002): AniList's own id, the MyAnimeList
+  // id from the schema, and any numeric AniDB id recoverable from a direct link.
+  const anidbId = directAnidb?.match(/anidb\.net\/anime\/(\d+)/i)?.[1] ?? null
+  const externalIds = normalizeExternalIds([
+    { provider: 'anilist', id: media.id },
+    ...(media.idMal ? [{ provider: 'myanimelist', id: media.idMal }] : []),
+    ...(anidbId ? [{ provider: 'anidb', id: anidbId }] : []),
+  ])
+  // Value states (AV-014): AniList signals what is merely pending vs unknown.
+  const states = {}
+  if (media.episodes == null && media.status === 'NOT_YET_RELEASED') states.episodes = 'UNANNOUNCED'
+  if (media.endDate == null && media.status === 'RELEASING') states.endDate = 'UNANNOUNCED'
   const rawColor = typeof media.coverImage?.color === 'string' ? media.coverImage.color.trim() : ''
   const color = /^#[0-9a-fA-F]{3,8}$/.test(rawColor) ? rawColor : null
 
   return createAnimeRecord({
     id: media.id,
+    externalIds,
     title,
     romaji: media.title?.romaji ?? null,
     english: media.title?.english ?? null,
     native: media.title?.native ?? null,
+    synonyms: (media.synonyms ?? [])
+      .filter((t) => typeof t === 'string' && t.trim())
+      .map((t) => t.trim().slice(0, 120)),
     cover: sanitizeCoverUrl(media.coverImage?.extraLarge ?? media.coverImage?.large ?? null),
     banner: sanitizeCoverUrl(media.bannerImage ?? null),
     color,
@@ -214,13 +257,46 @@ function normalize(media) {
     nextEpisode: media.nextAiringEpisode
       ? { episode: media.nextAiringEpisode.episode, airingAt: media.nextAiringEpisode.airingAt }
       : null,
+    startDate: media.startDate,
+    endDate: media.endDate,
+    broadcast: media.broadcast,
+    ageRating: media.ageRating ?? null,
     studios: (media.studios?.nodes ?? []).map((n) => n.name).filter(Boolean),
-    links: links.map((l) => ({ site: l.site, url: l.url })),
+    // Linked company entities (AV-008): AniList's non-main studios are the
+    // closest signal for producers; licensor/distributor roles arrive from
+    // other providers (the vocabulary is ready for them).
+    companies: [
+      ...(media.studios?.nodes ?? []).map((n) => ({ name: n.name, roles: ['MAIN_STUDIO'] })),
+      ...(media.producers?.nodes ?? []).map((n) => ({ name: n.name, roles: ['PRODUCER'] })),
+    ],
+    links: links.map((l) => ({ site: l.site, url: l.url, type: l.type ?? null })),
     streams,
     anidb,
     anidbSearch: !directAnidb,
     siteUrl: sanitizePublicHttpUrl(media.siteUrl, { httpsOnly: false, maxLen: 512 }),
-  })
+    // People-name indexes for entity search (AV-058/AV-059).
+    staffNames: normalizeNameList((media.staff?.edges ?? []).map((e) => e?.node?.name?.full)),
+    voiceActorNames: normalizeNameList(
+      (media.characters?.edges ?? []).flatMap((e) => (e?.voiceActors ?? []).map((v) => v?.name?.full)),
+    ),
+    characterNames: normalizeNameList((media.characters?.edges ?? []).map((e) => e?.node?.name?.full)),
+    // Franchise neighbourhood (AV-060): related-title names and relation kinds.
+    relationNames: normalizeNameList(
+      (media.relations?.edges ?? [])
+        .filter((e) => e?.node?.type === 'ANIME')
+        .map((e) => e?.node?.title?.english || e?.node?.title?.romaji || e?.node?.title?.native),
+    ),
+    relationTypes: normalizeNameList(
+      (media.relations?.edges ?? [])
+        .filter((e) => e?.node?.type === 'ANIME')
+        .map((e) => String(e?.relationType ?? '').toLowerCase()),
+    ),
+    // Episode-title index for episode search (AV-062).
+    episodeTitles: normalizeNameList(
+      (media.streamingEpisodes ?? []).map((e) => e?.title),
+      24,
+    ),
+  }, { source: 'anilist', refreshedAt: Math.floor(Date.now() / 1000), states })
 }
 
 export function currentSeason(date = new Date()) {
@@ -405,6 +481,27 @@ export async function studios({ page = 1, search = '', sort = '' } = {}) {
   })
 }
 
+/**
+ * Studio filmography query (AV-088): the studio's COMPLETE known catalog —
+ * every credited work, not only those where it is the main studio — with
+ * pagination. Exported so tests can pin the no-`isMain` completeness contract.
+ */
+export const STUDIO_FILMOGRAPHY_QUERY = `query Studio($id: Int, $page: Int, $perPage: Int, $sort: [MediaSort]) {
+  Studio(id: $id) {
+    id
+    name
+    isAnimationStudio
+    favourites
+    siteUrl
+    media(page: $page, perPage: $perPage, sort: $sort) {
+      pageInfo { hasNextPage total }
+      nodes {
+        ${MEDIA_FIELDS}
+      }
+    }
+  }
+}`
+
 /** A studio's filmography, newest-first by popularity within the page. */
 export async function studioFilmography(id, { page = 1, sort = 'popular' } = {}) {
   const sortEnum = {
@@ -415,24 +512,7 @@ export async function studioFilmography(id, { page = 1, sort = 'popular' } = {})
   }[sort] ?? 'POPULARITY_DESC'
   const key = `studio:${id}:${page}:${sortEnum}`
   return cached(key, async () => {
-    const data = await gql(
-      `query Studio($id: Int, $page: Int, $perPage: Int, $sort: [MediaSort]) {
-        Studio(id: $id) {
-          id
-          name
-          isAnimationStudio
-          favourites
-          siteUrl
-          media(page: $page, perPage: $perPage, sort: $sort, isMain: true) {
-            pageInfo { hasNextPage total }
-            nodes {
-              ${MEDIA_FIELDS}
-            }
-          }
-        }
-      }`,
-      { id, page, perPage: 24, sort: [sortEnum] },
-    )
+    const data = await gql(STUDIO_FILMOGRAPHY_QUERY, { id, page, perPage: 24, sort: [sortEnum] })
     const studio = data.Studio
     if (!studio) throw Object.assign(new Error('Studio not found'), { status: 404 })
     const media = (studio.media?.nodes ?? []).map(normalize).filter(Boolean)
@@ -560,6 +640,22 @@ export async function searchAnime(term, page = 1) {
           pageInfo { hasNextPage }
           media(search: $search, type: ANIME, sort: [POPULARITY_DESC], isAdult: false) {
             ${MEDIA_FIELDS}
+            staff(perPage: 5, sort: [RELEVANCE, ID]) {
+              edges { node { name { full } } }
+            }
+            characters(perPage: 5, sort: [RELEVANCE]) {
+              edges {
+                node { name { full } }
+                voiceActors(language: JAPANESE, sort: [RELEVANCE, ID]) { name { full } }
+              }
+            }
+            relations {
+              edges {
+                relationType
+                node { id type title { romaji english native } }
+              }
+            }
+            streamingEpisodes { title }
           }
         }
       }`,
@@ -586,7 +682,9 @@ export async function suggest(term, searchModule) {
     label: item.title,
     sub: [item.format, item.seasonYear].filter(Boolean).join(' · '),
     cover: item.cover,
-    aliases: [item.romaji, item.english].filter((t) => typeof t === 'string'),
+    // AV-057: provider-tagged alias index (canonical variants, synonyms and
+    // provenance alternates) instead of a hand-rolled field list.
+    aliases: searchModule.buildTitleAliasIndex(item).map((entry) => entry.label),
   }))
   const ranked = searchModule.rankTitles(candidates, q, { limit: 8 })
   // Offer a correction both when nothing matched *and* when the best hit was
@@ -645,19 +743,63 @@ export async function searchAdvanced(rawQuery, page, searchModule) {
       else reasons.push(`studio ${studio}`)
     }
     if (ok) {
+      for (const staff of filters.staff) {
+        const hit = searchModule.matchEntityNames(staff, media.staffNames)
+        if (!hit) ok = false
+        else reasons.push(`staff ${staff}`)
+      }
+    }
+    if (ok) {
+      for (const va of filters.voiceActor) {
+        const hit = searchModule.matchEntityNames(va, media.voiceActorNames)
+        if (!hit) ok = false
+        else reasons.push(`voice actor ${va}`)
+      }
+    }
+    if (ok) {
+      for (const character of filters.character) {
+        const hit = searchModule.matchEntityNames(character, media.characterNames)
+        if (!hit) ok = false
+        else reasons.push(`character ${character}`)
+      }
+    }
+    if (ok) {
+      for (const f of filters.franchise) {
+        const hit = searchModule.matchesFranchise(f, media)
+        if (!hit) ok = false
+        else reasons.push(`franchise ${f}`)
+      }
+    }
+    if (ok) {
+      for (const episode of filters.episode) {
+        const hit = searchModule.matchesEpisode(episode, media)
+        if (!hit) ok = false
+        else reasons.push(`episode ${episode}`)
+      }
+    }
+    if (ok) {
       for (const genre of filters.genre) {
-        const hit = (media.genres ?? []).some((g) => String(g).toLowerCase() === genre)
+        const hit = searchModule.matchNameToken(genre, media.genres)
         if (!hit) ok = false
         else reasons.push(`genre ${genre}`)
       }
     }
     if (ok) {
       for (const tag of filters.tag) {
-        const hit = (media.tags ?? []).some(
-          (t) => !t.isMediaSpoiler && String(t.name).toLowerCase() === tag,
-        )
+        const names = (media.tags ?? []).filter((t) => !t.isMediaSpoiler).map((t) => String(t.name))
+        const hit = searchModule.matchNameToken(tag, names)
         if (!hit) ok = false
         else reasons.push(`tag ${tag}`)
+      }
+    }
+    if (ok) {
+      // AV-061: themes are searched as tag fragments (AniList keeps thematic
+      // vocabulary in its tag list; `theme:` is the fuzzy thematic dimension).
+      for (const theme of filters.theme) {
+        const names = (media.tags ?? []).filter((t) => !t.isMediaSpoiler).map((t) => String(t.name))
+        const hit = searchModule.matchEntityNames(theme, names)
+        if (!hit) ok = false
+        else reasons.push(`theme ${theme}`)
       }
     }
     if (ok && filters.year) {
@@ -705,7 +847,9 @@ export async function searchAdvanced(rawQuery, page, searchModule) {
           base.media.map((m) => ({
             id: m.id,
             label: m.title,
-            aliases: [m.romaji, m.english].filter((t) => typeof t === 'string'),
+            aliases: [m.romaji, m.english, m.native, ...(m.synonyms ?? [])].filter(
+              (t) => typeof t === 'string' && t,
+            ),
           })),
           text,
         )
@@ -722,20 +866,75 @@ export async function searchAdvanced(rawQuery, page, searchModule) {
   }
 }
 
+/**
+ * AV-021b volatile overlay: only the rapidly changing slice (airing progress
+ * and scores), composed over the full detail record so its fields win when
+ * present. The leading comment marker lets tests dispatch mock responses.
+ */
+const DETAIL_VOLATILE_QUERY = `# volatile-overlay
+query ($id: Int) {
+  Media(id: $id, type: ANIME) {
+    id
+    status
+    episodes
+    nextAiringEpisode { episode airingAt }
+    averageScore
+    meanScore
+    popularity
+    favourites
+  }
+}`
+
+/**
+ * AV-025a: admin metadata inspector — the raw provider payload (the exact
+ * MEDIA_FIELDS shape normalize() consumes, plus the volatile overlay when
+ * available) next to the normalized record, so raw → record transformations
+ * are visible. The overlay is best-effort, same as getDetail.
+ */
+export async function inspectDetail(id) {
+  const numeric = Number(id)
+  if (!Number.isInteger(numeric) || numeric <= 0) {
+    throw Object.assign(new Error('Invalid anime id'), { status: 400 })
+  }
+  const raw = await cached(`inspect:${numeric}`, () =>
+    gql(
+      `query ($id: Int) {
+        Media(id: $id, type: ANIME) {
+          ${MEDIA_FIELDS}
+        }
+      }`,
+      { id: numeric },
+    ),
+  )
+  let overlay = {}
+  let overlayFailure = null
+  try {
+    const volatile = await cached(`detail:airing:${numeric}`, () => gql(DETAIL_VOLATILE_QUERY, { id: numeric }))
+    overlay = volatile?.Media ?? {}
+  } catch (err) {
+    overlay = {}
+    overlayFailure = { at: Math.floor(Date.now() / 1000), message: err?.message || 'Volatile overlay fetch failed' }
+  }
+  const composed = { ...(raw?.Media ?? {}), ...overlay }
+  return { raw: composed, record: withFetchFailure(normalize(composed), overlayFailure) }
+}
+
 export async function getDetail(id) {
   const numeric = Number(id)
   if (!Number.isInteger(numeric) || numeric <= 0) {
     throw Object.assign(new Error('Invalid anime id'), { status: 400 })
   }
-  const key = `detail:${numeric}`
-  return cached(key, async () => {
-    const data = await gql(
+  // AV-021b: cache immutable metadata separately from rapidly changing airing
+  // data. The full record (every field) is the long-lived last-known-good base
+  // on the media tier; a tiny volatile overlay (airing progress + scores) is
+  // cached on the short airing tier and wins when composed. The overlay is
+  // best-effort: if it has never succeeded, the base answers on its own.
+  const metaData = await cached(`detail:${numeric}`, () =>
+    gql(
       `query ($id: Int) {
         Media(id: $id, type: ANIME) {
           ${MEDIA_FIELDS}
           trailer { id site }
-          startDate { year month day }
-          endDate { year month day }
           streamingEpisodes { title thumbnail url site }
           scoreDistribution { score amount }
           rankings { rank type context year season allTime }
@@ -770,6 +969,7 @@ export async function getDetail(id) {
                 startDate { year month day }
                 title { romaji english native }
                 coverImage { large extraLarge }
+                siteUrl
                 nextAiringEpisode { episode airingAt }
               }
             }
@@ -777,8 +977,21 @@ export async function getDetail(id) {
         }
       }`,
       { id: numeric },
-    )
-    const base = normalize(data.Media)
+    ),
+  )
+  let overlay = {}
+  let overlayFailure = null
+  try {
+    const volatile = await cached(`detail:airing:${numeric}`, () => gql(DETAIL_VOLATILE_QUERY, { id: numeric }))
+    overlay = volatile?.Media ?? {}
+  } catch (err) {
+    // AV-021b/AV-022: the volatile overlay never takes the page down; the
+    // failure is recorded on the served record's meta without touching values.
+    overlay = {}
+    overlayFailure = { at: Math.floor(Date.now() / 1000), message: err?.message || 'Volatile overlay fetch failed' }
+  }
+  const data = { Media: { ...(metaData?.Media ?? {}), ...overlay } }
+  const base = withFetchFailure(normalize(data.Media), overlayFailure)
     const relationEdges = (data.Media.relations?.edges ?? []).map((edge) => ({
       relationType: edge?.relationType,
       node: {
@@ -819,6 +1032,9 @@ export async function getDetail(id) {
       )
     return {
       ...base,
+      // Metadata freshness verdict (AV-019) for the detail-page indicator.
+      // meta.refreshedAt and refreshPolicy both use Unix seconds.
+      freshness: describeFreshness('media', base.meta.refreshedAt),
       streamingEpisodes: (data.Media.streamingEpisodes ?? [])
         .map((e) => {
           const safeUrl = e?.url ? sanitizePublicHttpUrl(e.url, { httpsOnly: false, maxLen: 512 }) : null
@@ -849,8 +1065,8 @@ export async function getDetail(id) {
           .filter((edge) => edge?.node?.type === 'ANIME')
           .map((edge) => edge.node),
       ],
-      startDate: data.Media.startDate ?? null,
-      endDate: data.Media.endDate ?? null,
+      startDate: normalizePartialDate(data.Media.startDate),
+      endDate: normalizePartialDate(data.Media.endDate),
       rankings: (data.Media.rankings ?? [])
         .filter((r) => r && Number.isFinite(r.rank))
         .slice(0, 8)
@@ -903,10 +1119,81 @@ export async function getDetail(id) {
         })
         .filter(Boolean),
     }
-  })
 }
 
 /** Batch lookup (no synopsis/trailer) — used to decorate local library files. */
+/**
+ * Character detail (AV-085): names, description and media appearances for the
+ * character detail page. Cached on the long-lived media tier like anime
+ * metadata.
+ */
+export async function getCharacter(id) {
+  const numeric = Number(id)
+  if (!Number.isInteger(numeric) || numeric <= 0) {
+    throw Object.assign(new Error('Invalid character id'), { status: 400 })
+  }
+  return cached(`character:${numeric}`, () =>
+    gql(
+      `query ($id: Int) {
+        Character(id: $id) {
+          id
+          name { full native alternative }
+          image { large }
+          description(asHtml: false)
+          siteUrl
+          media(perPage: 25, sort: [FAVOURITES_DESC]) {
+            edges {
+              characterRole
+              node { id type format title { romaji english native } startDate { year } }
+            }
+          }
+        }
+      }`,
+      { id: numeric },
+    ),
+  )
+}
+
+/**
+ * Staff member detail (AV-086): names, occupations and media credits for the
+ * staff detail page — also serves voice-actor profiles (AV-087), since AniList
+ * models both as Staff. Cached on the long-lived media tier.
+ */
+export async function getStaffMember(id) {
+  const numeric = Number(id)
+  if (!Number.isInteger(numeric) || numeric <= 0) {
+    throw Object.assign(new Error('Invalid staff id'), { status: 400 })
+  }
+  return cached(`staff:${numeric}`, () =>
+    gql(
+      `query ($id: Int) {
+        Staff(id: $id) {
+          id
+          name { full native alternative }
+          image { large }
+          description(asHtml: false)
+          siteUrl
+          primaryOccupations
+          characters(perPage: 25, sort: [FAVOURITES_DESC]) {
+            edges {
+              role
+              node { id name { full native } }
+              media { nodes { id title { romaji english native } } }
+            }
+          }
+          staffMedia(perPage: 25, sort: [FAVOURITES_DESC]) {
+            edges {
+              role
+              node { id type format title { romaji english native } startDate { year } }
+            }
+          }
+        }
+      }`,
+      { id: numeric },
+    ),
+  )
+}
+
 export async function getMany(ids) {
   const list = [...new Set((ids ?? []).map(Number))].filter((n) => Number.isInteger(n) && n > 0).slice(0, 60)
   if (!list.length) return []

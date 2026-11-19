@@ -9,6 +9,12 @@
 export const SEARCH_FIELDS = {
   title: 't',
   studio: 'studio',
+  staff: 'staff',
+  voiceActor: 'voiceActor',
+  character: 'character',
+  franchise: 'franchise',
+  theme: 'theme',
+  episode: 'episode',
   genre: 'genre',
   tag: 'tag',
   year: 'year',
@@ -38,6 +44,32 @@ const FIELD_ALIASES = {
   ep: 'episodes',
   eps: 'episodes',
   episodes: 'episodes',
+  staff: 'staff',
+  staffs: 'staff',
+  creator: 'staff',
+  writer: 'staff',
+  director: 'staff',
+  va: 'voiceActor',
+  voice: 'voiceActor',
+  voiceactor: 'voiceActor',
+  seiyuu: 'voiceActor',
+  cv: 'voiceActor',
+  character: 'character',
+  characters: 'character',
+  char: 'character',
+  chara: 'character',
+  franchise: 'franchise',
+  franchises: 'franchise',
+  series: 'franchise',
+  related: 'franchise',
+  relation: 'franchise',
+  theme: 'theme',
+  themes: 'theme',
+  motif: 'theme',
+  topic: 'theme',
+  episode: 'episode',
+  episodename: 'episode',
+  eptitle: 'episode',
 }
 
 const STATUS_VALUES = new Set(['airing', 'finished', 'upcoming', 'cancelled', 'hiatus'])
@@ -56,6 +88,12 @@ export function parseSearchQuery(raw) {
   const free = []
   const filters = {
     studio: [],
+    staff: [],
+    voiceActor: [],
+    character: [],
+    franchise: [],
+    theme: [],
+    episode: [],
     genre: [],
     tag: [],
     year: null,
@@ -80,7 +118,7 @@ export function parseSearchQuery(raw) {
     }
     if (field === 'title') {
       free.push(value)
-    } else if (field === 'studio' || field === 'genre' || field === 'tag') {
+    } else if (field === 'studio' || field === 'genre' || field === 'tag' || field === 'staff' || field === 'voiceActor' || field === 'character' || field === 'franchise' || field === 'theme' || field === 'episode') {
       filters[field].push(value.toLowerCase().replace(/\s+/g, ' ').slice(0, 60))
     } else if (field === 'status') {
       const normal = value.toLowerCase()
@@ -139,6 +177,12 @@ export function hasStructuredFilters(filters) {
   if (!filters) return false
   return (
     filters.studio.length > 0 ||
+    filters.staff.length > 0 ||
+    filters.voiceActor.length > 0 ||
+    filters.character.length > 0 ||
+    filters.franchise.length > 0 ||
+    filters.theme.length > 0 ||
+    filters.episode.length > 0 ||
     filters.genre.length > 0 ||
     filters.tag.length > 0 ||
     filters.status.length > 0 ||
@@ -156,6 +200,33 @@ export function normalizeForSearch(value) {
     .replace(/[\u0300-\u036F]/g, '')
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+}
+
+/**
+ * Folds Hepburn/Kunrei romanization variants and common long-vowel spellings to
+ * one form so "Toukyou", "Tookyoo" and "Tokyo" compare equal (AV-055). Only
+ * ASCII Latin text is folded — kana/kanji queries pass through untouched and
+ * every comparison folds both sides, so consistent spelling always matches.
+ */
+const ROMAJI_DIGRAPHS = [
+  ['shi', 'si'], ['sha', 'sya'], ['shu', 'syu'], ['sho', 'syo'],
+  ['chi', 'ti'], ['cha', 'tya'], ['chu', 'tyu'], ['cho', 'tyo'],
+  ['tsu', 'tu'],
+  ['fu', 'hu'],
+  ['ji', 'zi'], ['ja', 'zya'], ['ju', 'zyu'], ['jo', 'zyo'],
+]
+
+export function foldRomaji(value) {
+  const s = normalizeForSearch(value)
+  if (!s || !/^[a-z0-9 ]+$/.test(s)) return s
+  let folded = s
+  for (const [from, to] of ROMAJI_DIGRAPHS) folded = folded.replaceAll(from, to)
+  return folded
+    .replace(/ou|oo/g, 'o')
+    .replace(/uu/g, 'u')
+    .replace(/aa/g, 'a')
+    .replace(/\s+/g, ' ')
     .trim()
 }
 
@@ -228,8 +299,124 @@ export function typoTolerance(query) {
 
 /**
  * Ranks candidate titles against a query and explains the score (AV-072).
- * Returns entries sorted best-first; non-matches are dropped.
+ * Exact/partial/alternate-title and romanization-aware matching live here too
+ * (AV-053, AV-055). Returns entries sorted best-first; non-matches are dropped.
  */
+/**
+ * AV-057: title alias index across all known metadata providers — every
+ * title-like value a record carries (display title, romaji/English/native
+ * variants, synonyms, and per-provider claim alternates from provenance),
+ * each tagged with the provider that supplied it. Deduped by normalized form;
+ * canonical entries come first and win the source tag on collisions.
+ */
+export function buildTitleAliasIndex(record) {
+  const r = record && typeof record === 'object' ? record : {}
+  const canonicalSource = String(r.meta?.source ?? 'unknown').toLowerCase()
+  const out = []
+  const seen = new Set()
+  const add = (label, source) => {
+    const text = String(label ?? '').trim()
+    const norm = normalizeForSearch(text)
+    if (!text || !norm || seen.has(norm)) return
+    seen.add(norm)
+    out.push({ label: text, source })
+  }
+  add(r.title, canonicalSource)
+  add(r.romaji, canonicalSource)
+  add(r.english, canonicalSource)
+  add(r.native, canonicalSource)
+  for (const synonym of Array.isArray(r.synonyms) ? r.synonyms : []) add(synonym, canonicalSource)
+  // Provider-tagged alternates (claims and manual corrections, AV-004/AV-017).
+  const fields = r.meta?.fields && typeof r.meta.fields === 'object' ? r.meta.fields : {}
+  for (const fieldName of ['title', 'romaji', 'english', 'native', 'synonyms']) {
+    const provenance = fields[fieldName]
+    const source = String(provenance?.source ?? canonicalSource).toLowerCase()
+    for (const alternate of Array.isArray(provenance?.alternates) ? provenance.alternates : []) {
+      // Alternates are provider claims ({ source, value }); tolerate plain strings.
+      const claim = alternate && typeof alternate === 'object' ? alternate : { value: alternate }
+      add(claim.value, String(claim.source ?? source).toLowerCase())
+    }
+  }
+  return out
+}
+
+/**
+ * AV-058: entity-name matching for studio/staff/voice-actor filters — true when
+ * any name in the list matches the query (normalized substring, with
+ * romanization folding as a fallback for native-script names).
+ */
+export function matchEntityNames(query, names) {
+  const needle = normalizeForSearch(query)
+  if (!needle) return false
+  const folded = foldRomaji(needle)
+  return (Array.isArray(names) ? names : []).some((name) => {
+    const hay = normalizeForSearch(name)
+    if (!hay) return false
+    return hay.includes(needle) || (folded && foldRomaji(hay).includes(folded))
+  })
+}
+
+/**
+ * AV-060: franchise filter semantics — relation-type tokens (e.g. `related:sequel`,
+ * `franchise:"side story"`) match by relationship presence; any other value
+ * name-matches the record's related titles (its franchise neighbourhood).
+ */
+const RELATION_TYPES = new Set([
+  'prequel',
+  'sequel',
+  'parent',
+  'side_story',
+  'spin_off',
+  'alternative',
+  'summary',
+  'character',
+  'adaptation',
+  'source',
+  'other',
+])
+
+export function matchesFranchise(value, record) {
+  const v = normalizeForSearch(value).replace(/\s+/g, '_')
+  if (!v) return false
+  const r = record && typeof record === 'object' ? record : {}
+  if (RELATION_TYPES.has(v)) {
+    return (Array.isArray(r.relationTypes) ? r.relationTypes : []).includes(v)
+  }
+  return matchEntityNames(value, r.relationNames)
+}
+
+/**
+ * AV-061: closed-vocabulary name matching (genres, tags) — equality after
+ * stripping separators, so 'sci-fi', 'Sci Fi' and 'scifi' all match each other
+ * without substring over-matching. Latin-script vocabularies only; use
+ * matchEntityNames for open, possibly native-script name lists.
+ */
+export function matchNameToken(query, names) {
+  const needle = normalizeForSearch(query).replace(/[^a-z0-9]/g, '')
+  if (!needle) return false
+  return (Array.isArray(names) ? names : []).some(
+    (name) => normalizeForSearch(name).replace(/[^a-z0-9]/g, '') === needle,
+  )
+}
+
+/**
+ * AV-062: episode search — dual semantics on one field. A numeric value
+ * (`episode:7`) matches shows that have (or will have) an episode 7; anything
+ * else fragment-matches known episode titles.
+ */
+export function matchesEpisode(value, record) {
+  const r = record && typeof record === 'object' ? record : {}
+  const v = String(value ?? '').trim()
+  if (!v) return false
+  if (/^\d{1,4}$/.test(v)) {
+    const n = Number(v)
+    const aired = Number.isInteger(r.airedEpisodes) ? r.airedEpisodes : 0
+    const total = Number.isInteger(r.episodes) ? r.episodes : null
+    return aired >= n || (total !== null && total >= n)
+  }
+  return matchEntityNames(v, r.episodeTitles)
+}
+
 export function rankTitles(titles, query, { limit = 12, minScore = 0.28 } = {}) {
   const needle = normalizeForSearch(query)
   if (!needle) return []
@@ -254,21 +441,39 @@ export function rankTitles(titles, query, { limit = 12, minScore = 0.28 } = {}) 
       score = 0.74
       reason = 'title contains your search'
     } else {
+      // Alternate titles (romaji, English, native, synonyms) and romanization
+      // variants are first-class matches (AV-053, AV-055), not afterthoughts.
+      const foldedNeedle = foldRomaji(needle)
+      const aliases = (Array.isArray(title.aliases) ? title.aliases : [])
+        .map((alt) => ({ raw: String(alt), norm: normalizeForSearch(alt) }))
+        .filter((alt) => alt.norm)
+      const aliasHit = (predicate) => aliases.find(predicate)
+      const exactAlias = aliasHit(
+        (alt) => alt.norm === needle || (foldedNeedle && foldRomaji(alt.raw) === foldedNeedle),
+      )
+      const partialAlias = aliasHit(
+        (alt) =>
+          alt.norm.includes(needle) ||
+          (foldedNeedle && foldRomaji(alt.raw).includes(foldedNeedle)),
+      )
+      const foldedEqual = Boolean(foldedNeedle) && foldedNeedle === foldRomaji(haystack)
       const dice = similarity(needle, haystack)
       const dist = editDistance(needle, haystack)
-      if (dist <= tolerance && tolerance > 0) {
+      if (exactAlias) {
+        score = 0.85
+        reason = `exact alternate title “${exactAlias.raw}”`
+      } else if (foldedEqual) {
+        score = 0.8
+        reason = 'romanization variant of the title'
+      } else if (partialAlias) {
+        score = 0.7
+        reason = `matched alternate title “${partialAlias.raw}”`
+      } else if (dist <= tolerance && tolerance > 0) {
         score = 0.62 - dist * 0.05
         reason = `close spelling (${dist} character${dist === 1 ? '' : 's'} off)`
       } else if (dice >= 0.6) {
         score = 0.5 * dice
         reason = `similar title (${Math.round(dice * 100)}% overlap)`
-      } else {
-        // Also allow the query to hit an alternate/romaji alias.
-        const alias = (title.aliases ?? []).find((alt) => normalizeForSearch(alt).includes(needle))
-        if (alias) {
-          score = 0.7
-          reason = `matched alternate title “${alias}”`
-        }
       }
     }
     if (!reason || score < minScore) continue
@@ -283,6 +488,16 @@ export function rankTitles(titles, query, { limit = 12, minScore = 0.28 } = {}) 
  * Suggests a corrected query when nothing matched (AV-068). The caller keeps
  * the original text so the user can always go back to it.
  */
+/**
+ * AV-064: title hit test for a record against a free-text query — uses the
+ * full provider alias index (AV-057) with tiered, typo-tolerant ranking.
+ */
+export function matchRecordTitles(query, record) {
+  const index = buildTitleAliasIndex(record)
+  if (index.length === 0) return false
+  return rankTitles([{ label: index[0].label, aliases: index.map((entry) => entry.label) }], query, { limit: 1 }).length > 0
+}
+
 export function suggestCorrection(titles, query) {
   const words = String(query ?? '').trim()
   if (!words) return null

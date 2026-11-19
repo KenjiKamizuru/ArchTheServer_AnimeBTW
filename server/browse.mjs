@@ -10,7 +10,6 @@
 export const BROWSE_FORMATS = ['TV', 'TV_SHORT', 'MOVIE', 'OVA', 'ONA', 'SPECIAL', 'MUSIC']
 
 export const BROWSE_STATUSES = ['RELEASING', 'FINISHED', 'NOT_YET_RELEASED', 'CANCELLED', 'HIATUS']
-
 export const BROWSE_SORTS = {
   popular: 'POPULARITY_DESC',
   trending: 'TRENDING_DESC',
@@ -36,6 +35,18 @@ export const BROWSE_SOURCES = [
 
 /** Country-of-origin codes AniList accepts (subset that is actually populated). */
 export const BROWSE_COUNTRIES = ['JP', 'KR', 'CN', 'TW']
+
+/** AniList age rating values the browse UI can filter on (AV-038). */
+export const BROWSE_AGE_RATINGS = [
+  { value: 'NONE', label: 'No rating' },
+  { value: 'G', label: 'All ages' },
+  { value: 'PG', label: 'Parental guidance' },
+  { value: 'PG_13', label: '13+' },
+  { value: 'R_17', label: '17+' },
+  { value: 'R_18', label: '18+' },
+  { value: 'RX', label: 'Restricted' },
+]
+export const AGE_RATING_VALUES = BROWSE_AGE_RATINGS.map((r) => r.value)
 
 const MAX_LIST = 8
 const MAX_TAGS = 6
@@ -108,6 +119,7 @@ export function parseBrowseFilters(raw = {}) {
     statuses: toStringList(raw.statuses, BROWSE_STATUSES),
     sources: toStringList(raw.sources, BROWSE_SOURCES),
     countries: toStringList(raw.countries, BROWSE_COUNTRIES),
+    ageRatings: toStringList(raw.ageRatings, AGE_RATING_VALUES),
     genres: toStringList(raw.genres, null),
     genresExclude: toStringList(raw.genresExclude, null),
     tags: toStringList(raw.tags, null, MAX_TAGS),
@@ -128,7 +140,7 @@ export function parseBrowseFilters(raw = {}) {
 export function filtersToParams(filters) {
   const params = new URLSearchParams()
   const put = (key, value) => {
-    if (value === null || value === undefined || value === '' ) return
+    if (value === null || value === undefined || value === '') return
     if (Array.isArray(value)) {
       if (value.length > 0) params.set(key, value.join(','))
       return
@@ -147,6 +159,7 @@ export function filtersToParams(filters) {
   put('statuses', filters.statuses)
   put('sources', filters.sources)
   put('countries', filters.countries)
+  put('ageRatings', filters.ageRatings)
   put('genres', filters.genres)
   put('genresExclude', filters.genresExclude)
   put('tags', filters.tags)
@@ -215,6 +228,10 @@ export function buildBrowseQuery(filters) {
     variables.countries = filters.countries
     media.push('countryOfOrigin_in: $countries')
   }
+  if (filters.ageRatings.length) {
+    variables.ageRating = filters.ageRatings
+    media.push('ageRating_in: $ageRating')
+  }
   if (filters.genres.length) {
     variables.genres = filters.genres
     media.push('genre_in: $genres')
@@ -273,6 +290,7 @@ export function buildBrowseQuery(filters) {
   if (variables.statuses) add('statuses', '[MediaStatus]')
   if (variables.sources) add('sources', '[MediaSource]')
   if (variables.countries) add('countries', '[CountryCode]')
+  if (variables.ageRating) add('ageRating', '[AgeRating]')
   if (variables.genres) add('genres', '[String]')
   if (variables.tags) add('tags', '[String]')
   if (variables.episodesMin !== undefined) add('episodesMin', 'Int')
@@ -309,6 +327,7 @@ export function buildBrowseQuery(filters) {
       tags { name rank isMediaSpoiler }
       source
       countryOfOrigin
+      ageRating
       siteUrl
       nextAiringEpisode { episode airingAt }
       studios(isMain: true) { nodes { name } }
@@ -391,6 +410,7 @@ export function describeFilters(filters) {
   if (filters.query) parts.push(`"${filters.query}"`)
   if (filters.formats.length) parts.push(filters.formats.join('/'))
   if (filters.statuses.length) parts.push(filters.statuses.join('/'))
+  if (filters.ageRatings.length) parts.push(`rated ${filters.ageRatings.map((v) => BROWSE_AGE_RATINGS.find((r) => r.value === v)?.label ?? v).join(', ')}`)
   if (filters.genres.length) parts.push(filters.genres.join(', '))
   if (filters.genresExclude.length) parts.push(`without ${filters.genresExclude.join(', ')}`)
   if (filters.tags.length) parts.push(`tags ${filters.tagMode === 'and' ? 'all of' : 'any of'} ${filters.tags.join(', ')}`)
@@ -428,6 +448,7 @@ export function activeFilterCount(filters) {
   if (filters.statuses.length) n += 1
   if (filters.sources.length) n += 1
   if (filters.countries.length) n += 1
+  if (filters.ageRatings.length) n += 1
   if (filters.genres.length) n += 1
   if (filters.genresExclude.length) n += 1
   if (filters.tags.length) n += 1

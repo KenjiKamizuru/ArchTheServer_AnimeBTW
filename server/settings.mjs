@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { normalizeSectionOrder } from './detail.mjs'
 import { atomicWriteFile, normalizeHostPatternList, validateLibraryDir } from './security.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -34,6 +35,8 @@ const DEFAULTS = {
   maxConcurrentDownloads: defaultConcurrency(),
   preferLocalPlayback: true,
   allowedExternalHosts: [],
+  theme: 'dark',
+  systemTheme: false,
   updatedAt: 0,
 }
 
@@ -75,6 +78,8 @@ export async function init() {
         allowedExternalHosts: Array.isArray(parsed.allowedExternalHosts)
           ? safeNormalizeHosts(parsed.allowedExternalHosts)
           : [],
+        theme: typeof parsed.theme === 'string' && ['dark', 'light'].includes(parsed.theme) ? parsed.theme : DEFAULTS.theme,
+        systemTheme: Boolean(parsed.systemTheme),
         updatedAt: Number(parsed.updatedAt) || 0,
       }
     }
@@ -106,6 +111,8 @@ export function get() {
     preferLocalPlayback: state.preferLocalPlayback,
     allowedExternalHosts: [...state.allowedExternalHosts],
     envExternalHostsConfigured: Boolean(String(process.env.ALLOWED_SOURCE_HOSTS ?? '').trim()),
+    theme: state.theme,
+    systemTheme: state.systemTheme,
     updatedAt: state.updatedAt,
   }
 }
@@ -119,6 +126,18 @@ export async function save(patch = {}) {
   const next = {
     ...state,
     allowedExternalHosts: [...state.allowedExternalHosts],
+  }
+
+  if (patch.detailSectionOrder !== undefined) {
+    next.detailSectionOrder = normalizeSectionOrder(patch.detailSectionOrder)
+  }
+
+  if (patch.registrationOpen !== undefined) {
+    next.registrationOpen = Boolean(patch.registrationOpen)
+  }
+
+  if (patch.emailAccounts !== undefined) {
+    next.emailAccounts = Boolean(patch.emailAccounts)
   }
 
   if (patch.quality !== undefined) {
@@ -152,6 +171,18 @@ export async function save(patch = {}) {
 
   if (patch.preferLocalPlayback !== undefined) {
     next.preferLocalPlayback = Boolean(patch.preferLocalPlayback)
+  }
+
+  if (patch.theme !== undefined) {
+    const theme = String(patch.theme).trim().toLowerCase()
+    if (!['dark', 'light'].includes(theme)) {
+      throw Object.assign(new Error('Unsupported theme'), { status: 400 })
+    }
+    next.theme = theme
+  }
+
+  if (patch.systemTheme !== undefined) {
+    next.systemTheme = Boolean(patch.systemTheme)
   }
 
   if (patch.libraryDir !== undefined && !rawEnvLibraryDir()) {

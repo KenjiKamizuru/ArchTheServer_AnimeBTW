@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
+  Bookmark,
   Clock,
   CornerDownLeft,
   HardDrive,
@@ -13,7 +14,7 @@ import {
   Wand2,
   X,
 } from 'lucide-react'
-import { api, type AdvancedSearchResponse, type SearchLibraryResponse, type SearchSuggestion } from '../lib/api'
+import { api, type AdvancedSearchResponse, type SearchCollectionsResponse, type SearchLibraryResponse, type SearchSuggestion } from '../lib/api'
 import { CardSkeletons, MediaGrid } from '../components/MediaCard'
 import { useSearchHistory } from '../lib/searchHistory'
 
@@ -48,7 +49,7 @@ export default function Search() {
   const [params, setParams] = useSearchParams()
   const navigate = useNavigate()
   const query = (params.get('q') ?? '').trim()
-  const tab = params.get('in') === 'library' ? 'library' : 'catalog'
+  const tab = params.get('in') === 'library' ? 'library' : params.get('in') === 'collections' ? 'collections' : 'catalog'
   const history = useSearchHistory()
 
   const [term, setTerm] = useState(query)
@@ -58,6 +59,7 @@ export default function Search() {
   const [suggestLoading, setSuggestLoading] = useState(false)
   const [results, setResults] = useState<AdvancedSearchResponse | null>(null)
   const [libraryHits, setLibraryHits] = useState<SearchLibraryResponse | null>(null)
+  const [collectionHits, setCollectionHits] = useState<SearchCollectionsResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [page, setPage] = useState(1)
@@ -70,13 +72,13 @@ export default function Search() {
   }, [query])
 
   const commit = useCallback(
-    (value: string, { tab: nextTab }: { tab?: 'catalog' | 'library' } = {}) => {
+    (value: string, { tab: nextTab }: { tab?: 'catalog' | 'library' | 'collections' } = {}) => {
       const clean = value.trim()
       if (!clean) return
       const next = new URLSearchParams(params)
       next.set('q', clean)
       if (nextTab) {
-        if (nextTab === 'library') next.set('in', 'library')
+        if (nextTab === 'library' || nextTab === 'collections') next.set('in', nextTab)
         else next.delete('in')
       }
       setParams(next, { replace: true })
@@ -119,6 +121,7 @@ export default function Search() {
     if (!query) {
       setResults(null)
       setLibraryHits(null)
+      setCollectionHits(null)
       return
     }
     let alive = true
@@ -130,14 +133,23 @@ export default function Search() {
             if (!alive) return
             setLibraryHits(res)
             setResults(null)
+            setCollectionHits(null)
           })
-        : api
-            .searchAdvanced(query, { page })
-            .then((res) => {
+        : tab === 'collections'
+          ? api.searchCollections(query).then((res) => {
               if (!alive) return
-              setResults(res)
+              setCollectionHits(res)
+              setResults(null)
               setLibraryHits(null)
             })
+          : api
+              .searchAdvanced(query, { page })
+              .then((res) => {
+                if (!alive) return
+                setResults(res)
+                setLibraryHits(null)
+                setCollectionHits(null)
+              })
     job
       .catch((err: unknown) => {
         if (alive) setError(err instanceof Error ? err.message : 'Search failed')
@@ -189,6 +201,7 @@ export default function Search() {
 
   const emptyState = query && !loading && !error && (
     (tab === 'library' && (libraryHits?.count ?? 0) === 0) ||
+    (tab === 'collections' && (collectionHits?.count ?? 0) === 0) ||
     (tab === 'catalog' && results && results.media.length === 0)
   )
 
@@ -201,7 +214,9 @@ export default function Search() {
         {query
           ? tab === 'library'
             ? 'Searching your local library only'
-            : `${items.length} title${items.length === 1 ? '' : 's'} · official metadata`
+            : tab === 'collections'
+              ? 'Searching your bookmarks and custom lists only'
+              : `${items.length} title${items.length === 1 ? '' : 's'} · official metadata`
           : 'Search by title, or use field filters like studio:shaft genre:action year:2009-2015'}
       </p>
 
@@ -272,6 +287,7 @@ export default function Search() {
             {[
               { id: 'catalog' as const, label: 'Catalog', icon: SearchIcon },
               { id: 'library' as const, label: 'My library', icon: HardDrive },
+              { id: 'collections' as const, label: 'Bookmarks & lists', icon: Bookmark },
             ].map((option) => (
               <button
                 key={option.id}
@@ -281,7 +297,7 @@ export default function Search() {
                   setParams(
                     (prev) => {
                       const next = new URLSearchParams(prev)
-                      if (option.id === 'library') next.set('in', 'library')
+                      if (option.id === 'library' || option.id === 'collections') next.set('in', option.id)
                       else next.delete('in')
                       return next
                     },
@@ -415,7 +431,7 @@ export default function Search() {
           </div>
         ) : error ? (
           <div className="rounded-xl bg-red-950/50 p-4 text-sm text-red-200 ring-1 ring-red-500/30">{error}</div>
-        ) : loading && !results && !libraryHits ? (
+        ) : loading && !results && !libraryHits && !collectionHits ? (
           <CardSkeletons />
         ) : tab === 'library' ? (
           libraryHits && libraryHits.count > 0 ? (
@@ -461,6 +477,38 @@ export default function Search() {
               >
                 Search the catalog instead
               </button>
+            </div>
+          )
+        ) : tab === 'collections' ? (
+          collectionHits && collectionHits.count > 0 ? (
+            <div>
+              <p className="mb-3 text-xs text-white/40">
+                {collectionHits.count} title{collectionHits.count === 1 ? '' : 's'} across your bookmarks and lists
+              </p>
+              <ul className="divide-y divide-white/5 overflow-hidden rounded-xl bg-ink-900 ring-1 ring-white/6">
+                {collectionHits.items.map((hit) => (
+                  <li key={hit.media.id} className="flex flex-wrap items-center gap-3 px-3.5 py-2.5">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm text-white">
+                        <Highlighted segments={hit.highlight} fallback={hit.media.title} />
+                      </p>
+                      <p className="mt-0.5 truncate text-[11px] text-white/30">
+                        {[hit.inBookmarks ? 'Bookmarks' : null, ...hit.lists].filter(Boolean).join(' · ')}
+                      </p>
+                    </div>
+                    <Link
+                      to={`/anime/${hit.media.id}`}
+                      className="shrink-0 rounded-lg bg-white/6 px-2.5 py-1.5 text-[11px] text-white/70 transition hover:text-white"
+                    >
+                      Open
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <div className="rounded-xl bg-ink-900 p-6 text-center ring-1 ring-white/5">
+              <p className="text-sm text-white/60">Nothing in your bookmarks or lists matches “{query}”.</p>
             </div>
           )
         ) : emptyState ? (

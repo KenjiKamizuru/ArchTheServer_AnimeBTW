@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -22,6 +22,7 @@ import {
   Sparkles,
   Star,
   Users,
+  Share2,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type {
@@ -35,9 +36,12 @@ import { CardSkeletons } from '../components/MediaCard'
 import { useDetail } from '../components/MediaModal'
 import { useToast } from '../components/Toasts'
 import { useBookmarks, toggleBookmark } from '../lib/bookmarks'
-import { formatEpisodeCode, formatMediaType, formatSeason, inferSeasonFromTitle } from '../lib/format'
+import { formatEpisodeCode, formatMediaType, formatSeason, inferSeasonFromTitle, relativeTime } from '../lib/format'
 
-const SEASON_ORDER: Record<string, string> = { WINTER: '0', SPRING: '1', SUMMER: '2', FALL: '3' }
+
+
+/** Per-section CSS order ranks (AV-098): provided by the page, read by cards. */
+const SectionOrderContext = createContext<Map<string, number>>(new Map())
 
 function SectionCard({
   id,
@@ -52,8 +56,9 @@ function SectionCard({
   action?: React.ReactNode
   children: React.ReactNode
 }) {
+  const orderRank = useContext(SectionOrderContext).get(id)
   return (
-    <section id={id} className="scroll-mt-20 rounded-xl bg-ink-900 p-4 ring-1 ring-white/6">
+    <section id={id} style={orderRank !== undefined ? { order: orderRank } : undefined} className="scroll-mt-20 rounded-xl bg-ink-900 p-4 ring-1 ring-white/6">
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <h2 className="flex items-center gap-2 text-sm font-semibold text-white">
           <Icon size={14} className="text-accent" />
@@ -77,6 +82,7 @@ function EpisodeRow({
   onPlay: () => void
   onDownload: () => void
 }) {
+  const [imgFailed, setImgFailed] = useState(false)
   const date = episode.airDate ? new Date(episode.airDate) : null
   const valid = date && !Number.isNaN(date.getTime())
   return (
@@ -84,11 +90,12 @@ function EpisodeRow({
       <span className="w-8 shrink-0 text-center text-[11px] font-medium text-white/30 tabular-nums">
         {episode.number}
       </span>
-      {episode.thumbnail ? (
+      {episode.thumbnail && !imgFailed ? (
         <img
           src={episode.thumbnail}
           alt=""
           loading="lazy"
+          onError={() => setImgFailed(true)}
           className="h-11 w-20 shrink-0 rounded object-cover ring-1 ring-white/10"
         />
       ) : (
@@ -105,6 +112,9 @@ function EpisodeRow({
           {valid ? <span>{date.toLocaleDateString()}</span> : <span className="text-white/20">air date unknown</span>}
           {episode.site ? <span>{episode.site}</span> : null}
         </p>
+        {episode.synopsis ? (
+          <p className="mt-1 line-clamp-2 text-[10px] leading-relaxed text-white/35">{episode.synopsis}</p>
+        ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-1">
         <button
@@ -177,6 +187,7 @@ export default function AnimeDetailPage() {
   const [reportField, setReportField] = useState('title')
   const [reportMessage, setReportMessage] = useState('')
   const [reportBusy, setReportBusy] = useState(false)
+  const [reportSuggestion, setReportSuggestion] = useState('')
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set(['SEQUEL', 'PREQUEL']))
 
   const load = useCallback(async () => {
@@ -219,37 +230,49 @@ export default function AnimeDetailPage() {
     }
   }, [mediaId])
 
+  const [linkCopied, setLinkCopied] = useState(false)
+
+  // Shareable route (AV-076): reflect the anime in the document title so the
+  // /anime/:id link is distinguishable in tabs, history, and bookmarks.
+  useEffect(() => {
+    if (!detail) return
+    document.title = `${detail.title} · AnimeVault`
+    return () => {
+      document.title = 'AnimeVault'
+    }
+  }, [detail])
+
   const saved = useMemo(
     () => Boolean(detail && bookmarks.some((b) => b.mediaId === detail.id)),
     [bookmarks, detail],
   )
 
-  // Season selector: prequels/sequels plus the current title, in air order.
-  const seasonOptions = useMemo(() => {
-    if (!detail) return []
-    const entries = [
-      {
-        id: detail.id,
-        title: detail.title,
-        seasonYear: detail.seasonYear,
-        season: detail.season,
-        current: true,
-      },
-      ...(detail.relatedSeasons ?? []).map((season) => ({
-        id: season.id,
-        title: season.title,
-        seasonYear: season.seasonYear,
-        season: season.season,
-        current: false,
-      })),
-    ]
-    return entries.sort(
-      (a, b) =>
-        (a.seasonYear ?? 9999) - (b.seasonYear ?? 9999) ||
-        Number(SEASON_ORDER[a.season ?? ''] ?? 9) - Number(SEASON_ORDER[b.season ?? ''] ?? 9) ||
-        a.id - b.id,
+  // Season selector (AV-080): options are pre-computed server-side so the
+  // client stays free of ranking logic. `?? []` hides the selector if a cached
+  // payload predates the field; a refresh repopulates it.
+  const seasonOptions = detail?.seasonOptions ?? []
+
+  // Section rearranging (AV-098): the payload order is authoritative; moves are
+  // applied optimistically and persisted to the settings store.
+  const [arrangedIds, setArrangedIds] = useState<string[] | null>(null)
+  const sectionRanks = useMemo(() => {
+    const ids = arrangedIds ?? (detail?.sections ?? []).map((s) => s.id)
+    const ranks = new Map<string, number>()
+    ids.forEach((id, i) => ranks.set(id, i))
+    return ranks
+  }, [arrangedIds, detail])
+
+  function moveSection(id: string, delta: number) {
+    const ids = [...(arrangedIds ?? (detail?.sections ?? []).map((s) => s.id))]
+    const i = ids.indexOf(id)
+    const j = i + delta
+    if (i < 0 || j < 0 || j >= ids.length) return
+    ;[ids[i], ids[j]] = [ids[j], ids[i]]
+    setArrangedIds(ids)
+    void api.saveSettings({ detailSectionOrder: ids }).catch((err) =>
+      toast(err instanceof Error ? err.message : 'Could not save the section order', 'err'),
     )
-  }, [detail])
+  }
 
   function setParam(key: string, value: string | null) {
     setParams(
@@ -261,6 +284,42 @@ export default function AnimeDetailPage() {
       },
       { replace: true },
     )
+  }
+
+  const [orderNote, setOrderNote] = useState('')
+  const [orderNoteDraft, setOrderNoteDraft] = useState('')
+  const [orderNoteSaving, setOrderNoteSaving] = useState(false)
+
+  // Editable ordering notes (AV-084), persisted per anime.
+  useEffect(() => {
+    if (!Number.isInteger(mediaId) || mediaId <= 0) return
+    let alive = true
+    api
+      .watchOrderNote(mediaId)
+      .then((res) => {
+        if (!alive) return
+        setOrderNote(res.note)
+        setOrderNoteDraft(res.note)
+      })
+      .catch(() => {
+        /* ordering notes are optional */
+      })
+    return () => {
+      alive = false
+    }
+  }, [mediaId])
+
+  async function saveOrderNote() {
+    setOrderNoteSaving(true)
+    try {
+      const res = await api.saveWatchOrderNote(mediaId, orderNoteDraft)
+      setOrderNote(res.note)
+      toast(res.note ? 'Ordering note saved' : 'Ordering note removed')
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not save the ordering note', 'err')
+    } finally {
+      setOrderNoteSaving(false)
+    }
   }
 
   async function saveNote() {
@@ -284,9 +343,11 @@ export default function AnimeDetailPage() {
         field: reportField,
         message: reportMessage.trim(),
         kind: reportField === 'episode-order' ? 'episode-order' : 'metadata',
+        suggestedValue: reportSuggestion.trim() || undefined,
       })
       toast(`Thanks — report ${res.report.id} queued for review`)
       setReportMessage('')
+      setReportSuggestion('')
       setReportOpen(false)
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Could not file the report', 'err')
@@ -306,29 +367,13 @@ export default function AnimeDetailPage() {
 
   function printSheet() {
     if (!detail) return
-    const lines: string[] = [`# ${detail.title}`, '']
-    const meta = [
-      detail.format ? `Format: ${detail.format}` : null,
-      detail.season ? `Season: ${formatSeason(detail.season, detail.seasonYear)}` : null,
-      detail.status ? `Status: ${detail.status}` : null,
-      detail.episodes ? `Episodes: ${detail.episodes}` : null,
-      detail.duration ? `Runtime: ${detail.duration} min` : null,
-      detail.score ? `Score: ${detail.score}/100` : null,
-      detail.studios?.length ? `Studios: ${detail.studios.join(', ')}` : null,
-      detail.genres?.length ? `Genres: ${detail.genres.join(', ')}` : null,
-    ].filter(Boolean) as string[]
-    lines.push(...meta, '', detail.synopsis?.text ?? '')
-    if (detail.relatedSeasons?.length) {
-      lines.push('', '## Watch order', '')
-      detail.relatedSeasons.forEach((season, index) => {
-        lines.push(`${index + 2}. ${season.title} (${season.relationType.toLowerCase()})`)
-      })
+    // Pre-computed server-side (AV-100): spoiler-safe and note-free by contract.
+    const sheet = detail.infoSheet ?? ''
+    if (!sheet) {
+      toast('Information sheet unavailable — refresh and try again', 'err')
+      return
     }
-    if (detail.links?.length) {
-      lines.push('', '## Links', '')
-      for (const link of detail.links) lines.push(`- ${link.site}: ${link.url}`)
-    }
-    const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' })
+    const blob = new Blob([sheet], { type: 'text/markdown;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a')
     anchor.href = url
@@ -359,9 +404,11 @@ export default function AnimeDetailPage() {
   const timeline = detail.timeline ?? []
   const scores = detail.scores ?? null
   const synopsisText = detail.synopsis?.text ?? ''
-  const synopsisTooLong = synopsisText.length > 420
+  // Expansion control (AV-091): the clipped preview comes pre-computed on the
+  // redacted text, so expanding can never leak a hidden spoiler region.
+  const synopsisTooLong = detail?.synopsisClip?.tooLong ?? false
   const shownSynopsis =
-    expandedSynopsis || !synopsisTooLong ? synopsisText : `${synopsisText.slice(0, 420).trimEnd()}…`
+    expandedSynopsis || !synopsisTooLong ? synopsisText : (detail?.synopsisClip?.text ?? synopsisText)
 
   return (
     <article>
@@ -403,6 +450,22 @@ export default function AnimeDetailPage() {
               <span>· {detail.status.replace(/_/g, ' ').toLowerCase()}</span>
               {detail.episodes ? <span>· {detail.episodes} episodes</span> : null}
               {detail.duration ? <span>· {detail.duration} min</span> : null}
+              {detail.freshness ? (
+                <span
+                  className={detail.freshness.state === 'stale' ? 'text-amber-400/80' : 'text-white/35'}
+                  title={
+                    detail.freshness.refreshedAt
+                      ? `Metadata last refreshed ${new Date(detail.freshness.refreshedAt * 1000).toLocaleString()}`
+                      : 'Metadata refresh time unknown'
+                  }
+                >
+                  {detail.freshness.state === 'missing'
+                    ? '· refresh time unknown'
+                    : `· metadata updated ${relativeTime((detail.freshness.refreshedAt ?? Date.now() / 1000) * 1000)}${
+                        detail.freshness.state === 'stale' ? ' (may be outdated)' : ''
+                      }`}
+                </span>
+              ) : null}
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <button
@@ -422,6 +485,18 @@ export default function AnimeDetailPage() {
                 }`}
               >
                 <Bookmark size={13} className={saved ? 'fill-accent' : ''} /> {saved ? 'Saved' : 'Save'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void navigator.clipboard.writeText(window.location.href).then(() => {
+                    setLinkCopied(true)
+                    setTimeout(() => setLinkCopied(false), 1500)
+                  })
+                }}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-white/6 px-3 py-2 text-xs font-medium text-white/70 ring-1 ring-white/10 transition hover:text-white"
+              >
+                <Share2 size={13} /> {linkCopied ? 'Copied' : 'Share'}
               </button>
               <button
                 type="button"
@@ -471,8 +546,44 @@ export default function AnimeDetailPage() {
         </div>
       ) : null}
 
+      <details className="mt-3 rounded-xl bg-ink-900 px-4 py-2.5 ring-1 ring-white/6">
+        <summary className="cursor-pointer select-none text-[11px] font-medium uppercase tracking-wide text-white/35">
+          Arrange sections
+        </summary>
+        <ul className="mt-2 space-y-1 pb-1">
+          {(arrangedIds ?? (detail?.sections ?? []).map((s) => s.id)).map((id, index, ids) => {
+            const section = (detail?.sections ?? []).find((s) => s.id === id)
+            const pinned = Boolean(section?.always)
+            return (
+              <li key={id} className="flex items-center gap-2 text-[11px] text-white/60">
+                <span className="min-w-0 flex-1 truncate">{section?.label ?? id}</span>
+                <button
+                  type="button"
+                  disabled={pinned || index === 0}
+                  onClick={() => moveSection(id, -1)}
+                  className="rounded px-1.5 py-0.5 text-white/40 ring-1 ring-white/10 transition hover:text-white disabled:opacity-30"
+                  aria-label={`Move ${section?.label ?? id} up`}
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  disabled={pinned || index === ids.length - 1}
+                  onClick={() => moveSection(id, 1)}
+                  className="rounded px-1.5 py-0.5 text-white/40 ring-1 ring-white/10 transition hover:text-white disabled:opacity-30"
+                  aria-label={`Move ${section?.label ?? id} down`}
+                >
+                  ↓
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      </details>
+
+      <SectionOrderContext.Provider value={sectionRanks}>
       <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="space-y-3">
+        <div className="flex flex-col gap-3">
           {/* Overview + spoiler control (AV-091/092) */}
           <SectionCard
             id="overview"
@@ -534,8 +645,24 @@ export default function AnimeDetailPage() {
             icon={ListOrdered}
             action={
               episodes.length > 0 ? (
-                <span className="text-[10px] text-white/25">
-                  {episodes.filter((e) => e.hasMetadata).length} with titles
+                <span className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReportField('episode-order')
+                      setReportOpen(true)
+                      window.requestAnimationFrame(() => {
+                        document.getElementById('report-form')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                      })
+                    }}
+                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-white/35 transition hover:text-white/70"
+                    title="Report an incorrect episode order"
+                  >
+                    <Flag size={10} /> Wrong order?
+                  </button>
+                  <span className="text-[10px] text-white/25">
+                    {episodes.filter((e) => e.hasMetadata).length} with titles
+                  </span>
                 </span>
               ) : null
             }
@@ -591,34 +718,60 @@ export default function AnimeDetailPage() {
                       </button>
                       {open ? (
                         <div className="grid gap-1.5 pb-1.5 sm:grid-cols-2">
-                          {group.items.map((item) => (
-                            <Link
-                              key={item.id}
-                              to={`/anime/${item.id}`}
-                              className="flex items-center gap-2.5 rounded-lg bg-ink-850 p-2 ring-1 ring-white/5 transition hover:ring-accent/30"
-                            >
-                              {item.cover ? (
-                                <img src={item.cover} alt="" loading="lazy" className="h-12 w-9 rounded object-cover" />
+                          {group.items.map((item) => {
+                            const detail = (
+                              <>
+                                {item.cover ? (
+                                  <img src={item.cover} alt="" loading="lazy" className="h-12 w-9 rounded object-cover" />
+                                ) : (
+                                  <span className="grid h-12 w-9 place-items-center rounded bg-white/5 text-white/20">
+                                    {item.type === 'MANGA' ? <FileText size={12} /> : <Clapperboard size={12} />}
+                                  </span>
+                                )}
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate text-[11px] text-white/80">{item.title}</span>
+                                  <span className="block text-[10px] text-white/30">
+                                    {[
+                                      item.type === 'MANGA' ? (item.format === 'NOVEL' ? 'Novel' : 'Manga') : formatMediaType(item.format),
+                                      item.seasonYear ?? null,
+                                      item.episodes ? `${item.episodes} ep` : null,
+                                      item.chapters ? `${item.chapters} ch` : null,
+                                      item.averageScore ? `${item.averageScore}%` : null,
+                                    ]
+                                      .filter(Boolean)
+                                      .join(' · ')}
+                                  </span>
+                                </span>
+                              </>
+                            )
+                            const cardClass =
+                              'flex items-center gap-2.5 rounded-lg bg-ink-850 p-2 ring-1 ring-white/5 transition hover:ring-accent/30'
+                            // Source material (manga/novels) has no /anime page —
+                            // link out to its AniList entry instead (AV-090).
+                            if (item.type !== 'ANIME') {
+                              return item.siteUrl ? (
+                                <a
+                                  key={item.id}
+                                  href={item.siteUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  title="View on AniList"
+                                  className={cardClass}
+                                >
+                                  {detail}
+                                </a>
                               ) : (
-                                <span className="grid h-12 w-9 place-items-center rounded bg-white/5 text-white/20">
-                                  {item.type === 'MANGA' ? <FileText size={12} /> : <Clapperboard size={12} />}
-                                </span>
-                              )}
-                              <span className="min-w-0 flex-1">
-                                <span className="block truncate text-[11px] text-white/80">{item.title}</span>
-                                <span className="block text-[10px] text-white/30">
-                                  {[
-                                    item.type === 'MANGA' ? 'Manga' : formatMediaType(item.format),
-                                    item.seasonYear ?? null,
-                                    item.episodes ? `${item.episodes} ep` : null,
-                                    item.averageScore ? `${item.averageScore}%` : null,
-                                  ]
-                                    .filter(Boolean)
-                                    .join(' · ')}
-                                </span>
-                              </span>
-                            </Link>
-                          ))}
+                                <div key={item.id} className="flex items-center gap-2.5 rounded-lg bg-ink-850 p-2 ring-1 ring-white/5">
+                                  {detail}
+                                </div>
+                              )
+                            }
+                            return (
+                              <Link key={item.id} to={`/anime/${item.id}`} className={cardClass}>
+                                {detail}
+                              </Link>
+                            )
+                          })}
                         </div>
                       ) : null}
                     </div>
@@ -656,6 +809,38 @@ export default function AnimeDetailPage() {
               <p className="mt-2 text-[10px] text-white/25">
                 Chronological ordering follows premiere dates; undated entries are listed last and marked uncertain.
               </p>
+              {detail.watchOrder ? (
+                <p className="mt-2 rounded-lg bg-ink-850 px-3 py-2 text-[11px] leading-relaxed text-white/60">
+                  <span className="font-medium text-accent">Recommended: {detail.watchOrder.label}.</span>{' '}
+                  {detail.watchOrder.rationale}
+                </p>
+              ) : null}
+              <div className="mt-3">
+                <label htmlFor="order-note" className="text-[10px] font-medium uppercase tracking-wide text-white/30">
+                  Ordering note
+                </label>
+                <textarea
+                  id="order-note"
+                  value={orderNoteDraft}
+                  onChange={(e) => setOrderNoteDraft(e.target.value)}
+                  rows={2}
+                  placeholder="e.g. Watch the prequel movie before season two"
+                  className="mt-1 w-full resize-y rounded-lg border border-white/10 bg-ink-850 px-3 py-2 text-xs text-white/80 placeholder:text-white/20 focus:border-accent/50 focus:outline-none"
+                />
+                <div className="mt-1.5 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void saveOrderNote()}
+                    disabled={orderNoteSaving || orderNoteDraft === orderNote}
+                    className="rounded-lg bg-accent px-3 py-1.5 text-[11px] font-semibold text-black transition hover:bg-accent-600 disabled:opacity-40"
+                  >
+                    {orderNoteSaving ? 'Saving…' : 'Save note'}
+                  </button>
+                  {orderNoteDraft !== orderNote ? (
+                    <span className="text-[10px] text-white/25">Unsaved changes</span>
+                  ) : null}
+                </div>
+              </div>
             </SectionCard>
           ) : null}
 
@@ -665,20 +850,28 @@ export default function AnimeDetailPage() {
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 {detail.characters.map((character) => (
                   <div key={character.id} className="flex items-center gap-2 rounded-lg bg-ink-850 p-2">
-                    {character.image ? (
-                      <img src={character.image} alt="" loading="lazy" className="h-10 w-10 rounded-full object-cover" />
-                    ) : (
-                      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white/5 text-white/20">
-                        <Users size={13} />
+                    <Link to={`/characters/${character.id}`} className="group flex min-w-0 flex-1 items-center gap-2">
+                      {character.image ? (
+                        <img src={character.image} alt="" loading="lazy" className="h-10 w-10 rounded-full object-cover" />
+                      ) : (
+                        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white/5 text-white/20">
+                          <Users size={13} />
+                        </span>
+                      )}
+                      <span className="min-w-0">
+                        <span className="block truncate text-[11px] text-white/80">{character.name}</span>
+                        <span className="block truncate text-[10px] text-white/30">{character.role.toLowerCase()}</span>
                       </span>
-                    )}
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[11px] text-white/80">{character.name}</span>
-                      <span className="block truncate text-[10px] text-white/30">
-                        {character.role.toLowerCase()}
-                        {character.voiceActors[0] ? ` · ${character.voiceActors[0].name}` : ''}
-                      </span>
-                    </span>
+                    </Link>
+                    {character.voiceActors[0] ? (
+                      <Link
+                        to={`/staff/${character.voiceActors[0].id}`}
+                        title="Voice actor profile"
+                        className="shrink-0 max-w-24 truncate text-[10px] text-white/30 transition hover:text-white/60"
+                      >
+                        {character.voiceActors[0].name}
+                      </Link>
+                    ) : null}
                   </div>
                 ))}
               </div>
@@ -690,18 +883,23 @@ export default function AnimeDetailPage() {
             <SectionCard id="staff" title="Staff & cast" icon={Clapperboard}>
               <ul className="grid gap-1.5 sm:grid-cols-2">
                 {detail.staff.map((member) => (
-                  <li key={member.id} className="flex items-center gap-2 rounded-lg bg-ink-850 p-2">
-                    {member.image ? (
-                      <img src={member.image} alt="" loading="lazy" className="h-9 w-9 rounded-full object-cover" />
-                    ) : (
-                      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white/5 text-white/20">
-                        <Users size={12} />
+                  <li key={member.id}>
+                    <Link
+                      to={`/staff/${member.id}`}
+                      className="group flex items-center gap-2 rounded-lg bg-ink-850 p-2 transition hover:bg-white/[0.04]"
+                    >
+                      {member.image ? (
+                        <img src={member.image} alt="" loading="lazy" className="h-9 w-9 rounded-full object-cover" />
+                      ) : (
+                        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white/5 text-white/20">
+                          <Users size={12} />
+                        </span>
+                      )}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[11px] text-white/80">{member.name}</span>
+                        <span className="block truncate text-[10px] text-white/30">{member.role ?? member.occupations.join(', ')}</span>
                       </span>
-                    )}
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[11px] text-white/80">{member.name}</span>
-                      <span className="block truncate text-[10px] text-white/30">{member.role ?? member.occupations.join(', ')}</span>
-                    </span>
+                    </Link>
                   </li>
                 ))}
               </ul>
@@ -710,7 +908,7 @@ export default function AnimeDetailPage() {
         </div>
 
         {/* ── Sidebar ──────────────────────────────────────────────────── */}
-        <div className="space-y-3">
+        <div className="flex flex-col gap-3">
           {scores ? (
             <SectionCard id="scores" title="Score distribution" icon={Star}>
               <div className="space-y-1">
@@ -763,14 +961,31 @@ export default function AnimeDetailPage() {
           ) : null}
 
           {(detail as unknown as { studios?: string[] }).studios?.length ? (
-            <SectionCard id="studios" title="Studios" icon={Clapperboard}>
-              <ul className="space-y-1">
-                {detail.studios.map((studio) => (
-                  <li key={studio} className="text-[11px] text-white/70">
-                    {studio}
-                  </li>
-                ))}
-              </ul>
+            <SectionCard id="studios" title="Production & companies" icon={Clapperboard}>
+              {detail.companyGroups?.length ? (
+                <div className="space-y-2">
+                  {detail.companyGroups.map((group) => (
+                    <div key={group.role}>
+                      <p className="text-[10px] font-medium uppercase tracking-wide text-white/30">{group.label}</p>
+                      <ul className="mt-0.5 space-y-0.5">
+                        {group.names.map((name) => (
+                          <li key={name} className="text-[11px] text-white/70">
+                            {name}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <ul className="space-y-1">
+                  {detail.studios.map((studio) => (
+                    <li key={studio} className="text-[11px] text-white/70">
+                      {studio}
+                    </li>
+                  ))}
+                </ul>
+              )}
               {detail.links?.length ? (
                 <p className="mt-2 text-[10px] text-white/25">
                   Metadata and artwork provided by AniList. Streaming availability varies by region.
@@ -783,18 +998,26 @@ export default function AnimeDetailPage() {
             <SectionCard id="links" title="External links" icon={Info}>
               <ul className="space-y-1">
                 {detail.links.map((link) => (
-                  <li key={`${link.site}-${link.url}`}>
+                  <li key={`${link.site}-${link.url}`} className="flex items-baseline gap-2">
                     <a
                       href={link.url}
                       target="_blank"
                       rel="noreferrer noopener"
-                      className="block truncate text-[11px] text-white/60 underline decoration-dotted transition hover:text-accent"
+                      className="block min-w-0 flex-1 truncate text-[11px] text-white/60 underline decoration-dotted transition hover:text-accent"
                     >
                       {link.site}
                     </a>
+                    {link.type && link.type !== 'INFO' ? (
+                      <span className="shrink-0 text-[9px] uppercase tracking-wide text-white/25">
+                        {link.type.replace(/_/g, ' ').toLowerCase()}
+                      </span>
+                    ) : null}
                   </li>
                 ))}
               </ul>
+              <p className="mt-2 text-[10px] text-white/25">
+                Metadata compiled via AniList; links provided by each service.
+              </p>
             </SectionCard>
           ) : null}
 
@@ -822,10 +1045,11 @@ export default function AnimeDetailPage() {
           </SectionCard>
         </div>
       </div>
+      </SectionOrderContext.Provider>
 
       {/* Report dialog (AV-096/097) */}
       {reportOpen ? (
-        <div className="mt-3 rounded-xl bg-ink-900 p-4 ring-1 ring-amber-500/25">
+        <div id="report-form" className="mt-3 rounded-xl bg-ink-900 p-4 ring-1 ring-amber-500/25">
           <h2 className="flex items-center gap-2 text-sm font-semibold text-white">
             <Flag size={13} className="text-amber-300" />
             Report a problem
@@ -847,6 +1071,13 @@ export default function AnimeDetailPage() {
                 ),
               )}
             </select>
+            <input
+              type="text"
+              value={reportSuggestion}
+              onChange={(event) => setReportSuggestion(event.target.value.slice(0, 400))}
+              placeholder="Suggested correction (optional)"
+              className="min-w-40 flex-1 rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
+            />
             <input
               type="text"
               value={reportMessage}

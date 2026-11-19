@@ -2,9 +2,32 @@ import crypto from 'node:crypto'
 import express from 'express'
 import path from 'node:path'
 import { brotliCompressSync, constants as zlibConstants, gzipSync } from 'node:zlib'
-import { existsSync, lstatSync, createReadStream } from 'node:fs'
+import { existsSync, lstatSync, createReadStream, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import * as anilist from './anilist.mjs'
+import * as inspectView from './inspect.mjs'
+import { createCatalogIndexer } from './catalogIndex.mjs'
+import { documentMeta, injectDocumentMeta } from './htmlMeta.mjs'
+import { sanitizeOrderingNote } from './watchOrder.mjs'
+import { normalizeCharacter } from './character.mjs'
+import { normalizeStaffMember } from './staff.mjs'
+import { buildMetadataReport } from './reporting.mjs'
+import { buildNotePayload, noteView } from './notes.mjs'
+import { normalizeRegistration, hashPassword, verifyPassword, publicUser, findUserByIdentifier, setPassword, normalizeBio } from './accounts.mjs'
+import {
+  SESSION_COOKIE,
+  SESSION_TTL_MS,
+  createSessionToken,
+  hashToken,
+  sessionRecord,
+  isSessionValid,
+  readCookie,
+} from './sessions.mjs'
+import { issueToken, isTokenValid, hashToken as hashAccountToken } from './tokens.mjs'
+import { sendMail, verificationMessage, resetMessage } from './mail.mjs'
+
+const EMAIL_VERIFY_TTL_MS = 24 * 60 * 60 * 1000
+const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000
 import * as browse from './browse.mjs'
 import * as explore from './explore.mjs'
 import * as searchEngine from './search.mjs'
@@ -331,6 +354,7 @@ app.get(
       sorts: Object.keys(browse.BROWSE_SORTS),
       sources: browse.BROWSE_SOURCES,
       countries: browse.BROWSE_COUNTRIES,
+      ageRatings: browse.BROWSE_AGE_RATINGS,
     })
   }),
 )
@@ -502,6 +526,90 @@ app.get(
   }),
 )
 
+// Search only bookmarks and custom lists (AV-064a).
+app.get(
+  '/api/search/collections',
+  wrap(async (req, res) => {
+    const q = String(req.query.q ?? '').trim()
+    const hits = []
+    const byMedia = new Map()
+    const pushHit = (media, hit) => {
+      if (byMedia.has(media.id)) {
+        const existing = byMedia.get(media.id)
+        for (const name of hit.lists) if (!existing.lists.includes(name)) existing.lists.push(name)
+        existing.inBookmarks = existing.inBookmarks || hit.inBookmarks
+      } else {
+        byMedia.set(media.id, hit)
+        hits.push(hit)
+      }
+    }
+    if (q) {
+      for (const bookmark of store.list()) {
+        const media = bookmark?.media
+        if (media && media.id && searchEngine.matchRecordTitles(q, media)) {
+          pushHit(media, { media, addedAt: bookmark.addedAt ?? null, inBookmarks: true, lists: [] })
+        }
+      }
+      const summary = listStore.summary()
+      for (const list of [...summary.statuses, ...summary.lists]) {
+        for (const entry of listStore.readList(list.id).entries) {
+          const media = entry?.media
+          if (media && media.id && searchEngine.matchRecordTitles(q, media)) {
+            pushHit(media, { media, addedAt: entry.addedAt ?? null, inBookmarks: false, lists: [list.name] })
+          }
+        }
+      }
+    }
+    res.json({
+      query: q,
+      count: hits.length,
+      items: hits.slice(0, 200).map((hit) => ({
+        ...hit,
+        highlight: searchEngine.highlightSegments(hit.media.title ?? '', q),
+      })),
+      totalBookmarks: store.list().length,
+    })
+  }),
+)
+
+// Full-text search across every local source (AV-075b).
+const localIndexer = createCatalogIndexer()
+app.get(
+  '/api/search/text',
+  wrap(async (req, res) => {
+    const q = String(req.query.q ?? '').trim()
+    const summary = listStore.summary()
+    // One row per media, accumulating the names of every list/status it is in.
+    const entryByMedia = new Map()
+    for (const list of [...summary.statuses, ...summary.lists]) {
+      for (const entry of listStore.readList(list.id).entries) {
+        if (!entry?.media?.id) continue
+        let row = entryByMedia.get(entry.media.id)
+        if (!row) {
+          row = { media: entry.media, listNames: [], addedAt: entry.addedAt }
+          entryByMedia.set(entry.media.id, row)
+        }
+        if (!row.listNames.includes(list.name)) row.listNames.push(list.name)
+        row.addedAt = Math.max(row.addedAt ?? 0, entry.addedAt ?? 0)
+      }
+    }
+    const hits = localIndexer.search(
+      {
+        libraryItems: (await library.list()).items,
+        bookmarks: store.list(),
+        listEntries: [...entryByMedia.values()],
+      },
+      q,
+      { limit: 50 },
+    )
+    res.json({
+      query: q,
+      count: hits.length,
+      items: hits.map((hit) => ({ ...hit, highlight: searchEngine.highlightSegments(hit.title, q) })),
+    })
+  }),
+)
+
 app.get(
   '/api/search/options',
   wrap(async (_req, res) => {
@@ -552,24 +660,47 @@ app.get(
   wrap(async (req, res) => {
     const media = await anilist.getDetail(req.params.id)
     const reveal = String(req.query.spoilers ?? '') === '1'
-    const synopsis = detailEngine.redactSpoilers(media.description, { reveal })
-    res.json({
-      ...media,
-      // Pre-computed sections keep the client free of ranking/grouping logic.
-      episodes: detailEngine.buildEpisodeGuide(media, media.streamingEpisodes),
-      relations: detailEngine.groupRelations(
-        (media.rawRelations ?? media.relations ?? []),
-      ),
-      timeline: detailEngine.buildTimeline(media.timelineNodes ?? [], String(req.query.order ?? 'release')),
-      scores: detailEngine.scoreDistribution(media.scoreBuckets),
-      scoreMean: detailEngine.distributionMean(media.scoreBuckets),
-      scoreMode: detailEngine.distributionMode(media.scoreBuckets),
-      statusTimeline: detailEngine.buildStatusTimeline(media),
-      synopsis,
-      overview: detailEngine.spoilerFreeOverview(media.description),
-      hasSpoilers: detailEngine.hasSpoilers(media.description),
-      sections: detailEngine.DETAIL_SECTIONS,
-    })
+    const order = String(req.query.order ?? 'release')
+    res.json(
+      detailEngine.buildDetailResponse(media, {
+        reveal,
+        order,
+        sectionOrder: settings.get().detailSectionOrder,
+      }),
+    )
+  }),
+)
+
+// Admin metadata inspector (AV-025a): the raw provider payload beside the
+// normalized record. No auth — the server is a local, single-user tool.
+app.get(
+  '/api/admin/inspect/:id',
+  limitOutbound,
+  wrap(async (req, res) => {
+    const data = await anilist.inspectDetail(req.params.id)
+    res.json({ ...data, rows: inspectView.buildInspectionRows(data.raw, data.record) })
+  }),
+)
+
+// Staff member detail (AV-086): names, occupations and media credits.
+app.get(
+  '/api/staff/:id',
+  wrap(async (req, res) => {
+    const raw = await anilist.getStaffMember(req.params.id)
+    const staff = normalizeStaffMember(raw)
+    if (!staff) throw Object.assign(new Error('Staff member not found'), { status: 404 })
+    res.json(staff)
+  }),
+)
+
+// Character detail (AV-085): names, description and media appearances.
+app.get(
+  '/api/characters/:id',
+  wrap(async (req, res) => {
+    const raw = await anilist.getCharacter(req.params.id)
+    const character = normalizeCharacter(raw)
+    if (!character) throw Object.assign(new Error('Character not found'), { status: 404 })
+    res.json(character)
   }),
 )
 
@@ -581,7 +712,7 @@ app.get(
     const id = Number(req.params.id)
     if (!Number.isInteger(id) || id <= 0) throw Object.assign(new Error('Invalid anime id'), { status: 400 })
     const notes = await kv.get(`notes:${id}`, null)
-    res.json({ mediaId: id, note: typeof notes?.note === 'string' ? notes.note : '', updatedAt: notes?.updatedAt ?? null })
+    res.json(noteView(id, notes))
   }),
 )
 
@@ -590,11 +721,215 @@ app.put(
   wrap(async (req, res) => {
     const id = Number(req.params.id)
     if (!Number.isInteger(id) || id <= 0) throw Object.assign(new Error('Invalid anime id'), { status: 400 })
-    const note = String(req.body?.note ?? '').slice(0, 4000)
-    const payload = note.trim() ? { note, updatedAt: Date.now() } : null
+    const payload = buildNotePayload(req.body?.note)
     if (payload) await kv.set(`notes:${id}`, payload)
     else await kv.remove(`notes:${id}`)
+    res.json(noteView(id, payload))
+  }),
+)
+
+// Editable watch-order notes (AV-084): per-anime notes about which watch
+// order to use, stored like private notes in the settings kv store.
+app.get(
+  '/api/anime/:id/watch-order',
+  wrap(async (req, res) => {
+    const id = Number(req.params.id)
+    if (!Number.isInteger(id) || id <= 0) throw Object.assign(new Error('Invalid anime id'), { status: 400 })
+    const saved = await kv.get(`watch-order:${id}`, null)
+    res.json({ mediaId: id, note: typeof saved?.note === 'string' ? saved.note : '', updatedAt: saved?.updatedAt ?? null })
+  }),
+)
+
+app.put(
+  '/api/anime/:id/watch-order',
+  wrap(async (req, res) => {
+    const id = Number(req.params.id)
+    if (!Number.isInteger(id) || id <= 0) throw Object.assign(new Error('Invalid anime id'), { status: 400 })
+    const note = sanitizeOrderingNote(req.body?.note)
+    const payload = note ? { note, updatedAt: Date.now() } : null
+    if (payload) await kv.set(`watch-order:${id}`, payload)
+    else await kv.remove(`watch-order:${id}`)
     res.json({ mediaId: id, note: payload?.note ?? '', updatedAt: payload?.updatedAt ?? null })
+  }),
+)
+
+// Optional account registration (AV-101): closed unless the installation
+// opts into multi-user mode via the `registrationOpen` setting.
+app.get('/api/auth/registration-status', (req, res) => {
+  res.json({ open: settings.get().registrationOpen === true })
+})
+
+app.post(
+  '/api/auth/register',
+  limitMutations,
+  wrap(async (req, res) => {
+    if (settings.get().registrationOpen !== true) {
+      throw Object.assign(new Error('Registration is closed on this installation'), { status: 403 })
+    }
+    const parsed = normalizeRegistration(req.body, { requireEmail: settings.get().emailAccounts === true })
+    if (!parsed.ok) throw Object.assign(new Error(parsed.error), { status: 400 })
+    const users = (await kv.get('users', [])) ?? []
+    const usernameKey = parsed.value.username.toLowerCase()
+    if (users.some((u) => u?.username?.toLowerCase() === usernameKey)) {
+      throw Object.assign(new Error('That username is already taken'), { status: 409 })
+    }
+    if (parsed.value.email && users.some((u) => u?.email?.toLowerCase() === parsed.value.email)) {
+      throw Object.assign(new Error('That email is already registered'), { status: 409 })
+    }
+    const passwordSalt = crypto.randomBytes(16).toString('hex')
+    const user = {
+      id: `u_${crypto.randomBytes(8).toString('hex')}`,
+      username: parsed.value.username,
+      displayName: parsed.value.displayName,
+      email: parsed.value.email,
+      emailVerified: false,
+      passwordHash: hashPassword(parsed.value.password, passwordSalt),
+      passwordSalt,
+      createdAt: Date.now(),
+    }
+    users.push(user)
+    await kv.set('users', users)
+    // Email verification (AV-103): single-use expiring token, console mail
+    // transport by default (server/mail.mjs is the delivery seam).
+    if (user.email && settings.get().emailAccounts === true) {
+      const { raw, record } = issueToken('email-verify', user.id, { ttlMs: EMAIL_VERIFY_TTL_MS })
+      await kv.set(`token:${record.hash}`, record)
+      sendMail(verificationMessage(user, raw))
+    }
+    res.status(201).json({ user: publicUser(user) })
+  }),
+)
+
+// Email verification (AV-103): consumes a single-use token (hash-only
+// storage) and marks the account's email verified.
+app.post(
+  '/api/auth/verify-email',
+  limitMutations,
+  wrap(async (req, res) => {
+    const raw = String(req.body?.token ?? '').trim()
+    const record = raw ? await kv.get(`token:${hashAccountToken(raw)}`, null) : null
+    if (!record || !isTokenValid(record, { purpose: 'email-verify' })) {
+      throw Object.assign(new Error('This verification link is invalid or has expired'), { status: 400 })
+    }
+    const users = (await kv.get('users', [])) ?? []
+    const user = users.find((u) => u?.id === record.subject)
+    if (!user) throw Object.assign(new Error('Account no longer exists'), { status: 400 })
+    await kv.set(`token:${record.hash}`, { ...record, usedAt: Date.now() })
+    user.emailVerified = true
+    await kv.set('users', users)
+    res.json({ ok: true, user: publicUser(user) })
+  }),
+)
+
+// Password reset (AV-104): single-use 1h tokens (server/tokens.mjs). The
+// request response is always generic — no account enumeration. Accounts
+// without a stored email have no reset path (mail is the delivery channel).
+app.post(
+  '/api/auth/request-reset',
+  limitMutations,
+  wrap(async (req, res) => {
+    const users = (await kv.get('users', [])) ?? []
+    const user = findUserByIdentifier(users, req.body?.identifier)
+    if (user?.email) {
+      const { raw, record } = issueToken('password-reset', user.id, { ttlMs: PASSWORD_RESET_TTL_MS })
+      await kv.set(`token:${record.hash}`, record)
+      sendMail(resetMessage(user, raw))
+    }
+    res.json({ ok: true })
+  }),
+)
+
+app.post(
+  '/api/auth/reset-password',
+  limitMutations,
+  wrap(async (req, res) => {
+    const raw = String(req.body?.token ?? '').trim()
+    const password = String(req.body?.password ?? '')
+    const record = raw ? await kv.get(`token:${hashAccountToken(raw)}`, null) : null
+    if (!record || !isTokenValid(record, { purpose: 'password-reset' })) {
+      throw Object.assign(new Error('This reset link is invalid or has expired'), { status: 400 })
+    }
+    if (password.length < 8 || password.length > 200) {
+      throw Object.assign(new Error('Password must be 8-200 characters'), { status: 400 })
+    }
+    const users = (await kv.get('users', [])) ?? []
+    const user = users.find((u) => u?.id === record.subject)
+    if (!user) throw Object.assign(new Error('Account no longer exists'), { status: 400 })
+    await kv.set(`token:${record.hash}`, { ...record, usedAt: Date.now() })
+    Object.assign(user, setPassword(user, password, { saltHex: crypto.randomBytes(16).toString('hex') }))
+    await kv.set('users', users)
+    // A reset implies the account may be compromised: drop every session.
+    for (const key of await kv.list('session:', { limit: 10_000 })) {
+      const session = await kv.get(key, null)
+      if (session?.userId === user.id) await kv.remove(key)
+    }
+    res.json({ ok: true })
+  }),
+)
+
+// Profile bios (AV-110): session-authenticated, length + content limited.
+app.put(
+  '/api/auth/profile',
+  limitMutations,
+  wrap(async (req, res) => {
+    const token = readCookie(req, SESSION_COOKIE)
+    const record = token ? await kv.get(`session:${hashToken(token)}`, null) : null
+    if (!record || !isSessionValid(record)) {
+      throw Object.assign(new Error('Sign in to edit your profile'), { status: 401 })
+    }
+    const users = (await kv.get('users', [])) ?? []
+    const user = users.find((u) => u?.id === record.userId)
+    if (!user) throw Object.assign(new Error('Account no longer exists'), { status: 401 })
+    const parsed = normalizeBio(req.body?.bio)
+    if (!parsed.ok) throw Object.assign(new Error(parsed.error), { status: 400 })
+    user.bio = parsed.value
+    await kv.set('users', users)
+    res.json({ user: publicUser(user) })
+  }),
+)
+
+// Sign-in / sign-out (AV-102): login errors are generic (no user
+// enumeration); only the sha256 of a session token is stored server-side and
+// the raw token travels solely in an httpOnly cookie.
+app.post(
+  '/api/auth/login',
+  limitMutations,
+  wrap(async (req, res) => {
+    const invalid = () => Object.assign(new Error('Invalid username or password'), { status: 401 })
+    const username = String(req.body?.username ?? '').trim().toLowerCase()
+    const password = String(req.body?.password ?? '')
+    const users = (await kv.get('users', [])) ?? []
+    const user = users.find((u) => u?.username?.toLowerCase() === username)
+    if (!user || !verifyPassword(password, user.passwordSalt, user.passwordHash)) throw invalid()
+    const token = createSessionToken()
+    await kv.set(`session:${hashToken(token)}`, sessionRecord(user.id))
+    res.cookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', maxAge: SESSION_TTL_MS })
+    res.json({ user: publicUser(user) })
+  }),
+)
+
+app.post(
+  '/api/auth/logout',
+  wrap(async (req, res) => {
+    const token = readCookie(req, SESSION_COOKIE)
+    if (token) await kv.remove(`session:${hashToken(token)}`)
+    res.clearCookie(SESSION_COOKIE)
+    res.json({ ok: true })
+  }),
+)
+
+app.get(
+  '/api/auth/me',
+  wrap(async (req, res) => {
+    const token = readCookie(req, SESSION_COOKIE)
+    const record = token ? await kv.get(`session:${hashToken(token)}`) : null
+    if (!record || !isSessionValid(record)) {
+      if (token && record) await kv.remove(`session:${hashToken(token)}`)
+      return res.json({ user: null })
+    }
+    const users = (await kv.get('users', [])) ?? []
+    const user = users.find((u) => u?.id === record.userId)
+    res.json({ user: user ? publicUser(user) : null })
   }),
 )
 
@@ -604,23 +939,12 @@ app.post(
   wrap(async (req, res) => {
     const id = Number(req.params.id)
     if (!Number.isInteger(id) || id <= 0) throw Object.assign(new Error('Invalid anime id'), { status: 400 })
-    const field = String(req.body?.field ?? '').slice(0, 40)
-    const message = String(req.body?.message ?? '').trim().slice(0, 1000)
-    const kind = req.body?.kind === 'episode-order' ? 'episode-order' : 'metadata'
-    if (!message) throw Object.assign(new Error('Please describe the problem'), { status: 400 })
-    const allowed = new Set([
-      'title', 'episodes', 'season', 'year', 'format', 'status', 'score',
-      'synopsis', 'studio', 'relations', 'episode-order', 'other',
-    ])
-    const report = {
-      id: `r_${crypto.randomBytes(8).toString('hex')}`,
-      mediaId: id,
-      kind,
-      field: allowed.has(field) ? field : 'other',
-      message,
-      createdAt: Date.now(),
-      status: 'open',
-    }
+    const built = buildMetadataReport(
+      { ...req.body, mediaId: id },
+      { id: `r_${crypto.randomBytes(8).toString('hex')}` },
+    )
+    if (!built.ok) throw Object.assign(new Error(built.error), { status: 400 })
+    const report = built.report
     const existing = (await kv.get('reports', [])) ?? []
     const reports = [report, ...(Array.isArray(existing) ? existing : [])].slice(0, 500)
     await kv.set('reports', reports)
@@ -1400,15 +1724,35 @@ if (isProd) {
     next()
   })
   app.use(express.static(dist, { index: false, dotfiles: 'deny', maxAge: '1y', immutable: true }))
-  app.use((req, res) => {
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      res.status(405).end()
-      return
-    }
-    res.set('Cache-Control', 'no-cache')
-    res.setHeader('Content-Security-Policy', APP_CSP)
-    res.sendFile(path.join(dist, 'index.html'))
-  })
+  app.use(
+    wrap(async (req, res) => {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        res.status(405).end()
+        return
+      }
+      res.set('Cache-Control', 'no-cache')
+      res.setHeader('Content-Security-Policy', APP_CSP)
+      const shell = path.join(dist, 'index.html')
+      // Shareable per-anime pages (AV-076): inject title/OG metadata so shared
+      // /anime/:id links unfurl with the show's name and cover. Any lookup
+      // failure falls through to the plain shell.
+      const match = /^\/anime\/(\d+)\/?$/.exec(req.path)
+      if (match) {
+        try {
+          const media = await anilist.getDetail(match[1])
+          const meta = documentMeta(media, {
+            origin: `${req.protocol}://${req.get('host')}`,
+            pagePath: req.path,
+          })
+          res.type('html').send(injectDocumentMeta(readFileSync(shell, 'utf8'), meta))
+          return
+        } catch {
+          /* fall back to the plain shell */
+        }
+      }
+      res.sendFile(shell)
+    }),
+  )
 } else {
   const { createServer } = await import('vite')
   const vite = await createServer({

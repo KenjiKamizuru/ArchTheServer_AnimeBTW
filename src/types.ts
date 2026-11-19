@@ -3,14 +3,127 @@ export type MediaSeason = 'WINTER' | 'SPRING' | 'SUMMER' | 'FALL'
 export interface MediaLink {
   site: string
   url: string
+  type: string | null
+}
+
+export interface MediaClaim {
+  source: string
+  value: string | number | boolean | null
+}
+
+export interface MediaProvenanceEntry {
+  source: string | null
+  refreshedAt: number | null
+  /** Losing provider claims kept as evidence when providers disagree (AV-004). */
+  alternates?: MediaClaim[]
+}
+
+export interface MediaProvenance extends MediaProvenanceEntry {
+  fields: Record<string, MediaProvenanceEntry>
+  /** Absent-field annotations (AV-014): UNANNOUNCED or NOT_APPLICABLE (default is UNKNOWN). */
+  states: Record<string, 'UNANNOUNCED' | 'NOT_APPLICABLE'>
+  /** Set when the last refresh attempt failed while last-known-good data was served (AV-022). */
+  fetchFailure?: MediaFetchFailure
+}
+
+export interface MediaTag {
+  /** Stable slug identifier (AV-007). */
+  id: string
+  name: string
+  rank: number
+  isMediaSpoiler: boolean
+}
+
+export interface MediaScore {
+  /** Provider that made the claim (AV-012). */
+  source: string
+  /** The provider's original value on its own scale (never rounded). */
+  value: number
+  /** The provider's scale maximum (100 = percent). */
+  scale: number
+}
+
+export interface MediaFreshness {
+  /** 'missing' when never refreshed, 'stale' past the refresh window, else 'fresh' (AV-019). */
+  state: 'fresh' | 'stale' | 'missing'
+  /** Unix seconds of the last refresh; null when never refreshed. */
+  refreshedAt: number | null
+  /** Unix seconds when the metadata becomes due for refresh. */
+  nextRefreshAt: number
+}
+
+export interface MediaArtworkVariant {
+  kind: 'POSTER' | 'BANNER' | 'THUMBNAIL'
+  url: string
+  source: string | null
+  width: number | null
+  height: number | null
+  attribution: string | null
+}
+
+export interface MediaFetchFailure {
+  /** Unix seconds of the failed refresh attempt. */
+  at: number
+  /** Bounded failure message (≤200 chars). */
+  message: string
+}
+
+export interface MediaDate {
+  year: number
+  /** Null when unannounced (fuzzy partial date). */
+  month: number | null
+  /** Null when unannounced; only meaningful with a month. */
+  day: number | null
+}
+
+export interface MediaBroadcast {
+  dayOfWeek: string
+  /** 24h HH:MM; null when unannounced. */
+  time: string | null
+}
+
+export interface MediaAgeRating {
+  /** Rating-system region or system name (JP, US, PEGI, INTL, …) (AV-011). */
+  region: string
+  rating: string
+}
+
+export interface MediaCompany {
+  id: string
+  name: string
+  /** Canonical roles: MAIN_STUDIO, PRODUCER, LICENSOR, DISTRIBUTOR (AV-008). */
+  roles: string[]
 }
 
 export interface Media {
   id: number
+  /** Canonical record schema version (AV-015). */
+  schemaVersion: number
+  /** Provider slug → string id, e.g. { anilist: '21', myanimelist: '20' } (AV-002). */
+  externalIds: Record<string, string>
+  /** Metadata source + last-refresh timestamp covering every field (AV-003). */
+  meta: MediaProvenance
+  /** Structured artwork variants with source, dimensions and attribution (AV-023). */
+  artworkVariants: MediaArtworkVariant[]
+  /** Weighted metadata completeness score, 0–100 (AV-024). */
+  completeness: number
+  /** Staff names for entity search (AV-058). */
+  staffNames: string[]
+  /** Voice-actor names for entity search (AV-058). */
+  voiceActorNames: string[]
+  /** Character names for entity search (AV-059). */
+  characterNames: string[]
+  /** Related-title names in the franchise neighbourhood (AV-060). */
+  relationNames: string[]
+  /** Relation kinds (lowercase, e.g. 'prequel', 'side_story') (AV-060). */
+  relationTypes: string[]
+  /** Episode-title index for episode search (AV-062). */
+  episodeTitles: string[]
   title: string
   romaji: string | null
   english: string | null
   native: string | null
+  synonyms: string[]
   cover: string | null
   banner: string | null
   color: string | null
@@ -22,11 +135,30 @@ export interface Media {
   format: string | null
   season: MediaSeason | null
   seasonYear: number | null
+  /** Normalized partial dates (AV-013): month/day null when unannounced. */
+  startDate: MediaDate | null
+  endDate: MediaDate | null
+  /** Broadcast slot (AV-013): day-of-week plus 24h HH:MM, time null when unannounced. */
+  broadcast: MediaBroadcast | null
   score: number | null
+  /** Provider score claims on their original scales (AV-012); distinct from the score-distribution `scores`. */
+  scoreClaims: MediaScore[]
   popularity: number
   genres: string[]
+  /** Stable slug identifiers parallel to `genres` (AV-007). */
+  genreIds: string[]
+  tags: MediaTag[]
+  ageRating: string | null
+  /** Region-aware age-rating entries (AV-011). */
+  ageRatings: MediaAgeRating[]
+  /** ISO 3166-1 alpha-2 country of origin (AV-009). */
+  countryOfOrigin: string | null
+  /** BCP-47 original language (AV-009); derived from country when the provider omits it. */
+  originalLanguage: string | null
   nextEpisode: { episode: number; airingAt: number } | null
   studios: string[]
+  /** Linked company entities (AV-008): studios, producers, licensors, distributors. */
+  companies: MediaCompany[]
   links: MediaLink[]
   streams: MediaLink[]
   anidb: string | null
@@ -83,6 +215,7 @@ export interface RelatedItem {
   cover: string | null
   averageScore: number | null
   relationType: string
+  siteUrl?: string | null
 }
 
 export interface RelationGroup {
@@ -138,8 +271,8 @@ export interface DetailSection {
 export interface MediaDetail extends Media {
   streamingEpisodes: StreamingEpisode[]
   relatedSeasons?: RelatedSeason[]
-  startDate?: { year: number | null; month: number | null; day: number | null } | null
-  endDate?: { year: number | null; month: number | null; day: number | null } | null
+  /** Freshness verdict for the detail-page indicator (AV-019). */
+  freshness?: MediaFreshness
   rankings?: { rank: number; type: string; context: string; year: number | null; season: MediaSeason | null; allTime: boolean }[]
   /** Server-computed detail sections. */
   episodesGuide?: EpisodeEntry[]
@@ -150,6 +283,11 @@ export interface MediaDetail extends Media {
   scoreMode?: { score: number; amount: number; percent: number } | null
   statusTimeline?: { label: string; detail: string | null; display: string }[]
   synopsis?: { text: string; hiddenCount: number }
+  watchOrder?: WatchOrderRecommendation
+  seasonOptions?: SeasonOption[]
+  companyGroups?: CompanyGroup[]
+  synopsisClip?: SynopsisClip
+  infoSheet?: string
   overview?: string
   hasSpoilers?: boolean
   sections?: DetailSection[]
@@ -163,6 +301,102 @@ export interface AnimeNote {
   updatedAt: number | null
 }
 
+export interface WatchOrderNote {
+  mediaId: number
+  note: string
+  updatedAt: number | null
+}
+
+export interface RegistrationStatus {
+  open: boolean
+}
+
+export interface RegisteredUser {
+  id: string
+  username: string
+  displayName: string | null
+  emailVerified: boolean
+  bio: string | null
+  createdAt: number
+}
+
+export interface WatchOrderRecommendation {
+  recommended: 'release' | 'chronological'
+  label: string
+  rationale: string
+  agree: boolean
+  alternative: 'release' | 'chronological'
+}
+
+export interface SeasonOption {
+  id: number
+  title: string
+  seasonYear: number | null
+  season: string | null
+  current: boolean
+}
+
+export interface CompanyGroup {
+  role: string
+  label: string
+  names: string[]
+}
+
+export interface SynopsisClip {
+  text: string
+  tooLong: boolean
+}
+
+export interface CharacterAppearance {
+  id: number
+  type: string
+  format: string | null
+  title: string
+  year: number | null
+  characterRole: string | null
+}
+
+export interface CharacterDetail {
+  id: number
+  name: string
+  nativeName: string | null
+  alternativeNames: string[]
+  image: string | null
+  description: string
+  siteUrl: string | null
+  media: CharacterAppearance[]
+}
+
+export interface StaffCredit {
+  id: number
+  type: string
+  format: string | null
+  title: string
+  year: number | null
+  role: string | null
+}
+
+export interface VoiceRoleCredit {
+  characterId: number
+  characterName: string
+  role: string | null
+  mediaId: number
+  mediaTitle: string
+}
+
+export interface StaffDetail {
+  id: number
+  name: string
+  nativeName: string | null
+  alternativeNames: string[]
+  image: string | null
+  description: string
+  siteUrl: string | null
+  primaryOccupations: string[]
+  characterCredits: VoiceRoleCredit[]
+  media: StaffCredit[]
+}
+
 export interface Bookmark {
   mediaId: number
   addedAt: number
@@ -170,6 +404,9 @@ export interface Bookmark {
 }
 
 export interface AppSettings {
+  detailSectionOrder?: string[]
+  registrationOpen?: boolean
+  emailAccounts?: boolean
   quality: string
   dub: boolean
   resultIndex: number
@@ -179,6 +416,8 @@ export interface AppSettings {
   preferLocalPlayback: boolean
   allowedExternalHosts: string[]
   envExternalHostsConfigured: boolean
+  theme: 'dark' | 'light'
+  systemTheme: boolean
   updatedAt: number
 }
 

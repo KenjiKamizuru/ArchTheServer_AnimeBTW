@@ -12,6 +12,8 @@ let state: AppSettings = {
   preferLocalPlayback: true,
   allowedExternalHosts: [],
   envExternalHostsConfigured: false,
+  theme: 'dark',
+  systemTheme: false,
   updatedAt: 0,
 }
 let started = false

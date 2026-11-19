@@ -18,6 +18,8 @@ import { focusObjectClass, removeArtwork, useArtwork } from '../lib/artwork'
 import { refreshDownloads, refreshLibrary } from '../lib/downloads'
 import { saveSettings, useSettings } from '../lib/settings'
 import { ImdbArtworkModal } from '../components/ImdbArtworkModal'
+import { UserPlus, LogIn, LogOut, KeyRound, Send } from 'lucide-react'
+import type { RegisteredUser } from '../types'
 import { useToast } from '../components/Toasts'
 import type { AppSettings, ResolverStatus } from '../types'
 
@@ -39,10 +41,354 @@ function editable(s: AppSettings) {
     maxConcurrentDownloads: s.maxConcurrentDownloads,
     preferLocalPlayback: s.preferLocalPlayback,
     allowedHostsText: (s.allowedExternalHosts ?? []).join('\n'),
+    theme: s.theme,
+    systemTheme: s.systemTheme,
   }
 }
 
 type Draft = ReturnType<typeof editable>
+
+/** Account registration controls (AV-101b): self-contained so the page's
+ * draft/save machinery stays untouched. */
+function AccountsCard() {
+  const settings = useSettings()
+  const toast = useToast()
+  const open = settings.registrationOpen === true
+  const [username, setUsername] = useState('')
+  const [displayName, setDisplayName] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [user, setUser] = useState<RegisteredUser | null>(null)
+  const [signInUsername, setSignInUsername] = useState('')
+  const [signInPassword, setSignInPassword] = useState('')
+  const [signInBusy, setSignInBusy] = useState(false)
+  const [signInError, setSignInError] = useState<string | null>(null)
+  const [resetIdentifier, setResetIdentifier] = useState('')
+  const [resetBusy, setResetBusy] = useState(false)
+  const [resetToken, setResetToken] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [applyBusy, setApplyBusy] = useState(false)
+  const [applyError, setApplyError] = useState<string | null>(null)
+  const [bioDraft, setBioDraft] = useState('')
+  const [bioBusy, setBioBusy] = useState(false)
+
+  useEffect(() => {
+    setBioDraft(user?.bio ?? '')
+  }, [user])
+
+  useEffect(() => {
+    api.me()
+      .then((res) => setUser(res.user))
+      .catch(() => setUser(null))
+  }, [])
+
+  async function signIn() {
+    setSignInBusy(true)
+    setSignInError(null)
+    try {
+      const res = await api.login({ username: signInUsername, password: signInPassword })
+      setUser(res.user)
+      setSignInUsername('')
+      setSignInPassword('')
+      toast(`Signed in as ${res.user.username}`)
+    } catch (err) {
+      setSignInError(err instanceof Error ? err.message : 'Could not sign in')
+    } finally {
+      setSignInBusy(false)
+    }
+  }
+
+  async function signOut() {
+    try {
+      await api.logout()
+      setUser(null)
+      toast('Signed out')
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not sign out', 'err')
+    }
+  }
+
+  async function requestReset() {
+    setResetBusy(true)
+    try {
+      // The server response is always generic (no account enumeration).
+      await api.requestReset(resetIdentifier)
+      toast('If that account has an email, a reset token was sent')
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not request a reset', 'err')
+    } finally {
+      setResetBusy(false)
+    }
+  }
+
+  async function applyReset() {
+    setApplyBusy(true)
+    setApplyError(null)
+    try {
+      await api.resetPassword({ token: resetToken, password: newPassword })
+      toast('Password updated — sign in with the new password')
+      setResetToken('')
+      setNewPassword('')
+    } catch (err) {
+      setApplyError(err instanceof Error ? err.message : 'Could not reset the password')
+    } finally {
+      setApplyBusy(false)
+    }
+  }
+
+  async function saveBio() {
+    setBioBusy(true)
+    try {
+      const res = await api.updateProfile({ bio: bioDraft.trim() || null })
+      setUser(res.user)
+      toast('Profile updated')
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not update the profile', 'err')
+    } finally {
+      setBioBusy(false)
+    }
+  }
+
+  async function toggleRegistration(next: boolean) {
+    try {
+      await saveSettings({ registrationOpen: next })
+      toast(next ? 'Registration opened' : 'Registration closed')
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not update registration', 'err')
+    }
+  }
+
+  async function toggleEmailAccounts(next: boolean) {
+    try {
+      await saveSettings({ emailAccounts: next })
+      toast(next ? 'Email accounts enabled' : 'Email accounts disabled')
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not update email accounts', 'err')
+    }
+  }
+
+  async function register() {
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await api.register({
+        username,
+        password,
+        displayName: displayName || undefined,
+        email: email || undefined,
+      })
+      toast(`Account ${res.user.username} created`)
+      setUsername('')
+      setDisplayName('')
+      setEmail('')
+      setPassword('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not create the account')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="mt-6 rounded-xl bg-ink-900 p-4 ring-1 ring-white/5 md:p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="flex items-center gap-2 text-[11px] font-semibold tracking-wider text-white/40 uppercase">
+            <UserPlus size={13} className="text-accent" />
+            Accounts
+          </h2>
+          <p className="mt-1 text-xs text-white/45">
+            Optional registration for multi-user installations. Closed by default — single shared installs are
+            unaffected.
+          </p>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <label className="flex cursor-pointer items-center gap-2 text-[11px] text-white/60">
+            <input
+              type="checkbox"
+              checked={open}
+              onChange={(event) => void toggleRegistration(event.target.checked)}
+              className="h-4 w-4"
+            />
+            Open registration
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 text-[11px] text-white/60">
+            <input
+              type="checkbox"
+              checked={settings.emailAccounts === true}
+              onChange={(event) => void toggleEmailAccounts(event.target.checked)}
+              className="h-4 w-4"
+            />
+            Email accounts (require + verify email)
+          </label>
+        </div>
+      </div>
+      <div className="mt-4">
+        <h3 className="text-[11px] font-medium uppercase tracking-wide text-white/30">Sign in</h3>
+        {user ? (
+          <>
+          <div className="mt-2 flex items-center gap-2">
+            <span className="text-xs text-white/70">
+              Signed in as {user.displayName || user.username}
+            </span>
+            {user.emailVerified ? (
+              <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-300">
+                Email verified
+              </span>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => void signOut()}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-white/5 px-3 py-1.5 text-[11px] text-white/60 ring-1 ring-white/10 transition hover:bg-red-500/15 hover:text-red-200"
+            >
+              <LogOut size={12} /> Sign out
+            </button>
+          </div>
+          <div className="mt-3 border-t border-white/5 pt-3">
+            <h3 className="text-[11px] font-medium uppercase tracking-wide text-white/30">Profile bio</h3>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <textarea
+                value={bioDraft}
+                onChange={(event) => setBioDraft(event.target.value.slice(0, 500))}
+                rows={2}
+                placeholder="A short bio (up to 500 characters)"
+                className="w-96 max-w-full resize-y rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
+              />
+              <button
+                type="button"
+                onClick={() => void saveBio()}
+                disabled={bioBusy || bioDraft === (user?.bio ?? '')}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[11px] font-semibold text-black transition hover:bg-accent-600 disabled:opacity-40"
+              >
+                {bioBusy ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} Save bio
+              </button>
+            </div>
+          </div>
+          </>
+        ) : (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <input
+              type="text"
+              value={signInUsername}
+              onChange={(event) => setSignInUsername(event.target.value.slice(0, 32))}
+              placeholder="Username"
+              className="w-40 rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
+            />
+            <input
+              type="password"
+              value={signInPassword}
+              onChange={(event) => setSignInPassword(event.target.value.slice(0, 200))}
+              placeholder="Password"
+              className="w-48 rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
+            />
+            <button
+              type="button"
+              onClick={() => void signIn()}
+              disabled={signInBusy || !signInUsername || !signInPassword}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[11px] font-semibold text-black transition hover:bg-accent-600 disabled:opacity-40"
+            >
+              {signInBusy ? <Loader2 size={12} className="animate-spin" /> : <LogIn size={12} />} Sign in
+            </button>
+            {signInError ? <p className="w-full text-[11px] text-red-300">{signInError}</p> : null}
+          </div>
+        )}
+        {!user ? (
+          <div className="mt-3 border-t border-white/5 pt-3">
+            <h3 className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-white/30">
+              <KeyRound size={11} /> Forgot password
+            </h3>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <input
+                type="text"
+                value={resetIdentifier}
+                onChange={(event) => setResetIdentifier(event.target.value.slice(0, 254))}
+                placeholder="Username or email"
+                className="w-52 rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
+              />
+              <button
+                type="button"
+                onClick={() => void requestReset()}
+                disabled={resetBusy || !resetIdentifier}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-white/5 px-3 py-1.5 text-[11px] text-white/60 ring-1 ring-white/10 transition hover:bg-white/10 disabled:opacity-40"
+              >
+                {resetBusy ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />} Send reset token
+              </button>
+              <input
+                type="text"
+                value={resetToken}
+                onChange={(event) => setResetToken(event.target.value.slice(0, 64))}
+                placeholder="Reset token (from the email)"
+                className="w-56 rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
+              />
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(event) => setNewPassword(event.target.value.slice(0, 200))}
+                placeholder="New password (8+ characters)"
+                className="w-52 rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
+              />
+              <button
+                type="button"
+                onClick={() => void applyReset()}
+                disabled={applyBusy || !resetToken || !newPassword}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[11px] font-semibold text-black transition hover:bg-accent-600 disabled:opacity-40"
+              >
+                {applyBusy ? <Loader2 size={12} className="animate-spin" /> : <KeyRound size={12} />} Set new password
+              </button>
+              {applyError ? <p className="w-full text-[11px] text-red-300">{applyError}</p> : null}
+            </div>
+          </div>
+        ) : null}
+      </div>
+      {open ? (
+        <div className="mt-4">
+          <h3 className="text-[11px] font-medium uppercase tracking-wide text-white/30">Create an account</h3>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <input
+              type="text"
+              value={username}
+              onChange={(event) => setUsername(event.target.value.slice(0, 32))}
+              placeholder="Username"
+              className="w-40 rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
+            />
+            <input
+              type="text"
+              value={displayName}
+              onChange={(event) => setDisplayName(event.target.value.slice(0, 48))}
+              placeholder="Display name (optional)"
+              className="w-48 rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
+            />
+            <input
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value.slice(0, 254))}
+              placeholder={settings.emailAccounts === true ? 'Email (required)' : 'Email (optional)'}
+              className="w-52 rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
+            />
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value.slice(0, 200))}
+              placeholder="Password (8+ characters)"
+              className="w-48 rounded-lg bg-ink-800 px-2.5 py-1.5 text-[11px] text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
+            />
+            <button
+              type="button"
+              onClick={() => void register()}
+              disabled={busy || !username || !password}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[11px] font-semibold text-black transition hover:bg-accent-600 disabled:opacity-40"
+            >
+              {busy ? <Loader2 size={12} className="animate-spin" /> : <UserPlus size={12} />} Create
+            </button>
+          </div>
+          {error ? <p className="mt-2 text-[11px] text-red-300">{error}</p> : null}
+        </div>
+      ) : null}
+    </section>
+  )
+}
 
 export default function SettingsPage() {
   const settings = useSettings()
@@ -97,6 +443,8 @@ export default function SettingsPage() {
         maxConcurrentDownloads: draft.maxConcurrentDownloads,
         preferLocalPlayback: draft.preferLocalPlayback,
         allowedExternalHosts,
+        theme: draft.theme,
+        systemTheme: draft.systemTheme,
       }
       if (!settings.libraryDirLocked) {
         patch.libraryDir = draft.libraryDir
@@ -143,6 +491,8 @@ export default function SettingsPage() {
         targetKey="global"
         initialImdbId={appArt?.imdbId}
       />
+
+      <AccountsCard />
 
       <section className="mt-6 rounded-xl bg-ink-900 p-4 ring-1 ring-white/5 md:p-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -408,6 +758,42 @@ export default function SettingsPage() {
               {settings.envExternalHostsConfigured
                 ? ' Additional domains from ALLOWED_SOURCE_HOSTS are also active.'
                 : ''}
+            </span>
+          </label>
+        </div>
+      </section>
+
+      <section className="mt-6 rounded-xl bg-ink-900 p-4 ring-1 ring-white/5 md:p-5">
+        <h2 className="flex items-center gap-2 text-[11px] font-semibold tracking-wider text-white/40 uppercase">
+          <Info size={13} className="text-accent" />
+          Appearance
+        </h2>
+
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <label className="block">
+            <span className="mb-1 block text-[11px] text-white/45">Theme</span>
+            <select
+              value={draft.theme}
+              onChange={(event) => set('theme', event.target.value as 'dark' | 'light')}
+              className="w-full rounded-lg bg-ink-800 px-2.5 py-2 text-sm text-white ring-1 ring-white/10 outline-none focus:ring-accent/60"
+            >
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+            </select>
+            <span className="mt-1 block text-[11px] text-white/35">
+              Choose between dark and light color schemes.
+            </span>
+          </label>
+
+          <label className="flex items-center gap-2 sm:col-span-2">
+            <input
+              type="checkbox"
+              checked={draft.systemTheme}
+              onChange={(event) => set('systemTheme', event.target.checked)}
+              className="h-4 w-4 accent-[var(--color-accent)]"
+            />
+            <span className="text-sm text-white/70">
+              Follow system theme setting
             </span>
           </label>
         </div>

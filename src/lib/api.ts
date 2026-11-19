@@ -27,6 +27,11 @@ import type {
   UploadSessionSpec,
   WatchResult,
   AnimeNote,
+  WatchOrderNote,
+  CharacterDetail,
+  StaffDetail,
+  RegistrationStatus,
+  RegisteredUser,
 } from '../types'
 
 export interface BrowseFilters {
@@ -186,6 +191,21 @@ export interface SearchLibraryItem {
   highlight: HighlightSegment[]
 }
 
+export interface CollectionHit {
+  media: Media
+  addedAt: number | null
+  inBookmarks: boolean
+  lists: string[]
+  highlight: SearchLibraryItem['highlight']
+}
+
+export interface SearchCollectionsResponse {
+  query: string
+  count: number
+  items: CollectionHit[]
+  totalBookmarks: number
+}
+
 export interface SearchLibraryResponse {
   query: string
   count: number
@@ -332,6 +352,10 @@ export const api = {
     return get<SearchLibraryResponse>(`/api/search/library?q=${encodeURIComponent(q)}`, false)
   },
 
+  searchCollections(q: string) {
+    return get<SearchCollectionsResponse>(`/api/search/collections?q=${encodeURIComponent(q)}`, false)
+  },
+
   searchOptions() {
     return get<{ fields: string[]; resultCap: { max: number; defaultPerPage: number; min: number }; statuses: string[]; formats: string[] }>(
       '/api/search/options',
@@ -354,9 +378,25 @@ export const api = {
     return send<AnimeNote>(`/api/anime/${id}/notes`, 'PUT', { note })
   },
 
+  watchOrderNote(id: number) {
+    return get<WatchOrderNote>(`/api/anime/${id}/watch-order`, false)
+  },
+
+  saveWatchOrderNote(id: number, note: string) {
+    return send<WatchOrderNote>(`/api/anime/${id}/watch-order`, 'PUT', { note })
+  },
+
+  character(id: number) {
+    return get<CharacterDetail>(`/api/characters/${id}`, true)
+  },
+
+  staff(id: number) {
+    return get<StaffDetail>(`/api/staff/${id}`, true)
+  },
+
   reportAnimeIssue(
     id: number,
-    payload: { field?: string; message: string; kind?: 'metadata' | 'episode-order' },
+    payload: { field?: string; message: string; kind?: 'metadata' | 'episode-order'; suggestedValue?: string },
   ) {
     return send<{ report: { id: string; field: string; status: string }; pending: number }>(
       `/api/anime/${id}/report`,
@@ -383,6 +423,42 @@ export const api = {
 
   saveSettings(patch: Partial<AppSettings>) {
     return send<AppSettings>('/api/settings', 'PUT', patch)
+  },
+
+  registrationStatus() {
+    return get<RegistrationStatus>('/api/auth/registration-status', false)
+  },
+
+  register(payload: { username: string; password: string; displayName?: string; email?: string }) {
+    return send<{ user: RegisteredUser }>('/api/auth/register', 'POST', payload)
+  },
+
+  verifyEmail(token: string) {
+    return send<{ ok: boolean; user: RegisteredUser }>('/api/auth/verify-email', 'POST', { token })
+  },
+
+  login(payload: { username: string; password: string }) {
+    return send<{ user: RegisteredUser }>('/api/auth/login', 'POST', payload)
+  },
+
+  logout() {
+    return send<{ ok: boolean }>('/api/auth/logout', 'POST')
+  },
+
+  me() {
+    return get<{ user: RegisteredUser | null }>('/api/auth/me', false)
+  },
+
+  requestReset(identifier: string) {
+    return send<{ ok: boolean }>('/api/auth/request-reset', 'POST', { identifier })
+  },
+
+  resetPassword(payload: { token: string; password: string }) {
+    return send<{ ok: boolean }>('/api/auth/reset-password', 'POST', payload)
+  },
+
+  updateProfile(payload: { bio: string | null }) {
+    return send<{ user: RegisteredUser }>('/api/auth/profile', 'PUT', payload)
   },
 
   resolverStatus() {
@@ -681,4 +757,22 @@ export const api = {
       payload,
     )
   },
+}
+
+// Admin metadata inspector (AV-025b).
+export interface InspectionRow {
+  field: string
+  raw: unknown
+  normalized: unknown
+  changed: boolean
+}
+
+export interface InspectionResponse {
+  raw: Record<string, unknown>
+  record: Media
+  rows: InspectionRow[]
+}
+
+export async function adminInspect(id: number | string): Promise<InspectionResponse> {
+  return request<InspectionResponse>(`/api/admin/inspect/${encodeURIComponent(String(id))}`)
 }

@@ -60,6 +60,7 @@ export function groupRelations(edges) {
       seasonYear: node.seasonYear ?? null,
       startDate: node.startDate ?? null,
       cover: node.coverImage?.large ?? node.coverImage?.extraLarge ?? null,
+      siteUrl: sanitizePublicHttpUrl(node.siteUrl, { httpsOnly: false, maxLen: 512 }),
       averageScore: node.averageScore ?? null,
       relationType: key,
     })
@@ -81,6 +82,67 @@ export function groupRelations(edges) {
 }
 
 const seasonIndex = { WINTER: 0, SPRING: 1, SUMMER: 2, FALL: 3 }
+
+/** Season chips for multi-season franchises (AV-080): the current title plus
+ * prequel/sequel seasons, in air order (year, then season, then id). */
+const SEASON_ORDER = { WINTER: 0, SPRING: 1, SUMMER: 2, FALL: 3 }
+
+export function buildSeasonOptions(detail) {
+  if (!detail?.id) return []
+  const entries = [
+    {
+      id: detail.id,
+      title: detail.title,
+      seasonYear: detail.seasonYear ?? null,
+      season: detail.season ?? null,
+      current: true,
+    },
+    ...(detail.relatedSeasons ?? []).map((season) => ({
+      id: season.id,
+      title: season.title,
+      seasonYear: season.seasonYear ?? null,
+      season: season.season ?? null,
+      current: false,
+    })),
+  ]
+  return entries.sort(
+    (a, b) =>
+      (a.seasonYear ?? 9999) - (b.seasonYear ?? 9999) ||
+      (SEASON_ORDER[a.season ?? ''] ?? 9) - (SEASON_ORDER[b.season ?? ''] ?? 9) ||
+      a.id - b.id,
+  )
+}
+
+/** Company roles shown on the detail page (AV-089): production committee and
+ * distributor details where available — a group is emitted only when it has
+ * at least one name. */
+const COMPANY_GROUP_LABELS = [
+  ['MAIN_STUDIO', 'Production studios'],
+  ['PRODUCER', 'Producers'],
+  ['LICENSOR', 'Licensors'],
+  ['DISTRIBUTOR', 'Distributors'],
+]
+
+export function groupCompanies(companies = []) {
+  return COMPANY_GROUP_LABELS.map(([role, label]) => ({
+    role,
+    label,
+    names: (Array.isArray(companies) ? companies : [])
+      .filter((c) => Array.isArray(c?.roles) && c.roles.includes(role) && c.name)
+      .map((c) => c.name),
+  })).filter((group) => group.names.length > 0)
+}
+
+/**
+ * Clipped synopsis view for the detail page's expansion control (AV-091):
+ * the 420-char "Read more" preview is computed on the ALREADY-redacted text,
+ * so clipping can never leak a `~!…!~` spoiler region.
+ */
+export function synopsisClip(text, { limit = 420 } = {}) {
+  const source = String(text ?? '')
+  if (source.length <= limit) return { text: source, tooLong: false }
+  return { text: `${source.slice(0, limit).trimEnd()}…`, tooLong: true }
+}
 
 /** Sortable key for a media start date; undated entries sort last. */
 function chronologicalKey(item) {
@@ -219,7 +281,7 @@ export function buildEpisodeGuide(media, streamingEpisodes = []) {
       airDate: aired,
       /** True when AniList supplied real titles/artwork for this episode. */
       hasMetadata: Boolean(streamed),
-      synopsis: null,
+      synopsis: streamed?.description ? String(streamed.description).trim() || null : null,
     })
   }
   return episodes
@@ -259,6 +321,43 @@ export function redactSpoilers(text, { reveal = false, placeholder = '[spoiler h
 /** True when a synopsis contains any spoiler-marked region. */
 export function hasSpoilers(text) {
   return /~![\s\S]*?!~/.test(String(text ?? ''))
+}
+
+import { recommendWatchOrder } from './watchOrder.mjs'
+import { sanitizePublicHttpUrl } from './security.mjs'
+import { buildInfoSheet } from './sheet.mjs'
+
+/**
+ * Assembles the /api/anime/:id payload: pre-computed sections keep the client
+ * free of ranking/grouping logic (AV-077/078 wiring). The numbered episode
+ * rows are exposed as `episodesGuide` (EpisodeEntry[]); `episodes` stays the
+ * media's episode count.
+ */
+export function buildDetailResponse(media, { reveal = false, order = 'release', sectionOrder = undefined } = {}) {
+  const synopsis = redactSpoilers(media.description, { reveal })
+  const res = {
+    ...media,
+    episodesGuide: buildEpisodeGuide(media, media.streamingEpisodes),
+    relations: groupRelations(media.rawRelations ?? media.relations ?? []),
+    timeline: buildTimeline(media.timelineNodes ?? [], order),
+    scores: scoreDistribution(media.scoreBuckets),
+    scoreMean: distributionMean(media.scoreBuckets),
+    scoreMode: distributionMode(media.scoreBuckets),
+    statusTimeline: buildStatusTimeline(media),
+    watchOrder: recommendWatchOrder(
+      buildTimeline(media.timelineNodes ?? [], 'release'),
+      buildTimeline(media.timelineNodes ?? [], 'chronological'),
+    ),
+    seasonOptions: buildSeasonOptions(media),
+    companyGroups: groupCompanies(media.companies),
+    synopsis,
+    synopsisClip: synopsisClip(synopsis.text),
+    overview: spoilerFreeOverview(media.description),
+    hasSpoilers: hasSpoilers(media.description),
+    sections: applySectionOrder(sectionOrder),
+  }
+  res.infoSheet = buildInfoSheet(res)
+  return res
 }
 
 /**
@@ -338,6 +437,20 @@ export const DETAIL_SECTIONS = [
  * Applies a user's saved section order, dropping unknown/duplicate ids and
  * appending anything they did not mention. `always` sections stay pinned first.
  */
+/** Sanitizes a user-saved section order into a clean, deduped id list (AV-098). */
+export function normalizeSectionOrder(input) {
+  const out = []
+  const seen = new Set()
+  for (const raw of Array.isArray(input) ? input : []) {
+    const id = String(raw ?? '').trim().slice(0, 40)
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+    if (out.length >= 24) break
+  }
+  return out
+}
+
 export function applySectionOrder(order) {
   const known = new Map(DETAIL_SECTIONS.map((section) => [section.id, section]))
   const seen = new Set()

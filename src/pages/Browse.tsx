@@ -85,12 +85,23 @@ const COUNTRY_OPTIONS = [
   { value: 'TW', label: 'Taiwan' },
 ]
 
+const AGE_RATING_OPTIONS = [
+  { value: 'NONE', label: 'No rating' },
+  { value: 'G', label: 'All ages' },
+  { value: 'PG', label: 'Parental guidance' },
+  { value: 'PG_13', label: '13+' },
+  { value: 'R_17', label: '17+' },
+  { value: 'R_18', label: '18+' },
+  { value: 'RX', label: 'Restricted' },
+]
+
 const FILTER_GROUPS: FilterGroupSpec[] = [
   { key: 'formats', label: 'Format', options: FORMAT_OPTIONS, multi: true },
   { key: 'statuses', label: 'Status', options: STATUS_OPTIONS, multi: true },
   { key: 'genres', label: 'Genres', options: GENRE_OPTIONS, multi: true, hint: 'include' },
   { key: 'sources', label: 'Source material', options: SOURCE_OPTIONS, multi: true },
   { key: 'countries', label: 'Country', options: COUNTRY_OPTIONS, multi: true },
+  { key: 'ageRatings', label: 'Age rating', options: AGE_RATING_OPTIONS, multi: true },
 ]
 
 const DECADES = ['2020', '2010', '2000', '1990', '1980', '1970']
@@ -128,6 +139,7 @@ export default function Browse() {
       genres: listParam(searchParams, 'genres'),
       sources: listParam(searchParams, 'sources'),
       countries: listParam(searchParams, 'countries'),
+      ageRatings: listParam(searchParams, 'ageRatings'),
     }),
     [searchParams],
   )
@@ -281,6 +293,7 @@ export default function Browse() {
       genresExclude: excludeGenres.join(',') || undefined,
       sources: selected.sources.join(',') || undefined,
       countries: selected.countries.join(',') || undefined,
+      ageRatings: selected.ageRatings.join(',') || undefined,
       yearMin: rangeValues.years.min,
       yearMax: rangeValues.years.max,
       episodesMin: rangeValues.episodes.min,
