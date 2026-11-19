@@ -58,6 +58,14 @@ export function publicUser(user) {
   }
 }
 
+/** Audit timestamps (AV-121): stamp the last successful login on the record.
+ * `lastLoginAt` is an owner-audit field — it is in the account export but is
+ * deliberately NOT part of publicUser (it would leak presence to viewers). */
+export function recordLastLogin(user, { now = Date.now() } = {}) {
+  user.lastLoginAt = now
+  return { lastLoginAt: now }
+}
+
 /** Bio contract (AV-110): ≤500 chars (truncated), no control characters,
  * empty → null. Tabs and newlines are allowed. */
 export function normalizeBio(input) {

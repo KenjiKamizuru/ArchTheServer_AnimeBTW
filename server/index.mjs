@@ -14,7 +14,7 @@ import { normalizeCharacter } from './character.mjs'
 import { normalizeStaffMember } from './staff.mjs'
 import { buildMetadataReport } from './reporting.mjs'
 import { buildNotePayload, noteView } from './notes.mjs'
-import { normalizeRegistration, hashPassword, verifyPassword, publicUser, findUserByIdentifier, setPassword, normalizeBio } from './accounts.mjs'
+import { normalizeRegistration, hashPassword, verifyPassword, publicUser, findUserByIdentifier, setPassword, normalizeBio, recordLastLogin } from './accounts.mjs'
 import {
   SESSION_COOKIE,
   SESSION_TTL_MS,
@@ -930,7 +930,9 @@ app.post(
     const token = createSessionToken()
     await kv.set(`session:${hashToken(token)}`, sessionRecord(user.id))
     res.cookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', maxAge: SESSION_TTL_MS })
-    // Login notifications (AV-120): best-effort, never blocks the sign-in.
+    // Audit timestamp (AV-121) + login notifications (AV-120, best-effort).
+    recordLastLogin(user)
+    await kv.set('users', users)
     if (user.loginNotifications === true && user.email) {
       try {
         sendMail(loginNotificationMessage(user))
@@ -1036,6 +1038,9 @@ app.post(
     const token = createSessionToken()
     await kv.set(`session:${hashToken(token)}`, sessionRecord(user.id))
     res.cookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', maxAge: SESSION_TTL_MS })
+    // Audit timestamp (AV-121): passkey sign-ins are logins too.
+    recordLastLogin(user)
+    await kv.set('users', users)
     res.json({ user: publicUser(user) })
   }),
 )

@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { normalizeRegistration, hashPassword, verifyPassword, publicUser } from '../server/accounts.mjs'
-import { normalizeEmail, findUserByIdentifier, setPassword, normalizeBio } from '../server/accounts.mjs'
+import { normalizeEmail, findUserByIdentifier, setPassword, normalizeBio, recordLastLogin } from '../server/accounts.mjs'
 
 test('normalizeRegistration enforces the registration contract', () => {
   const parsed = normalizeRegistration({ username: '  Frieren_Fan-1 ', password: 'elven magic 123', displayName: '  Frieren  ' })
@@ -98,4 +98,19 @@ test('bios have length and content limits (AV-110)', () => {
   assert.equal(normalizeBio('bad\u001bbio').ok, false)
   const user = { id: 'u_1', bio: 'A short bio' }
   assert.equal(publicUser(user).bio, 'A short bio')
+})
+
+test('login audit timestamps: stamped on the record, never public (AV-121)', () => {
+  const user = { id: 'u_1', username: 'kenji', createdAt: 1_000 }
+  const stamped = recordLastLogin(user, { now: 5_000 })
+  assert.deepEqual(stamped, { lastLoginAt: 5_000 })
+  assert.equal(user.lastLoginAt, 5_000)
+  // Re-login updates the stamp.
+  assert.deepEqual(recordLastLogin(user, { now: 9_000 }), { lastLoginAt: 9_000 })
+  assert.equal(user.lastLoginAt, 9_000)
+  // Owner-audit only: absent from publicUser (no presence leak) and present
+  // in the record for the account export (which copies non-excluded fields).
+  assert.equal('lastLoginAt' in publicUser(user), false)
+  assert.equal(publicUser(user).createdAt, 1_000, 'creation timestamp stays public')
+  assert.equal(user.lastLoginAt, 9_000, 'the record keeps the audit stamp')
 })
