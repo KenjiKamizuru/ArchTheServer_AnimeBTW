@@ -100,3 +100,20 @@ test('private-history mode is configurable and survives restart (AV-165)', async
   assert.equal(run.status, 0, run.stderr)
   assert.equal(JSON.parse(run.stdout), false, 'the toggle survives a restart')
 })
+
+test('player shortcuts persist and conflicts are rejected (AV-179)', async () => {
+  assert.deepEqual(settings.get().playerShortcuts, {}, 'empty map = built-in defaults')
+  await settings.save({ playerShortcuts: { mute: 'x', 'next-episode': 'P' } })
+  assert.deepEqual(settings.get().playerShortcuts, { mute: 'x', 'next-episode': 'p' }, 'keys normalized on save')
+  await assert.rejects(
+    () => settings.save({ playerShortcuts: { mute: 'q', 'seek-back': 'Space', 'play-pause': ' ' } }),
+    /Shortcut conflict/,
+    'two actions on one key are rejected at the boundary',
+  )
+  assert.deepEqual(settings.get().playerShortcuts, { mute: 'x', 'next-episode': 'p' }, 'a rejected save changes nothing')
+  await settings.save({ playerShortcuts: {} })
+  const script = `import * as s from ${JSON.stringify(new URL('../server/settings.mjs', import.meta.url).href)}; await s.init(); console.log(JSON.stringify(s.get().playerShortcuts))`
+  const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, ANIMEVAULT_DATA: dir }, encoding: 'utf8' })
+  assert.equal(run.status, 0, run.stderr)
+  assert.deepEqual(JSON.parse(run.stdout), {}, 'shortcuts survive a restart')
+})

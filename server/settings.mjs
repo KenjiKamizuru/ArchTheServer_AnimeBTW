@@ -13,6 +13,45 @@ export const QUALITIES = ['best', '1080', '720', '480', '360', 'worst']
 export const MIN_CONCURRENT_DOWNLOADS = 1
 export const MAX_CONCURRENT_DOWNLOADS = 12
 
+/**
+ * AV-179: sanitize a shortcut override map (action → key). Lenient on init
+ * (drops garbage and later conflicting entries) and strict on save (throws
+ * on conflicts). Key comparison uses the client's normalization (single
+ * chars lowercased, 'Space' → ' ').
+ */
+function sanitizeShortcuts(value, strict = false) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    if (strict) throw Object.assign(new Error('playerShortcuts must be an object'), { status: 400 })
+    return {}
+  }
+  const entries = Object.entries(value).slice(0, 20)
+  const out = {}
+  const seen = new Map()
+  for (const [action, key] of entries) {
+    if (typeof action !== 'string' || action.length === 0 || action.length > 32) {
+      if (strict) throw Object.assign(new Error('Invalid shortcut action name'), { status: 400 })
+      continue
+    }
+    if (typeof key !== 'string' || key.length === 0 || key.length > 24) {
+      if (strict) throw Object.assign(new Error('Invalid shortcut key'), { status: 400 })
+      continue
+    }
+    const normalized = key === 'Space' || key === 'spacebar' ? ' ' : key.length === 1 ? key.toLowerCase() : key
+    const clash = seen.get(normalized)
+    if (clash) {
+      if (strict) {
+        throw Object.assign(new Error(`Shortcut conflict: "${key}" is bound to ${clash} and ${action}`), {
+          status: 400,
+        })
+      }
+      continue
+    }
+    seen.set(normalized, action)
+    out[action] = normalized
+  }
+  return out
+}
+
 function clampInt(value, lo, hi, fallback) {
   const n = Number(value)
   if (!Number.isFinite(n)) return fallback
@@ -36,6 +75,7 @@ const DEFAULTS = {
   preferLocalPlayback: true,
   autoplayNextEpisode: true,
   privateHistoryMode: false,
+  playerShortcuts: {},
   allowedExternalHosts: [],
   theme: 'dark',
   systemTheme: false,
@@ -89,6 +129,9 @@ export async function init() {
         // recorded while enabled. Deliberate manual marks still are (they
         // are user intent, not a playback session).
         privateHistoryMode: parsed.privateHistoryMode === undefined ? false : Boolean(parsed.privateHistoryMode),
+        // AV-179: player shortcut overrides (action → normalized key);
+        // {} means the built-in defaults. Conflicts are rejected on save.
+        playerShortcuts: sanitizeShortcuts(parsed.playerShortcuts),
         allowedExternalHosts: Array.isArray(parsed.allowedExternalHosts)
           ? safeNormalizeHosts(parsed.allowedExternalHosts)
           : [],
@@ -150,6 +193,7 @@ export function get() {
     preferLocalPlayback: state.preferLocalPlayback,
     autoplayNextEpisode: state.autoplayNextEpisode,
     privateHistoryMode: state.privateHistoryMode,
+    playerShortcuts: state.playerShortcuts,
     allowedExternalHosts: [...state.allowedExternalHosts],
     envExternalHostsConfigured: Boolean(String(process.env.ALLOWED_SOURCE_HOSTS ?? '').trim()),
     theme: state.theme,
@@ -207,6 +251,10 @@ export async function save(patch = {}) {
 
   if (patch.privateHistoryMode !== undefined) {
     next.privateHistoryMode = Boolean(patch.privateHistoryMode)
+  }
+
+  if (patch.playerShortcuts !== undefined) {
+    next.playerShortcuts = sanitizeShortcuts(patch.playerShortcuts, true)
   }
 
   if (patch.registrationOpen !== undefined) {

@@ -14,6 +14,7 @@ let state: AppSettings = {
   preferLocalPlayback: true,
   autoplayNextEpisode: true,
   privateHistoryMode: false,
+  playerShortcuts: {},
   allowedExternalHosts: [],
   envExternalHostsConfigured: false,
   theme: 'dark',

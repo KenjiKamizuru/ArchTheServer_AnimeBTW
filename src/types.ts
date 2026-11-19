@@ -459,6 +459,7 @@ export interface AppSettings {
   preferLocalPlayback: boolean
   autoplayNextEpisode: boolean
   privateHistoryMode: boolean
+  playerShortcuts: Record<string, string>
   allowedExternalHosts: string[]
   envExternalHostsConfigured: boolean
   theme: 'dark' | 'light'

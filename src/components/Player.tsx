@@ -17,6 +17,7 @@ import { createWatchSession } from '../lib/watchSession'
 import { playerLoadingPhase, readinessLabels } from '../lib/playerLoading'
 import { recoveryActionLabel, recoveryActions } from '../lib/playerRecovery'
 import { shouldTogglePlayback } from '../lib/playerControls'
+import { actionForKey, effectiveShortcuts, SEEK_STEP_SECONDS } from '../lib/playerShortcuts'
 import { concatBytes, Mp4BoxTracker, selectMseMimeType } from '../lib/mp4'
 import type { LibraryItem } from '../types'
 
@@ -194,7 +195,32 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      // AV-179: configurable shortcuts with deterministic dispatch. Typing
+      // surfaces keep their keys; a match suppresses the browser default
+      // (space/arrows would otherwise act twice on the native controls).
+      const target = event.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+      const action = actionForKey(effectiveShortcuts(settings.playerShortcuts), event.key)
+      if (!action) return
+      event.preventDefault()
+      const video = videoRef.current
+      if (action === 'close') {
+        onClose()
+      } else if (action === 'play-pause') {
+        if (!video) return
+        if (video.paused) void video.play().catch(() => {})
+        else video.pause()
+      } else if (action === 'seek-back' && video) {
+        video.currentTime = Math.max(0, video.currentTime - SEEK_STEP_SECONDS)
+      } else if (action === 'seek-forward' && video) {
+        video.currentTime = Math.min(video.duration || video.currentTime + SEEK_STEP_SECONDS, video.currentTime + SEEK_STEP_SECONDS)
+      } else if (action === 'prev-episode') {
+        source.onPrev?.()
+      } else if (action === 'next-episode') {
+        source.onNext?.()
+      } else if (action === 'mute' && video) {
+        video.muted = !video.muted
+      }
     }
     document.addEventListener('keydown', onKey)
     const previous = document.body.style.overflow
@@ -203,7 +229,7 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
       document.removeEventListener('keydown', onKey)
       document.body.style.overflow = previous
     }
-  }, [onClose])
+  }, [onClose, source, settings.playerShortcuts])
 
   const videoSrc = `${urls.video}${urls.video.includes('?') ? '&' : '?'}attempt=${attempt}`
   const subtitleSrc = urls.subtitle
