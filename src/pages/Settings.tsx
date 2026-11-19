@@ -115,6 +115,9 @@ function AccountsCard() {
   const [deleteConfirm, setDeleteConfirm] = useState('')
   const [deleteBusy, setDeleteBusy] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [sessions, setSessions] = useState<{ hash: string; createdAt: number | null; expiresAt: number | null; current: boolean }[]>([])
+  const [sessionsBusy, setSessionsBusy] = useState(false)
+  const [sessionsError, setSessionsError] = useState<string | null>(null)
 
   useEffect(() => {
     setBioDraft(user?.bio ?? '')
@@ -181,6 +184,10 @@ function AccountsCard() {
         setPrefTheme('')
         setPrefLocalPlayback('')
       })
+    api
+      .listSessions()
+      .then((res) => setSessions(res.sessions))
+      .catch(() => setSessions([]))
   }, [user])
 
   async function signIn() {
@@ -447,6 +454,35 @@ function AccountsCard() {
     document.body.appendChild(anchor)
     anchor.click()
     anchor.remove()
+  }
+
+  async function revokeOtherSessions() {
+    setSessionsBusy(true)
+    setSessionsError(null)
+    try {
+      const res = await api.revokeOtherSessions()
+      const list = await api.listSessions()
+      setSessions(list.sessions)
+      toast(res.revoked ? `Signed out of ${res.revoked} other session${res.revoked === 1 ? '' : 's'}` : 'No other sessions')
+    } catch (err) {
+      setSessionsError(err instanceof Error ? err.message : 'Could not sign out other devices')
+    } finally {
+      setSessionsBusy(false)
+    }
+  }
+
+  async function revokeSession(hash: string) {
+    setSessionsBusy(true)
+    setSessionsError(null)
+    try {
+      await api.revokeSession(hash)
+      setSessions((prev) => prev.filter((item) => item.hash !== hash))
+      toast('Session signed out')
+    } catch (err) {
+      setSessionsError(err instanceof Error ? err.message : 'Could not sign out that session')
+    } finally {
+      setSessionsBusy(false)
+    }
   }
 
   async function deleteAccount() {
@@ -820,6 +856,52 @@ function AccountsCard() {
                 Language tags like &quot;en&quot;, &quot;pt-BR&quot;, or &quot;zh-Hant&quot;. Subtitles accept &quot;off&quot; for none. Stored for display and playback choices — the UI is not translated yet.
               </p>
               {prefsError ? <p className="mt-2 text-[11px] text-red-300">{prefsError}</p> : null}
+            </div>
+            <div className="mt-3 border-t border-white/5 pt-3">
+              <h3 className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-white/30">
+                <Lock size={11} /> Devices &amp; sessions
+              </h3>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void revokeOtherSessions()}
+                  disabled={sessionsBusy || sessions.filter((item) => !item.current).length === 0}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-white/5 px-3 py-1.5 text-[11px] font-semibold text-white ring-1 ring-white/10 transition hover:bg-white/10 disabled:opacity-40"
+                >
+                  {sessionsBusy ? <Loader2 size={12} className="animate-spin" /> : <LogOut size={12} />} Sign out other devices
+                </button>
+              </div>
+              {sessions.length > 0 ? (
+                <ul className="mt-2 space-y-1">
+                  {sessions.map((item) => (
+                    <li key={item.hash} className="flex items-center gap-2 text-[11px] text-white/70">
+                      <Lock size={11} className="shrink-0" />
+                      <span className="font-mono">{item.hash.slice(0, 8)}</span>
+                      <span className="text-white/40">
+                        {item.createdAt ? `started ${new Date(item.createdAt).toLocaleString()}` : 'unknown start'}
+                      </span>
+                      {item.current ? (
+                        <span className="rounded bg-accent/20 px-1.5 py-0.5 text-[10px] font-semibold text-accent">This device</span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => void revokeSession(item.hash)}
+                          disabled={sessionsBusy}
+                          className="ml-auto inline-flex items-center gap-1 rounded-lg px-2 py-1 text-white/40 transition hover:bg-white/5 hover:text-red-300 disabled:opacity-40"
+                        >
+                          <LogOut size={11} /> Sign out
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-2 text-[11px] text-white/40">No sessions listed.</p>
+              )}
+              <p className="mt-1 text-[11px] text-white/40">
+                This device signs out with the Sign out button above; &quot;This device&quot; stays until then.
+              </p>
+              {sessionsError ? <p className="mt-2 text-[11px] text-red-300">{sessionsError}</p> : null}
             </div>
             <div className="mt-3 border-t border-white/5 pt-3">
               <h3 className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-white/30">

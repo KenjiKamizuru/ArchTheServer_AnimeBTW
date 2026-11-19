@@ -535,6 +535,18 @@ export const api = {
     return send<{ ok: boolean; removed: string[]; retained: string[] }>('/api/auth/account', 'DELETE', body)
   },
 
+  listSessions() {
+    return get<{ sessions: { hash: string; createdAt: number | null; expiresAt: number | null; current: boolean }[] }>('/api/auth/sessions', false)
+  },
+
+  revokeOtherSessions() {
+    return send<{ ok: boolean; revoked: number }>('/api/auth/sessions/others', 'DELETE')
+  },
+
+  revokeSession(hash: string) {
+    return send<{ ok: boolean }>(`/api/auth/sessions/${encodeURIComponent(hash)}`, 'DELETE')
+  },
+
   setProfileVisibility(visibility: 'public' | 'private' | 'link-only') {
     return send<{ visibility: string }>('/api/auth/profile-visibility', 'PUT', { visibility })
   },
