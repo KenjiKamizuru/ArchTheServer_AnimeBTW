@@ -35,6 +35,7 @@ const DEFAULTS = {
   maxConcurrentDownloads: defaultConcurrency(),
   preferLocalPlayback: true,
   autoplayNextEpisode: true,
+  privateHistoryMode: false,
   allowedExternalHosts: [],
   theme: 'dark',
   systemTheme: false,
@@ -84,6 +85,10 @@ export async function init() {
         // cancel, and the toggle lives in Settings).
         autoplayNextEpisode:
           parsed.autoplayNextEpisode === undefined ? true : Boolean(parsed.autoplayNextEpisode),
+        // AV-165: private-history mode — playback-derived progress is not
+        // recorded while enabled. Deliberate manual marks still are (they
+        // are user intent, not a playback session).
+        privateHistoryMode: parsed.privateHistoryMode === undefined ? false : Boolean(parsed.privateHistoryMode),
         allowedExternalHosts: Array.isArray(parsed.allowedExternalHosts)
           ? safeNormalizeHosts(parsed.allowedExternalHosts)
           : [],
@@ -144,6 +149,7 @@ export function get() {
     maxConcurrentDownloads: state.maxConcurrentDownloads,
     preferLocalPlayback: state.preferLocalPlayback,
     autoplayNextEpisode: state.autoplayNextEpisode,
+    privateHistoryMode: state.privateHistoryMode,
     allowedExternalHosts: [...state.allowedExternalHosts],
     envExternalHostsConfigured: Boolean(String(process.env.ALLOWED_SOURCE_HOSTS ?? '').trim()),
     theme: state.theme,
@@ -197,6 +203,10 @@ export async function save(patch = {}) {
 
   if (patch.autoplayNextEpisode !== undefined) {
     next.autoplayNextEpisode = Boolean(patch.autoplayNextEpisode)
+  }
+
+  if (patch.privateHistoryMode !== undefined) {
+    next.privateHistoryMode = Boolean(patch.privateHistoryMode)
   }
 
   if (patch.registrationOpen !== undefined) {

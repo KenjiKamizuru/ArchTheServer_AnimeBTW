@@ -446,6 +446,7 @@ export interface AppSettings {
   progressSaveIntervalSeconds: number
   preferLocalPlayback: boolean
   autoplayNextEpisode: boolean
+  privateHistoryMode: boolean
   allowedExternalHosts: string[]
   envExternalHostsConfigured: boolean
   theme: 'dark' | 'light'

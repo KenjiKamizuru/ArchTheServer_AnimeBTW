@@ -205,3 +205,19 @@ test('continue watching answers with its payload shape (AV-158)', async () => {
     assert.ok(row.media && row.media.title, 'the row carries its media for the rail')
   }
 })
+
+// AV-165: private-history mode skips playback-derived saves (no explicit
+// state) but still records deliberate manual marks.
+test('private-history mode skips playback saves and keeps manual marks (AV-165)', async () => {
+  assert.equal((await req('/api/settings', 'PUT', { privateHistoryMode: true })).body.privateHistoryMode, true)
+  const skipped = await req('/api/progress', 'PUT', { mediaId: 601, season: 's1', episode: 1, positionSeconds: 300, runtimeSeconds: 1000 })
+  assert.deepEqual(skipped.body, { entry: null, skipped: true })
+  const marked = await req('/api/progress', 'PUT', { mediaId: 601, season: 's1', episode: 2, positionSeconds: 0, state: 'manual' })
+  assert.equal(marked.status, 200)
+  assert.equal(marked.body.entry.state, 'manual')
+  const entries = (await req('/api/progress')).body.entries.filter((entry) => entry.mediaId === 601)
+  assert.deepEqual(entries.map((entry) => entry.episode), [2], 'only the manual mark was recorded')
+  assert.equal((await req('/api/settings', 'PUT', { privateHistoryMode: false })).body.privateHistoryMode, false)
+  const recorded = await req('/api/progress', 'PUT', { mediaId: 601, season: 's1', episode: 1, positionSeconds: 300, runtimeSeconds: 1000 })
+  assert.equal(recorded.body.entry.positionSeconds, 300, 'recording resumes when the mode is off')
+})

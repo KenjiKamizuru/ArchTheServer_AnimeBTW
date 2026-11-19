@@ -1650,6 +1650,12 @@ app.put(
   limitMutations,
   wrap(async (req, res) => {
     const { user } = await requireSessionUser(req)
+    // AV-165: private-history mode — playback-derived saves (no explicit
+    // state) are not recorded; deliberate manual marks still are.
+    if (settings.get().privateHistoryMode && req.body?.state === undefined) {
+      res.json({ entry: null, skipped: true })
+      return
+    }
     res.json({ entry: await progressStore.saveProgress(progressProfileId(user, req), req.body, {
       completionThresholdPercent: settings.get().episodeCompletionThresholdPercent,
     }) })

@@ -369,7 +369,11 @@ export default function AnimeDetailPage() {
           ? markUnwatchedPayload(mediaId, season, episode.number)
           : markWatchedPayload(mediaId, season, episode.number, episode.runtimeMinutes),
       )
-      setEpisodeProgress((prev) => new Map(prev).set(episode.number, res.entry.state))
+      setEpisodeProgress((prev) => {
+        const next = new Map(prev)
+        if (res.entry) next.set(episode.number, res.entry.state)
+        return next
+      })
       toast(watched ? `Episode ${episode.number} marked as not watched` : `Episode ${episode.number} marked as watched`)
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Could not update episode progress', 'err')
@@ -383,7 +387,13 @@ export default function AnimeDetailPage() {
     const season = seasonKeyFor(detail?.season, detail?.seasonYear)
     try {
       const res = await api.saveProgress(rewindPayload(mediaId, season, episode.number))
-      setEpisodeProgress((prev) => new Map(prev).set(episode.number, res.entry.state))
+      if (!res.entry) {
+        // AV-165: position-only saves are not recorded in private mode.
+        toast('Private watch history is on — the position was not recorded', 'err')
+        return
+      }
+      const newState = res.entry.state
+      setEpisodeProgress((prev) => new Map(prev).set(episode.number, newState))
       toast(`Episode ${episode.number} rewound to the beginning`)
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Could not rewind the episode', 'err')

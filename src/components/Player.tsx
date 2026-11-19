@@ -220,6 +220,8 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
     const season = source.seasonKey
     const episode = source.episode
     if (!video || !mediaId || !season || !episode) return
+    // AV-165: private-history mode — playback positions are not recorded.
+    if (settings.privateHistoryMode) return
     const writer = createProgressWriter({
       intervalSeconds: settings.progressSaveIntervalSeconds,
       save: (record) => api.saveProgress(record),
@@ -245,7 +247,7 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
       video.removeEventListener('ended', onEnded)
       void writer.stop()
     }
-  }, [videoSrc, useMse, settings.progressSaveIntervalSeconds])
+  }, [videoSrc, useMse, settings.progressSaveIntervalSeconds, settings.privateHistoryMode])
 
   // Completion (AV-159): track the ended state so the next-episode action
   // can appear; replaying hides it again. Same re-bind deps as the writer.

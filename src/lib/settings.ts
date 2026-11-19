@@ -13,6 +13,7 @@ let state: AppSettings = {
   progressSaveIntervalSeconds: 15,
   preferLocalPlayback: true,
   autoplayNextEpisode: true,
+  privateHistoryMode: false,
   allowedExternalHosts: [],
   envExternalHostsConfigured: false,
   theme: 'dark',

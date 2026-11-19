@@ -390,7 +390,8 @@ export const api = {
   },
 
   saveProgress(record: { mediaId: number; season: string; episode: number; positionSeconds: number; state?: string; runtimeSeconds?: number }) {
-    return send<{ entry: ProgressEntry }>('/api/progress', 'PUT', record)
+    // entry is null when private-history mode skipped the save (AV-165).
+    return send<{ entry: ProgressEntry | null; skipped?: boolean }>('/api/progress', 'PUT', record)
   },
 
   // AV-157: per-show progress reset (every record of the media, this
