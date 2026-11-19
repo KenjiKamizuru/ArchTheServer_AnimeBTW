@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Loader2, RotateCcw } from 'lucide-react'
+import { Loader2, RotateCcw, Trash2 } from 'lucide-react'
 import type { Media, ProgressEntry } from '../types'
 import { api } from '../lib/api'
 import { filterWatchHistory, watchHistoryRows, type WatchHistoryRow } from '../lib/history'
 import { relativeTime } from '../lib/format'
+import { useToast } from '../components/Toasts'
 
 // Watch history (AV-161): the progress records (AV-153) newest first, with
 // date and title filters. This is PROGRESS-based history — one row per
@@ -23,6 +24,7 @@ function formatPosition(positionSeconds: number | null, runtimeSeconds: number |
 }
 
 export default function History() {
+  const push = useToast()
   const [records, setRecords] = useState<ProgressEntry[] | null>(null)
   const [mediaById, setMediaById] = useState<Map<number, Media>>(new Map())
   const [from, setFrom] = useState('')
@@ -50,6 +52,27 @@ export default function History() {
   )
   const filtered = useMemo(() => filterWatchHistory(rows, { from, to, title }), [rows, from, to, title])
   const filtersActive = Boolean(from || to || title.trim())
+
+  // AV-163: per-entry deletion. The entry IS the progress record, so
+  // removing it clears the episode's watch mark and resume position too.
+  async function removeEntry(row: WatchHistoryRow) {
+    try {
+      const { removed } = await api.removeProgressEntry(row.mediaId, row.season, row.episode)
+      if (removed > 0) {
+        setRecords((prev) =>
+          prev
+            ? prev.filter(
+                (record) =>
+                  !(record.mediaId === row.mediaId && record.season === row.season && record.episode === row.episode),
+              )
+            : prev,
+        )
+        push('Removed from history — the watch mark and resume position were cleared too')
+      }
+    } catch {
+      push('Could not remove the history entry', 'err')
+    }
+  }
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-8">
@@ -123,11 +146,8 @@ export default function History() {
             const state = STATE_LABEL[row.state]
             const position = formatPosition(row.positionSeconds, row.runtimeSeconds)
             return (
-              <li key={`${row.mediaId}-${row.season}-${row.episode}`}>
-                <Link
-                  to={`/anime/${row.mediaId}`}
-                  className="flex items-center gap-4 px-4 py-3 transition hover:bg-white/[0.05]"
-                >
+              <li key={`${row.mediaId}-${row.season}-${row.episode}`} className="flex items-center gap-3 px-4 py-3 transition hover:bg-white/[0.05]">
+                <Link to={`/anime/${row.mediaId}`} className="flex min-w-0 flex-1 items-center gap-4">
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium text-white">
                       {row.media ? row.media.title : 'Unknown title'}
@@ -147,6 +167,14 @@ export default function History() {
                   <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${state.tone}`}>{state.label}</span>
                   <span className="w-28 shrink-0 text-right text-xs text-white/40">{relativeTime(row.updatedAt)}</span>
                 </Link>
+                <button
+                  type="button"
+                  title="Remove from history (clears the watch mark and resume position)"
+                  onClick={() => void removeEntry(row)}
+                  className="shrink-0 rounded-full p-2 text-white/35 transition hover:bg-red-400/10 hover:text-red-300"
+                >
+                  <Trash2 size={15} />
+                </button>
               </li>
             )
           })}

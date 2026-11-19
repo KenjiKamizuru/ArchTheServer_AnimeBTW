@@ -399,6 +399,13 @@ export const api = {
     return send<{ removed: number }>('/api/progress', 'DELETE', { mediaId })
   },
 
+  // AV-163: remove ONE progress record (a single history entry). This
+  // clears the episode's watch mark and resume position together — the
+  // history IS the progress record set (AV-161 decision).
+  removeProgressEntry(mediaId: number, season: string, episode: number) {
+    return send<{ removed: number }>('/api/progress', 'DELETE', { mediaId, season, episode })
+  },
+
   // AV-158: continue-watching rail data (in-progress episodes + media).
   continueWatching() {
     return get<{ entries: ContinueEntry[]; count: number; unavailable: boolean }>('/api/progress/continue', false)
