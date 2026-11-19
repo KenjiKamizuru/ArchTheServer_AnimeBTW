@@ -89,6 +89,10 @@ function AccountsCard() {
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null)
   const [recoveryBusy, setRecoveryBusy] = useState(false)
   const [recoveryError, setRecoveryError] = useState<string | null>(null)
+  const [avatarVersion, setAvatarVersion] = useState(0)
+  const [avatarBroken, setAvatarBroken] = useState(false)
+  const [avatarBusy, setAvatarBusy] = useState(false)
+  const [avatarError, setAvatarError] = useState<string | null>(null)
 
   useEffect(() => {
     setBioDraft(user?.bio ?? '')
@@ -265,6 +269,37 @@ function AccountsCard() {
     }
   }
 
+  async function uploadAvatarFile(file: File) {
+    setAvatarBusy(true)
+    setAvatarError(null)
+    try {
+      if (file.size > 512 * 1024) throw new Error('Avatars must be 512 KB or smaller')
+      await api.uploadAvatar(await file.arrayBuffer())
+      setAvatarBroken(false)
+      setAvatarVersion((v) => v + 1)
+      toast('Avatar updated')
+    } catch (err) {
+      setAvatarError(err instanceof Error ? err.message : 'Could not upload the avatar')
+    } finally {
+      setAvatarBusy(false)
+    }
+  }
+
+  async function removeAvatar() {
+    setAvatarBusy(true)
+    setAvatarError(null)
+    try {
+      await api.removeAvatar()
+      setAvatarBroken(true)
+      setAvatarVersion((v) => v + 1)
+      toast('Avatar removed')
+    } catch (err) {
+      setAvatarError(err instanceof Error ? err.message : 'Could not remove the avatar')
+    } finally {
+      setAvatarBusy(false)
+    }
+  }
+
   async function requestReset() {
     setResetBusy(true)
     try {
@@ -419,6 +454,50 @@ function AccountsCard() {
               >
                 {bioBusy ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} Save bio
               </button>
+            </div>
+            <div className="mt-3 border-t border-white/5 pt-3">
+              <h3 className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-white/30">
+                <ImagePlus size={11} /> Profile picture
+              </h3>
+              <div className="mt-2 flex flex-wrap items-center gap-3">
+                {avatarBroken ? (
+                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-white/10 text-lg font-semibold text-white">
+                    {(user.displayName || user.username || '?').slice(0, 1).toUpperCase()}
+                  </div>
+                ) : (
+                  <img
+                    src={`/api/auth/avatar/${user.id}?v=${avatarVersion}`}
+                    alt="Your avatar"
+                    onError={() => setAvatarBroken(true)}
+                    className="h-14 w-14 shrink-0 rounded-full object-cover ring-1 ring-white/10"
+                  />
+                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[11px] font-semibold text-black transition hover:bg-accent-600">
+                    {avatarBusy ? <Loader2 size={12} className="animate-spin" /> : <ImagePlus size={12} />} Choose image
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/gif"
+                      className="hidden"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0]
+                        event.target.value = ''
+                        if (file) void uploadAvatarFile(file)
+                      }}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => void removeAvatar()}
+                    disabled={avatarBusy || avatarBroken}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-white/5 px-3 py-1.5 text-[11px] font-semibold text-white ring-1 ring-white/10 transition hover:bg-white/10 disabled:opacity-40"
+                  >
+                    <Trash2 size={12} /> Remove
+                  </button>
+                  <p className="w-full text-[11px] text-white/40">PNG, JPEG, or GIF — up to 512 KB.</p>
+                </div>
+              </div>
+              {avatarError ? <p className="mt-2 text-[11px] text-red-300">{avatarError}</p> : null}
             </div>
             {passkeySupported ? (
               <div className="mt-3 border-t border-white/5 pt-3">

@@ -506,6 +506,23 @@ export const api = {
     return send<{ codes: string[] }>('/api/auth/recovery-codes', 'POST')
   },
 
+  async uploadAvatar(bytes: ArrayBuffer) {
+    const res = await fetch('/api/auth/avatar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: bytes,
+    })
+    if (!res.ok) {
+      const payload = (await res.json().catch(() => null)) as { error?: string } | null
+      throw new Error(payload?.error ?? 'Could not upload the avatar')
+    }
+    return res.json() as Promise<{ ok: boolean; mime: string; width: number; height: number }>
+  },
+
+  removeAvatar() {
+    return send<{ ok: boolean }>('/api/auth/avatar', 'DELETE')
+  },
+
   resolverStatus() {
     return get<ResolverStatus>('/api/resolver/status', false)
   },
