@@ -11,6 +11,8 @@ import {
 import { AlertTriangle, Download, HardDrive, Loader2, Radio, RotateCw, X } from 'lucide-react'
 import { api } from '../lib/api'
 import { formatEpisodeCode } from '../lib/format'
+import { useSettings } from '../lib/settings'
+import { createProgressWriter } from '../lib/progressWriter'
 import { concatBytes, Mp4BoxTracker, selectMseMimeType } from '../lib/mp4'
 import type { LibraryItem } from '../types'
 
@@ -56,6 +58,8 @@ export type PlaybackSource =
       resultIndex?: number
       quality?: string
       dub?: boolean
+      mediaId?: number | null
+      seasonKey?: string
     }
   | {
       kind: 'local'
@@ -66,6 +70,8 @@ export type PlaybackSource =
       episode?: number | null
       hasSubtitle: boolean
       directPlayable: boolean
+      mediaId?: number | null
+      seasonKey?: string
     }
 
 export function localItemToPlayback(item: LibraryItem): PlaybackSource {
@@ -147,6 +153,7 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
   const [localRemuxFallback, setLocalRemuxFallback] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
   const autoPlayedRef = useRef(false)
+  const settings = useSettings()
   const urls = useMemo(() => sourcesFor(source, localRemuxFallback), [source, localRemuxFallback])
 
   // Standard local MP4 files play natively via HTTP byte-range requests (instant
@@ -164,6 +171,44 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
     setLocalRemuxFallback(false)
     autoPlayedRef.current = false
   }, [source])
+
+  // Playback-position writer (AV-153): stores the position at the
+  // configured interval while playing, and flushes on stop/ended/unmount.
+  // Only sources with a STABLE identity report (mediaId + season key + a
+  // real episode number) — the server derives completion (AV-155) and
+  // preserves manual marks (AV-154/156).
+  useEffect(() => {
+    const video = videoRef.current
+    const mediaId = source.mediaId
+    const season = source.seasonKey
+    const episode = source.episode
+    if (!video || !mediaId || !season || !episode) return
+    const writer = createProgressWriter({
+      intervalSeconds: settings.progressSaveIntervalSeconds,
+      save: (record) => api.saveProgress(record),
+    })
+    const report = () => {
+      const duration = video.duration
+      writer.report({
+        mediaId,
+        season,
+        episode,
+        positionSeconds: video.currentTime,
+        runtimeSeconds: Number.isFinite(duration) && duration > 0 ? Math.round(duration) : undefined,
+      })
+    }
+    const onEnded = () => {
+      report()
+      void writer.stop()
+    }
+    video.addEventListener('timeupdate', report)
+    video.addEventListener('ended', onEnded)
+    return () => {
+      video.removeEventListener('timeupdate', report)
+      video.removeEventListener('ended', onEnded)
+      void writer.stop()
+    }
+  }, [source, settings.progressSaveIntervalSeconds])
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {

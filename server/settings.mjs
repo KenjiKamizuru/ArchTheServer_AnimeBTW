@@ -39,6 +39,7 @@ const DEFAULTS = {
   systemTheme: false,
   hideListCapacityWarnings: false,
   episodeCompletionThresholdPercent: 90,
+  progressSaveIntervalSeconds: 15,
   updatedAt: 0,
 }
 
@@ -91,6 +92,13 @@ export async function init() {
           100,
           DEFAULTS.episodeCompletionThresholdPercent,
         ),
+        // AV-153: playback-position save interval (seconds).
+        progressSaveIntervalSeconds: clampInt(
+          parsed.progressSaveIntervalSeconds,
+          5,
+          300,
+          DEFAULTS.progressSaveIntervalSeconds,
+        ),
         // Saved by save() but previously dropped here and never surfaced by
         // get(): registrationOpen/emailAccounts silently re-closed on every
         // restart (and could never open at all), and detailSectionOrder never
@@ -135,6 +143,7 @@ export function get() {
     systemTheme: state.systemTheme,
     hideListCapacityWarnings: state.hideListCapacityWarnings,
     episodeCompletionThresholdPercent: state.episodeCompletionThresholdPercent,
+    progressSaveIntervalSeconds: state.progressSaveIntervalSeconds,
     detailSectionOrder: state.detailSectionOrder,
     registrationOpen: state.registrationOpen === true,
     emailAccounts: state.emailAccounts === true,
@@ -167,6 +176,15 @@ export async function save(patch = {}) {
       50,
       100,
       next.episodeCompletionThresholdPercent,
+    )
+  }
+
+  if (patch.progressSaveIntervalSeconds !== undefined) {
+    next.progressSaveIntervalSeconds = clampInt(
+      patch.progressSaveIntervalSeconds,
+      5,
+      300,
+      next.progressSaveIntervalSeconds,
     )
   }
 

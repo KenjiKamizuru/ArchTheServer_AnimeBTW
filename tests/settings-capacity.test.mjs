@@ -64,3 +64,17 @@ test('the episode completion threshold is configurable and survives restart (AV-
   assert.equal(run.status, 0, run.stderr)
   assert.equal(JSON.parse(run.stdout), 80, 'the threshold survives a restart')
 })
+test('the playback save interval is configurable and survives restart (AV-153)', async () => {
+  assert.equal(settings.get().progressSaveIntervalSeconds, 15, 'defaults to 15 seconds')
+  await settings.save({ progressSaveIntervalSeconds: 30 })
+  assert.equal(settings.get().progressSaveIntervalSeconds, 30)
+  await settings.save({ progressSaveIntervalSeconds: 1 })
+  assert.equal(settings.get().progressSaveIntervalSeconds, 5, 'clamped to the 5–300 bound')
+  await settings.save({ progressSaveIntervalSeconds: 9999 })
+  assert.equal(settings.get().progressSaveIntervalSeconds, 300, 'clamped at the top')
+  await settings.save({ progressSaveIntervalSeconds: 60 })
+  const script = `import * as s from ${JSON.stringify(new URL('../server/settings.mjs', import.meta.url).href)}; await s.init(); console.log(JSON.stringify(s.get().progressSaveIntervalSeconds))`
+  const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, ANIMEVAULT_DATA: dir }, encoding: 'utf8' })
+  assert.equal(run.status, 0, run.stderr)
+  assert.equal(JSON.parse(run.stdout), 60, 'the interval survives a restart')
+})

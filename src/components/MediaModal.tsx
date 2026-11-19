@@ -54,6 +54,7 @@ import {
   useLibrary,
 } from '../lib/downloads'
 import { useSettings } from '../lib/settings'
+import { seasonKeyFor } from '../lib/progress'
 import {
   clampEpisode,
   formatBytes,
@@ -296,7 +297,13 @@ function DetailSheet({
   }
 
   function playLocal(item: LibraryItem) {
-    player.open(localItemToPlayback(item))
+    // AV-153: carry the stable identity so the player can store playback
+    // progress under the same keys the detail page's marks use.
+    player.open({
+      ...localItemToPlayback(item),
+      mediaId: media?.id ?? item.mediaId ?? null,
+      seasonKey: seasonKeyFor(media?.season, media?.seasonYear),
+    })
     onClose()
   }
 
@@ -335,6 +342,8 @@ function DetailSheet({
         resultIndex: providerIndex,
         quality: selectedQuality,
         dub: settings.dub,
+        mediaId: media.id,
+        seasonKey: seasonKeyFor(media.season, media.seasonYear),
       })
       onClose()
     } catch (err) {

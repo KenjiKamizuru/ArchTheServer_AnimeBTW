@@ -433,6 +433,7 @@ export interface AppSettings {
   libraryDirLocked: boolean
   maxConcurrentDownloads: number
   episodeCompletionThresholdPercent: number
+  progressSaveIntervalSeconds: number
   preferLocalPlayback: boolean
   allowedExternalHosts: string[]
   envExternalHostsConfigured: boolean
