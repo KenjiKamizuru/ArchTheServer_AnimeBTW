@@ -16,6 +16,7 @@ import { createProgressWriter } from '../lib/progressWriter'
 import { createWatchSession } from '../lib/watchSession'
 import { playerLoadingPhase, readinessLabels } from '../lib/playerLoading'
 import { recoveryActionLabel, recoveryActions } from '../lib/playerRecovery'
+import { shouldTogglePlayback } from '../lib/playerControls'
 import { concatBytes, Mp4BoxTracker, selectMseMimeType } from '../lib/mp4'
 import type { LibraryItem } from '../types'
 
@@ -659,6 +660,14 @@ function PlayerOverlay({ source, onClose }: { source: PlaybackSource; onClose: (
             controls
             autoPlay
             playsInline
+            onClick={(event) => {
+              // AV-178: click the picture area to pause/resume — the
+              // native-controls strip is excluded (it already acts).
+              const el = event.currentTarget
+              if (!shouldTogglePlayback(event.nativeEvent.offsetY, el.getBoundingClientRect().height)) return
+              if (el.paused) void el.play().catch(() => {})
+              else el.pause()
+            }}
             onLoadedMetadata={() => {
               setLoading(false)
               setMetaReady(true)
