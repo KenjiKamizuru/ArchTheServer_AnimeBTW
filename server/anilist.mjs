@@ -44,11 +44,17 @@ const MEDIA_FIELDS = `
   externalLinks { site url type }
   characters(page: 1, perPage: 10, sort: FAVOURITES_DESC) {
     nodes {
+      id
       name { full native }
+      image { large }
+      siteUrl
       role
       voiceActors(page: 1, perPage: 5, sort: FAVOURITES_DESC) {
+        id
         name { full }
+        image { large }
         language
+        siteUrl
       }
     }
   }
@@ -269,11 +275,20 @@ export function normalize(media) {
   const studioNodes = Array.isArray(media.studios?.nodes) ? media.studios.nodes : []
   const characterNodes = Array.isArray(media.characters?.nodes) ? media.characters.nodes : []
   const characters = characterNodes.map((c) => ({
+    id: c.id ?? null,
     name: c.name?.full ?? null,
-    native: c.name?.native ?? null,
+    nativeName: c.name?.native ?? null,
+    image: c.image?.large ?? null,
+    siteUrl: c.siteUrl ?? null,
     role: c.role ?? null,
     voiceActors: Array.isArray(c.voiceActors?.nodes)
-      ? c.voiceActors.nodes.map((v) => ({ name: v.name?.full ?? null, language: v.language ?? null }))
+      ? c.voiceActors.nodes.map((v) => ({
+          id: v.id ?? null,
+          name: v.name?.full ?? null,
+          image: v.image?.large ?? null,
+          language: v.language ?? null,
+          siteUrl: v.siteUrl ?? null,
+        }))
       : [],
   }))
 
@@ -1304,4 +1319,91 @@ export async function getMany(ids) {
     )
     return (data.Page.media ?? []).map(normalize).filter(Boolean)
   })
+}
+
+/** Character detail query — used for character detail pages (AV-085). */
+export const CHARACTER_QUERY = `query ($id: Int) {
+  Character(id: $id) {
+    id
+    name { full native }
+    image { large medium }
+    siteUrl
+    description
+    gender
+    dateOfBirth { year month day }
+    age
+    bloodType
+    isFavourite
+    media {
+      edges {
+        role
+        node {
+          id
+          title { romaji english native }
+          format
+          status
+          seasonYear
+          season
+          coverImage { large }
+        }
+      }
+    }
+    voiceActors(page: 1, perPage: 10, sort: [RELEVANCE, ID]) {
+      id
+      name { full native }
+      image { large }
+      language
+      siteUrl
+    }
+  }
+`
+
+/**
+ * Fetches a single character by AniList ID, normalizing the payload into the
+ * Client-side CharacterEntry shape. Returns null when the character does not
+ * exist.
+ */
+export async function getCharacter(id) {
+  const numeric = Number(id)
+  if (!Number.isInteger(numeric) || numeric <= 0) {
+    throw Object.assign(new Error('Invalid character id'), { status: 400 })
+  }
+  const data = await gql(CHARACTER_QUERY, { id: numeric })
+  const raw = data.Character ?? null
+  if (!raw) return null
+  return {
+    id: raw.id ?? null,
+    name: raw.name?.full ?? null,
+    nativeName: raw.name?.native ?? null,
+    image: raw.image?.large ?? null,
+    siteUrl: raw.siteUrl ?? null,
+    description: raw.description ?? null,
+    gender: raw.gender ?? null,
+    dateOfBirth: raw.dateOfBirth ?? null,
+    age: raw.age ?? null,
+    bloodType: raw.bloodType ?? null,
+    isFavourite: Boolean(raw.isFavourite),
+    media: Array.isArray(raw.media?.edges)
+      ? raw.media.edges.map((e) => ({
+          role: e.role ?? null,
+          id: e.node?.id ?? null,
+          title: e.node?.title ?? null,
+          format: e.node?.format ?? null,
+          status: e.node?.status ?? null,
+          seasonYear: e.node?.seasonYear ?? null,
+          season: e.node?.season ?? null,
+          cover: e.node?.coverImage?.large ?? null,
+        }))
+      : [],
+    voiceActors: Array.isArray(raw.voiceActors)
+      ? raw.voiceActors.map((v) => ({
+          id: v.id ?? null,
+          name: v.name?.full ?? null,
+          nativeName: v.name?.native ?? null,
+          image: v.image?.large ?? null,
+          language: v.language ?? null,
+          siteUrl: v.siteUrl ?? null,
+        }))
+      : [],
+  }
 }

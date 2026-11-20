@@ -839,7 +839,9 @@ export default function AnimeDetailPage() {
                       </span>
                     )}
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[11px] text-white/80">{character.name}</span>
+                      <Link to={`/character/${character.id}`} className="block truncate text-[11px] text-white/80 transition hover:text-accent">
+                        {character.name}
+                      </Link>
                       <span className="block truncate text-[10px] text-white/30">
                         {character.role.toLowerCase()}
                         {character.voiceActors[0] ? ` · ${character.voiceActors[0].name}` : ''}

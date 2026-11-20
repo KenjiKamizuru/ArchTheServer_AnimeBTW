@@ -1006,21 +1006,37 @@ test('anilist normalize extracts characters from media payload', () => {
     characters: {
       nodes: [
         {
+          id: 42,
           name: { full: 'Tanjiro Kamado', native: '竈門炭治郎' },
+          image: { large: 'https://example.com/tanjiro.jpg' },
+          siteUrl: 'https://anilist.co/character/42',
           role: 'MAIN',
           voiceActors: {
-            nodes: [{ name: { full: 'Natsuki Hanae' }, language: 'JAPANESE' }],
+            nodes: [{
+              id: 7,
+              name: { full: 'Natsuki Hanae' },
+              image: { large: 'https://example.com/hanae.jpg' },
+              language: 'JAPANESE',
+              siteUrl: 'https://anilist.co/voice-actor/7',
+            }],
           },
         },
       ],
     },
   })
   assert.equal(normalized.characters.length, 1)
+  assert.equal(normalized.characters[0].id, 42)
   assert.equal(normalized.characters[0].name, 'Tanjiro Kamado')
-  assert.equal(normalized.characters[0].native, '竈門炭治郎')
+  assert.equal(normalized.characters[0].nativeName, '竈門炭治郎')
+  assert.equal(normalized.characters[0].image, 'https://example.com/tanjiro.jpg')
+  assert.equal(normalized.characters[0].siteUrl, 'https://anilist.co/character/42')
   assert.equal(normalized.characters[0].role, 'MAIN')
   assert.equal(normalized.characters[0].voiceActors.length, 1)
+  assert.equal(normalized.characters[0].voiceActors[0].id, 7)
   assert.equal(normalized.characters[0].voiceActors[0].name, 'Natsuki Hanae')
+  assert.equal(normalized.characters[0].voiceActors[0].image, 'https://example.com/hanae.jpg')
+  assert.equal(normalized.characters[0].voiceActors[0].language, 'JAPANESE')
+  assert.equal(normalized.characters[0].voiceActors[0].siteUrl, 'https://anilist.co/voice-actor/7')
   assert.equal(normalized.characters[0].voiceActors[0].language, 'JAPANESE')
 })
 
@@ -1728,4 +1744,24 @@ test('buildWatchOrder entries include episodes and note fields', () => {
   const order = detail.buildWatchOrder(media, [])
   assert.equal(order[0].episodes, 12)
   assert.equal(order[0].note, null)
+})
+
+/* ------------------------------ AV-085 ---------------------------------- */
+
+test('Character detail query includes expected fields', () => {
+  const CHARACTER_QUERY = anilist.CHARACTER_QUERY
+  assert.ok(typeof CHARACTER_QUERY === 'string')
+  assert.ok(CHARACTER_QUERY.includes('id'), 'character query should request id')
+  assert.ok(CHARACTER_QUERY.includes('name { full native }'), 'character query should request name')
+  assert.ok(CHARACTER_QUERY.includes('image { large'), 'character query should request image')
+  assert.ok(CHARACTER_QUERY.includes('siteUrl'), 'character query should request siteUrl')
+  assert.ok(CHARACTER_QUERY.includes('description'), 'character query should request description')
+  assert.ok(CHARACTER_QUERY.includes('voiceActors'), 'character query should request voiceActors')
+  assert.ok(CHARACTER_QUERY.includes('media {'), 'character query should request media appearances')
+})
+
+test('getCharacter rejects invalid ids', async () => {
+  await assert.rejects(() => anilist.getCharacter(0), /Invalid character id/)
+  await assert.rejects(() => anilist.getCharacter(-1), /Invalid character id/)
+  await assert.rejects(() => anilist.getCharacter('abc'), /Invalid character id/)
 })
