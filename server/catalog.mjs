@@ -18,7 +18,7 @@ import { sanitizePublicHttpUrl } from './security.mjs'
  * value. The factory supplies stable defaults and copies collections.
  */
 export const CATALOG_METADATA_FIELDS = Object.freeze([
-  'title', 'romaji', 'english', 'native', 'cover', 'banner', 'artwork', 'color', 'description',
+  'title', 'romaji', 'english', 'native', 'aliases', 'cover', 'banner', 'artwork', 'color', 'description',
   'episodes', 'airedEpisodes', 'duration', 'status', 'format', 'season', 'seasonYear', 'startDate', 'endDate',
   'score', 'providerScores', 'popularity', 'favourites', 'genres', 'genreEntities', 'tags', 'source', 'countryOfOrigin',
   'originalLanguage', 'ageRatings', 'nextEpisode', 'studios', 'organizations', 'links', 'streams', 'anidb', 'anidbSearch', 'siteUrl',
@@ -873,6 +873,26 @@ export function createAnimeRecord(input) {
   const copyLinks = (links) => Array.isArray(links) ? links.map(({ site, url }) => ({ site, url })) : []
   const genres = normalizeGenres(input.genres)
   const tags = normalizeTags(input.tags)
+
+  // Build a deduplicated alias list from provider-supplied aliases plus the
+  // romaji/english/native title fields, so search can match alternate titles
+  // regardless of which metadata provider contributed them (AV-057).
+  const aliasSet = new Set()
+  const addAlias = (value) => {
+    if (typeof value === 'string' && value.trim()) aliasSet.add(value.trim())
+  }
+  if (Array.isArray(input.aliases)) {
+    for (const entry of input.aliases) {
+      if (typeof entry === 'string') addAlias(entry)
+      else if (entry && typeof entry.name === 'string') addAlias(entry.name)
+    }
+  }
+  addAlias(input.romaji)
+  addAlias(input.english)
+  addAlias(input.native)
+  // Never include the canonical title as its own alias.
+  if (input.title) aliasSet.delete(input.title.trim())
+  const aliases = [...aliasSet]
   const organizations = normalizeOrganizations(input.organizations, input.studios, input.metadataSource)
   const selectedScore = normalizeScoreValue(input.score, input.scoreScale === undefined ? 100 : input.scoreScale)
   const scoreFieldMetadata = input.fieldMetadata?.score
@@ -906,6 +926,7 @@ export function createAnimeRecord(input) {
     romaji: input.romaji ?? null,
     english: input.english ?? null,
     native: input.native ?? null,
+    aliases,
     cover: input.cover ?? null,
     banner: input.banner ?? null,
     color: input.color ?? null,
@@ -952,7 +973,7 @@ export function createAnimeRecord(input) {
 // bookkeeping fields rather than descriptive metadata.
 const COMPLETENESS_FIELD_WEIGHTS = Object.freeze({
   title: 3, cover: 3, description: 3,
-  romaji: 2, english: 2, native: 2, status: 2, format: 2, score: 2,
+  romaji: 2, english: 2, native: 2, aliases: 1, status: 2, format: 2, score: 2,
   genres: 2, studios: 2, episodes: 2,
   banner: 1, artwork: 1, color: 1, duration: 1, season: 1, seasonYear: 1,
   startDate: 1, endDate: 1, popularity: 1, favourites: 1, countryOfOrigin: 1,

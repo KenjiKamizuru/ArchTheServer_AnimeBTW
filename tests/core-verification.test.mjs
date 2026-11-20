@@ -892,3 +892,51 @@ test('rankTitles does not falsely match unrelated titles via romaji', () => {
   )
   assert.equal(ranked.length, 0)
 })
+
+/* ------------------------------ AV-057 ---------------------------------- */
+
+test('createAnimeRecord builds aliases from romaji, english, native', () => {
+  const record = catalog.createAnimeRecord({
+    id: 1,
+    title: 'Demon Slayer',
+    romaji: 'Kimetsu no Yaiba',
+    english: 'Demon Slayer: Kimetsu no Yaiba',
+    native: '鬼滅の刃',
+  })
+  assert.deepEqual(record.aliases, ['Kimetsu no Yaiba', 'Demon Slayer: Kimetsu no Yaiba', '鬼滅の刃'])
+})
+
+test('createAnimeRecord deduplicates aliases', () => {
+  const record = catalog.createAnimeRecord({
+    id: 2,
+    title: 'Naruto',
+    romaji: 'Naruto',
+    english: 'Naruto',
+    native: 'ナルト',
+    aliases: ['Naruto', 'ナルト', 'NARUTO'],
+  })
+  assert.deepEqual(record.aliases, ['ナルト', 'NARUTO'])
+})
+
+test('createAnimeRecord excludes canonical title from aliases', () => {
+  const record = catalog.createAnimeRecord({
+    id: 3,
+    title: 'One Piece',
+    romaji: 'One Piece',
+    english: 'One Piece',
+  })
+  assert.deepEqual(record.aliases, [])
+})
+
+test('createAnimeRecord accepts provider-supplied aliases array', () => {
+  const record = catalog.createAnimeRecord({
+    id: 4,
+    title: 'Attack on Titan',
+    aliases: [
+      'Shingeki no Kyojin',
+      { name: '進撃の巨人', source: 'anilist' },
+      { name: 'Attack on Titan', source: 'anidb' },
+    ],
+  })
+  assert.deepEqual(record.aliases, ['Shingeki no Kyojin', '進撃の巨人'])
+})
