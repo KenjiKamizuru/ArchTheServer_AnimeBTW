@@ -46,6 +46,7 @@ test('browse filter parsing clamps and deduplicates hostile input', () => {
     statuses: 'RELEASING,NOPE',
     sources: 'MANGA',
     countries: 'JP,RU',
+    originalLanguages: 'JA,XX,KO',
     genres: 'Action,Action',
     genresExclude: 'Hentai',
     tags: 'a,b',
@@ -64,6 +65,7 @@ test('browse filter parsing clamps and deduplicates hostile input', () => {
   assert.deepEqual(f.formats, ['TV', 'MOVIE'])
   assert.deepEqual(f.statuses, ['RELEASING'])
   assert.deepEqual(f.countries, ['JP'])
+  assert.deepEqual(f.originalLanguages, ['JA', 'KO'])
   assert.deepEqual(f.genres, ['Action'])
   assert.deepEqual(f.genresExclude, ['Hentai'])
   assert.deepEqual(f.years, { min: 1990, max: 1999 })
@@ -138,6 +140,73 @@ test('local browse matching enforces AND tags, ignores spoiler tags and exclusio
   assert.equal(browse.matchMediaLocally(media, withFilters({ episodes: { min: 13 } })).ok, false)
   assert.equal(browse.matchMediaLocally(media, withFilters({ duration: { max: 23 } })).ok, false)
   assert.ok(browse.matchMediaLocally(media, withFilters({ tags: ['Isekai'] })).reasons.length > 0)
+})
+
+test('local browse matching filters by original language', () => {
+  const mediaJa = {
+    genres: ['Fantasy'],
+    tags: [],
+    averageScore: 82,
+    popularity: 1200,
+    seasonYear: 2023,
+    episodes: 12,
+    duration: 24,
+    originalLanguage: 'JA',
+  }
+  const mediaKo = {
+    ...mediaJa,
+    originalLanguage: 'KO',
+  }
+  const mediaNoLang = {
+    ...mediaJa,
+    originalLanguage: null,
+  }
+  const base = browse.EMPTY_FILTERS
+  const withFilters = (patch) => ({ ...base, ...patch })
+  assert.equal(browse.matchMediaLocally(mediaJa, withFilters({ originalLanguages: ['JA'] })).ok, true)
+  assert.equal(browse.matchMediaLocally(mediaJa, withFilters({ originalLanguages: ['KO'] })).ok, false)
+  assert.equal(browse.matchMediaLocally(mediaJa, withFilters({ originalLanguages: ['JA', 'KO'] })).ok, true)
+  assert.equal(browse.matchMediaLocally(mediaKo, withFilters({ originalLanguages: ['JA'] })).ok, false)
+  assert.equal(browse.matchMediaLocally(mediaKo, withFilters({ originalLanguages: ['KO'] })).ok, true)
+  assert.equal(browse.matchMediaLocally(mediaNoLang, withFilters({ originalLanguages: ['JA'] })).ok, false)
+  assert.ok(browse.matchMediaLocally(mediaJa, withFilters({ originalLanguages: ['JA'] })).reasons.length > 0)
+})
+
+test('browse query pushes originalLanguage_in to AniList', () => {
+  const { query, variables } = browse.buildBrowseQuery(
+    browse.parseBrowseFilters({ originalLanguages: 'JA,KO' }),
+  )
+  assert.match(query, /originalLanguage_in: \$originalLanguages/)
+  assert.deepEqual(variables.originalLanguages, ['JA', 'KO'])
+  assert.match(query, /originalLanguage\b/)
+})
+
+test('browse filters survive a share-URL round trip with original languages', () => {
+  const original = browse.parseBrowseFilters({
+    sort: 'trending',
+    countries: 'JP',
+    originalLanguages: 'JA,KO',
+    tags: 'Isekai',
+    tagMode: 'or',
+    q: 'Frieren',
+  })
+  const params = browse.filtersToParams(original)
+  assert.equal(params.get('originalLanguages'), 'JA,KO')
+  const restored = browse.parseBrowseFilters(Object.fromEntries(params))
+  assert.deepEqual(restored.originalLanguages, original.originalLanguages)
+  assert.deepEqual(restored.countries, original.countries)
+  assert.deepEqual(restored.tags, original.tags)
+})
+
+test('describeFilters includes original languages', () => {
+  const filters = browse.parseBrowseFilters({ originalLanguages: ['JA', 'KO'] })
+  assert.ok(browse.describeFilters(filters).includes('lang JA/KO'))
+})
+
+test('activeFilterCount counts original language filters', () => {
+  const base = browse.parseBrowseFilters({})
+  const withLangs = browse.parseBrowseFilters({ originalLanguages: ['JA'] })
+  assert.equal(browse.activeFilterCount(withLangs), browse.activeFilterCount(base) + 1)
 })
 
 test('browse sort, format and source vocabularies cover the documented filters', () => {

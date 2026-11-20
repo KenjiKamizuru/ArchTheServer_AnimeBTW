@@ -35,7 +35,10 @@ export const BROWSE_SOURCES = [
 ]
 
 /** Country-of-origin codes AniList accepts (subset that is actually populated). */
-export const BROWSE_COUNTRIES = ['JP', 'KR', 'CN', 'TW']
+export const BROWSE_COUNTRIES = ['JP', 'KR', 'CN', 'TW'];
+
+/** Original-language codes AniList accepts (subset that is actually populated). */
+export const BROWSE_ORIGINAL_LANGUAGES = ['JA', 'KO', 'ZH', 'EN']
 
 const MAX_LIST = 8
 const MAX_TAGS = 6
@@ -108,6 +111,7 @@ export function parseBrowseFilters(raw = {}) {
     statuses: toStringList(raw.statuses, BROWSE_STATUSES),
     sources: toStringList(raw.sources, BROWSE_SOURCES),
     countries: toStringList(raw.countries, BROWSE_COUNTRIES),
+    originalLanguages: toStringList(raw.originalLanguages, BROWSE_ORIGINAL_LANGUAGES),
     genres: toStringList(raw.genres, null),
     genresExclude: toStringList(raw.genresExclude, null),
     tags: toStringList(raw.tags, null, MAX_TAGS),
@@ -147,6 +151,7 @@ export function filtersToParams(filters) {
   put('statuses', filters.statuses)
   put('sources', filters.sources)
   put('countries', filters.countries)
+  put('originalLanguages', filters.originalLanguages)
   put('genres', filters.genres)
   put('genresExclude', filters.genresExclude)
   put('tags', filters.tags)
@@ -215,6 +220,10 @@ export function buildBrowseQuery(filters) {
     variables.countries = filters.countries
     media.push('countryOfOrigin_in: $countries')
   }
+  if (filters.originalLanguages.length) {
+    variables.originalLanguages = filters.originalLanguages
+    media.push('originalLanguage_in: $originalLanguages')
+  }
   if (filters.genres.length) {
     variables.genres = filters.genres
     media.push('genre_in: $genres')
@@ -273,6 +282,7 @@ export function buildBrowseQuery(filters) {
   if (variables.statuses) add('statuses', '[MediaStatus]')
   if (variables.sources) add('sources', '[MediaSource]')
   if (variables.countries) add('countries', '[CountryCode]')
+  if (variables.originalLanguages) add('originalLanguages', '[String]')
   if (variables.genres) add('genres', '[String]')
   if (variables.tags) add('tags', '[String]')
   if (variables.episodesMin !== undefined) add('episodesMin', 'Int')
@@ -311,6 +321,7 @@ export function buildBrowseQuery(filters) {
       tags { name rank isMediaSpoiler }
       source
       countryOfOrigin
+      originalLanguage
       siteUrl
       nextAiringEpisode { episode airingAt }
       studios(isMain: true) { nodes { id name isAnimationStudio siteUrl } }
@@ -330,6 +341,14 @@ export function buildBrowseQuery(filters) {
 export function matchMediaLocally(media, filters) {
   const reasons = []
   if (!media) return { ok: false, reasons }
+
+  if (filters.originalLanguages.length) {
+    const lang = media.originalLanguage
+    if (!lang || !filters.originalLanguages.includes(lang.toUpperCase())) {
+      return { ok: false, reasons }
+    }
+    reasons.push(`language ${filters.originalLanguages.join('/')}`)
+  }
 
   if (filters.genresExclude.length) {
     const genres = new Set(media.genres ?? [])
@@ -420,6 +439,8 @@ export function describeFilters(filters) {
   if (filters.maxPopularity !== null) parts.push(`popularity ≤ ${filters.maxPopularity}`)
   if (filters.sources.length) parts.push(filters.sources.join('/'))
   if (filters.countries.length) parts.push(filters.countries.join('/'))
+  if (filters.originalLanguages.length)
+    parts.push(`lang ${filters.originalLanguages.join('/')}`)
   return parts.length ? parts.join(' · ') : 'everything'
 }
 
@@ -445,6 +466,7 @@ export function activeFilterCount(filters) {
   if (filters.statuses.length) n += 1
   if (filters.sources.length) n += 1
   if (filters.countries.length) n += 1
+  if (filters.originalLanguages.length) n += 1
   if (filters.genres.length) n += 1
   if (filters.genresExclude.length) n += 1
   if (filters.tags.length) n += 1
