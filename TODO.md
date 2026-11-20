@@ -302,15 +302,15 @@ items need frontend UI or additional backend work.
 - [x] **AV-114** — Add per-user playback quality preferences. (defaultPlaybackQuality field)
 - [x] **AV-115** — Add per-user content-rating preferences. (contentRatingPreference field)
 - [x] **AV-116** — Add per-user theme and interface preferences. (theme field)
-- [ ] **AV-117** — Add profile activity summaries controlled by privacy settings. (Not yet implemented)
+- [x] **AV-117** — Add profile activity summaries controlled by privacy settings. (GET /api/auth/activity; activityLog with login, pin_set, pin_removed, profile_switched, feature_flags_updated events)
 - [x] **AV-118** — Add profile export and account deletion tools. (DELETE /api/auth/users/:id; listUsers() for export)
 - [x] **AV-119** — Add device/session management with remote sign-out. (GET/DELETE /api/auth/sessions; destroyUserSessions())
-- [ ] **AV-120** — Add login notification settings. (Not yet implemented)
+- [x] **AV-120** — Add login notification settings. (loginNotifications field on user profile; login activity logged)
 - [x] **AV-121** — Add account creation and last-login audit timestamps. (createdAt, updatedAt, lastLoginAt fields)
-- [ ] **AV-122** — Add optional guest profiles for household visitors. (Not yet implemented)
-- [ ] **AV-123** — Add profile switching without clearing the shared browser session. (Not yet implemented)
-- [ ] **AV-124** — Add profile PIN lock for shared living-room devices. (Not yet implemented)
-- [ ] **AV-125** — Add account-level feature flags and beta opt-ins. (Not yet implemented)
+- [x] **AV-122** — Add optional guest profiles for household visitors. (POST /api/auth/guests; createGuest() with isGuest flag)
+- [x] **AV-123** — Add profile switching without clearing the shared browser session. (POST /api/auth/switch-profile; switchProfile())
+- [x] **AV-124** — Add profile PIN lock for shared living-room devices. (POST /api/auth/pin, POST /api/auth/pin/verify, DELETE /api/auth/pin; setPin/verifyPin/removePin)
+- [x] **AV-125** — Add account-level feature flags and beta opt-ins. (GET/PUT /api/auth/feature-flags; getFeatureFlags/setFeatureFlags)
 
 ### 06 · Watchlists, lists, and personal organization · P1
 
