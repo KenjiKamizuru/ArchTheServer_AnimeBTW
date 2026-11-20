@@ -10,13 +10,10 @@ import { parseBrowseFilters } from './browse.mjs'
 import { createAnimeRecord } from './catalog.mjs'
 import { remember } from './identifiers.mjs'
 import { rateLimiter } from './rateLimit.mjs'
+import { cachedImmutable, cachedAiring } from './metadataCache.mjs'
 
 const ENDPOINT = 'https://graphql.anilist.co'
 const MAX_GQL_BYTES = 6 * 1024 * 1024
-const TTL = 10 * 60 * 1000
-const MAX_ENTRIES = 300
-
-const cache = new Map()
 
 const MEDIA_FIELDS = `
   id
@@ -165,26 +162,6 @@ async function gql(query, variables) {
   failure.code = 'UPSTREAM_UNAVAILABLE'
   failure.upstreamSafe = true
   throw failure
-}
-
-/** TTL + LRU cache so repeat views are instant and we stay far under rate limits. */
-async function cached(key, loader, { fresh = false } = {}) {
-  const hit = cache.get(key)
-  if (!fresh && hit && Date.now() - hit.at < TTL) {
-    cache.delete(key)
-    cache.set(key, hit)
-    return hit.value
-  }
-  try {
-    const value = await loader()
-    cache.set(key, { at: Date.now(), value })
-    if (cache.size > MAX_ENTRIES) cache.delete(cache.keys().next().value)
-    return value
-  } catch (err) {
-    // Stale data beats an error page.
-    if (hit) return hit.value
-    throw err
-  }
 }
 
 function plainText(value) {
@@ -339,7 +316,7 @@ export function resolveSort(sortParam) {
 export async function getSeason({ season, year, sort = 'popular', page = 1, perPage = 30 }) {
   const sortKey = resolveSort(sort)
   const key = `season:${season}:${year}:${sortKey}:${page}:${perPage}`
-  return cached(key, async () => {
+  return cachedImmutable(key, async () => {
     const data = await gql(
       `query ($page: Int, $perPage: Int, $season: MediaSeason, $year: Int, $sort: [MediaSort]) {
         Page(page: $page, perPage: $perPage) {
@@ -369,7 +346,7 @@ export async function getSeason({ season, year, sort = 'popular', page = 1, perP
 export async function browse(filters, browseModule) {
   const { query, variables } = browseModule.buildBrowseQuery(filters)
   const key = `browse:${JSON.stringify(variables)}`
-  return cached(key, async () => {
+  return cachedImmutable(key, async () => {
     const data = await gql(query, variables)
     const pageInfo = data.Page?.pageInfo ?? {}
     const raw = data.Page?.media ?? []
@@ -454,7 +431,7 @@ export async function studios({ page = 1, search = '', sort = '' } = {}) {
   const allowed = new Set(['favourites', 'name'])
   const studioSort = allowed.has(sort) ? sort : 'favourites'
   const key = `studios:${page}:${search}:${studioSort}`
-  return cached(key, async () => {
+  return cachedImmutable(key, async () => {
     const data = await gql(
       `query Studios($page: Int, $perPage: Int, $search: String, $sort: [StudioSort]) {
         Page(page: $page, perPage: $perPage) {
@@ -509,7 +486,7 @@ export async function studioFilmography(id, { page = 1, sort = 'popular' } = {})
     oldest: 'START_DATE_ASC',
   }[sort] ?? 'POPULARITY_DESC'
   const key = `studio:${id}:${page}:${sortEnum}`
-  return cached(key, async () => {
+  return cachedImmutable(key, async () => {
     const data = await gql(
       `query Studio($id: Int, $page: Int, $perPage: Int, $sort: [MediaSort]) {
         Studio(id: $id) {
@@ -551,7 +528,7 @@ export async function studioFilmography(id, { page = 1, sort = 'popular' } = {})
 export async function catalogIndex({ page = 1, sort = 'title' } = {}) {
   const sortEnum = { title: 'TITLE_ROMAJI', popular: 'POPULARITY_DESC', rated: 'SCORE_DESC' }[sort] ?? 'TITLE_ROMAJI'
   const key = `index:${page}:${sortEnum}`
-  return cached(key, async () => {
+  return cachedImmutable(key, async () => {
     const data = await gql(
       `query Index($page: Int, $perPage: Int, $sort: [MediaSort]) {
         Page(page: $page, perPage: $perPage) {
@@ -575,7 +552,7 @@ export async function catalogIndex({ page = 1, sort = 'title' } = {}) {
 export async function seasonFranchises({ season = '', year } = {}) {
   const resolved = resolveSeason(season || undefined, year)
   const key = `franchises:${resolved.season}:${resolved.year}`
-  return cached(key, async () => {
+  return cachedImmutable(key, async () => {
     const data = await gql(
       `query Franchises($season: MediaSeason, $seasonYear: Int, $page: Int) {
         Page(page: $page, perPage: 50) {
@@ -610,7 +587,7 @@ export async function seasonFranchises({ season = '', year } = {}) {
 /** Newest catalog entries (highest IDs first). */
 export async function recentlyAdded(limit = 24) {
   const key = `recent:added:${limit}`
-  return cached(key, async () => {
+  return cachedImmutable(key, async () => {
     const data = await gql(
       `query Recent($perPage: Int, $sort: [MediaSort]) {
         Page(page: 1, perPage: $perPage) {
@@ -626,7 +603,7 @@ export async function recentlyAdded(limit = 24) {
 /** Recently updated metadata — useful to spot refreshed artwork/synopses. */
 export async function recentlyUpdated(limit = 24) {
   const key = `recent:updated:${limit}`
-  return cached(key, async () => {
+  return cachedImmutable(key, async () => {
     const data = await gql(
       `query Updated($perPage: Int, $sort: [MediaSort]) {
         Page(page: 1, perPage: $perPage) {
@@ -641,7 +618,7 @@ export async function recentlyUpdated(limit = 24) {
 
 export async function getAiring({ page = 1, perPage = 50 } = {}) {
   const key = `airing:${page}:${perPage}`
-  return cached(key, async () => {
+  return cachedAiring(key, async () => {
     const data = await gql(
       `query ($page: Int, $perPage: Int) {
         Page(page: $page, perPage: $perPage) {
@@ -663,7 +640,7 @@ export async function searchAnime(term, page = 1) {
   const q = String(term ?? '').trim()
   if (!q) return { media: [], hasNextPage: false }
   const key = `search:${q.toLowerCase()}:${page}`
-  return cached(key, async () => {
+  return cachedImmutable(key, async () => {
     const data = await gql(
       `query ($page: Int, $search: String) {
         Page(page: $page, perPage: 40) {
@@ -838,7 +815,7 @@ export async function getDetail(id) {
     throw Object.assign(new Error('Invalid anime id'), { status: 400 })
   }
   const key = `detail:${numeric}`
-  return cached(key, async () => {
+  return cachedImmutable(key, async () => {
     const data = await gql(
       `query ($id: Int) {
         Media(id: $id, type: ANIME) {
@@ -1019,7 +996,7 @@ export async function getMany(ids) {
   const list = [...new Set((ids ?? []).map(Number))].filter((n) => Number.isInteger(n) && n > 0).slice(0, 60)
   if (!list.length) return []
   const key = `many:${list.join(',')}`
-  return cached(key, async () => {
+  return cachedImmutable(key, async () => {
     const data = await gql(
       `query ($ids: [Int]) {
         Page(page: 1, perPage: 50) {
