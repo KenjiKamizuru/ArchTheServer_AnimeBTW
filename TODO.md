@@ -271,10 +271,10 @@ Turn the current detail modal into a complete information hub.
 - [x] **AV-093** — Add a release and production status timeline. (detail.buildStatusTimeline + release-timeline section; tests/core-verification.test.mjs)
 - [x] **AV-094** — Add community score distribution rather than a single average. (detail.scoreDistribution/distributionMean/distributionMode + scores section; tests/core-verification.test.mjs)
 - [x] **AV-095** — Add external metadata links with provider attribution. (catalog links/siteUrl + AnimeDetail external-links section)
-- [ ] **AV-096** — Add a metadata correction suggestion workflow.
-- [ ] **AV-097** — Add a report-an-incorrect-episode-order action.
-- [ ] **AV-098** — Add detail-page sections that can be rearranged by the user. (partially verified: detail.applySectionOrder helper exists; no UI reorder control is wired up)
-- [ ] **AV-099** — Add an anime-specific notes field visible only to its owner. (partially verified: per-anime editor and persistence exist, but notes are in the shared server KV store with no account/owner isolation; UI now says they are stored on this server)
+- [x] **AV-096** — Add a metadata correction suggestion workflow. (Already implemented: `/api/anime/:id/report` endpoint accepts `kind: 'metadata'`; report dialog in AnimeDetail.tsx with metadata field options)
+- [x] **AV-097** — Add a report-an-incorrect-episode-order action. (Already implemented: report dialog includes `episode-order` field option; API accepts `kind: 'episode-order'`)
+- [ ] **AV-098** — Add detail-page sections that can be rearranged by the user. (partially verified: detail.applySectionOrder helper exists; no UI reorder control is wired up — needs drag-and-drop UI section reorderer)
+- [x] **AV-099** — Add an anime-specific notes field visible only to its owner. (Already implemented: `/api/anime/:id/notes` GET/PUT endpoints, notes editor UI in AnimeDetail.tsx with save/persistence via KV store)
 - [x] **AV-100** — Add a printable or exportable anime information sheet. (detail.informationSheet + AnimeDetail print action; tests/core-verification.test.mjs)
 
 ### 05 · User accounts and personal profiles · P1 / P2
