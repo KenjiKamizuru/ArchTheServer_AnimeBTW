@@ -9,6 +9,7 @@ import * as browse from './browse.mjs'
 import * as explore from './explore.mjs'
 import * as searchEngine from './search.mjs'
 import * as detailEngine from './detail.mjs'
+import { recordRefreshStatus } from './catalog.mjs'
 import * as kv from './kv.mjs'
 import * as listStore from './listStore.mjs'
 import * as identifiers from './identifiers.mjs'
@@ -598,6 +599,7 @@ app.get(
       overview: detailEngine.spoilerFreeOverview(media.description),
       hasSpoilers: detailEngine.hasSpoilers(media.description),
       sections: detailEngine.DETAIL_SECTIONS,
+      refreshStatus: recordRefreshStatus(media),
     })
   }),
 )

@@ -6,6 +6,10 @@ import {
   METADATA_SCHEMA_VERSION,
   migrateMetadataSchema,
   applyManualCorrection,
+  recordRefreshStatus,
+  fieldFreshness,
+  isFieldStale,
+  refreshPolicy,
 } from '../server/catalog.mjs'
 const basic = () => createAnimeRecord({ id: 1 })
 test('id retained', () => assert.equal(basic().id, 1))
@@ -840,6 +844,74 @@ test('corrected blank value is treated as unknown', () => {
   assert.equal(corrected.title, '')
   assert.equal(corrected.fieldMetadata.title.valueState, 'unknown')
   assert.equal(corrected.fieldMetadata.title.manualCorrection.value, '')
+})
+
+test('recordRefreshStatus reports all fields fresh for a fresh record', () => {
+  const now = 1_735_689_600_000
+  const freshMeta = Object.fromEntries(
+    CATALOG_METADATA_FIELDS.map((field) => [field, { lastRefreshedAt: now }])
+  )
+  const record = createAnimeRecord({ id: 1, format: 'TV', fieldMetadata: freshMeta })
+  const status = recordRefreshStatus(record, now)
+  assert.equal(status.needsRefresh, false)
+  assert.deepEqual(status.staleFields, [])
+  assert.equal(status.freshness.title, 'fresh')
+  assert.equal(status.freshness.status, 'fresh')
+})
+
+test('recordRefreshStatus flags stale and never-refreshed fields', () => {
+  const now = 1_735_689_600_000
+  const record = createAnimeRecord({
+    id: 2,
+    format: 'TV',
+    fieldMetadata: {
+      title: { lastRefreshedAt: null },
+      status: { lastRefreshedAt: now - 2 * 60 * 60 * 1000 },
+      score: { lastRefreshedAt: now },
+    },
+  })
+  const status = recordRefreshStatus(record, now)
+  assert.equal(status.needsRefresh, true)
+  assert.ok(status.staleFields.includes('title'))
+  assert.ok(status.staleFields.includes('status'))
+  assert.equal(status.freshness.title, 'never_refreshed')
+  assert.equal(status.freshness.status, 'stale')
+  assert.equal(status.freshness.score, 'fresh')
+})
+
+test('recordRefreshStatus uses entity-type TTLs', () => {
+  const now = 1_735_689_600_000
+  const oneDayAgo = now - 24 * 60 * 60 * 1000
+  const meta = Object.fromEntries(
+    CATALOG_METADATA_FIELDS.map((field) => [field, { lastRefreshedAt: oneDayAgo }])
+  )
+  const tv = recordRefreshStatus(createAnimeRecord({ id: 3, format: 'TV', fieldMetadata: meta }), now)
+  // TV status TTL is 1 hour, so one day ago is stale.
+  assert.ok(tv.staleFields.includes('status'))
+  const movie = recordRefreshStatus(createAnimeRecord({ id: 4, format: 'Movie', fieldMetadata: meta }), now)
+  // Movie status TTL is 7 days, so one day ago is fresh.
+  assert.ok(!movie.staleFields.includes('status'))
+})
+
+test('recordRefreshStatus does not mutate the record', () => {
+  const now = 1_735_689_600_000
+  const record = createAnimeRecord({ id: 5, format: 'Movie' })
+  const before = JSON.parse(JSON.stringify(record))
+  recordRefreshStatus(record, now)
+  assert.deepEqual(record, before)
+})
+
+test('fieldFreshness and isFieldStale agree', () => {
+  const now = 1_735_689_600_000
+  assert.equal(isFieldStale('title', null, 'TV'), true)
+  assert.equal(isFieldStale('title', now - 1000, 'TV', now), false)
+  assert.equal(fieldFreshness('title', 'not-a-date', 'TV', now), 'unknown')
+})
+
+test('refreshPolicy returns category and max age', () => {
+  const policy = refreshPolicy('TV', 'nextEpisode')
+  assert.equal(policy.category, 'airing')
+  assert.equal(policy.maxAgeMs, 60 * 60 * 1000)
 })
 
 test('genres preserve provider labels and expose stable unique taxonomy entities', () => {

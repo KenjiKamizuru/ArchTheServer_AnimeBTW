@@ -306,6 +306,8 @@ export interface MediaDetail extends Media {
   sections?: DetailSection[]
   characters?: CharacterEntry[]
   staff?: StaffEntry[]
+  /** Server-computed freshness assessment for each metadata field. */
+  refreshStatus?: RecordRefreshStatus
 }
 
 export interface AnimeNote {

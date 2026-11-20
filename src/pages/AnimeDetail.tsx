@@ -10,6 +10,7 @@ import {
   Eye,
   EyeOff,
   FileText,
+  RefreshCw,
   Flag,
   Info,
   Layers,
@@ -358,6 +359,7 @@ export default function AnimeDetailPage() {
   const relations = detail.relations ?? []
   const timeline = detail.timeline ?? []
   const scores = detail.scores ?? null
+  const refreshStatus = detail.refreshStatus
   const synopsisText = detail.synopsis?.text ?? ''
   const synopsisTooLong = synopsisText.length > 420
   const shownSynopsis =
@@ -744,6 +746,58 @@ export default function AnimeDetailPage() {
                   </li>
                 ))}
               </ol>
+            </SectionCard>
+          ) : null}
+
+          {refreshStatus ? (
+            <SectionCard id="freshness" title="Metadata freshness" icon={RefreshCw}>
+              <div className="space-y-1">
+                <p className={`flex items-center gap-1 text-[11px] font-semibold ${
+                  refreshStatus.needsRefresh ? 'text-amber-300' : 'text-emerald-300'
+                }`}>
+                  {refreshStatus.needsRefresh
+                    ? `${refreshStatus.staleFields.length} field${refreshStatus.staleFields.length !== 1 ? 's' : ''} need refresh`
+                    : 'All metadata fields are current'}
+                </p>
+                {refreshStatus.needsRefresh && (
+                  <ul className="space-y-0.5">
+                    {refreshStatus.staleFields.map((field) => {
+                      const state = refreshStatus.freshness?.[field] ?? 'unknown'
+                      const meta = detail.fieldMetadata?.[field]
+                      const lastRefreshed = meta?.lastRefreshedAt
+                        ? new Date(meta.lastRefreshedAt).toLocaleString(undefined, {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })
+                        : null
+                      return (
+                        <li key={field} className="flex items-baseline gap-2 text-[10px]">
+                          <span className="w-24 shrink-0 truncate text-white/50">{field}</span>
+                          <span
+                            className={`w-16 shrink-0 text-[9px] uppercase tracking-wider font-semibold ${
+                              state === 'stale' ? 'text-amber-300'
+                              : state === 'never_refreshed' ? 'text-red-300'
+                              : 'text-white/40'
+                            }`}
+                          >
+                            {state.replace('_', ' ')}
+                          </span>
+                          {lastRefreshed && (
+                            <span className="min-w-0 flex-1 text-white/30">refreshed {lastRefreshed}</span>
+                          )}
+                        </li>
+                      )
+                    })}
+                  </ul>
+                )}
+                {!refreshStatus.needsRefresh && (
+                  <p className="text-[10px] text-white/40">
+                    No fields are stale or missing refresh metadata.
+                  </p>
+                )}
+              </div>
             </SectionCard>
           ) : null}
 
