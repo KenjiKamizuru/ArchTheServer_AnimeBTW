@@ -10,6 +10,7 @@ import { parseListImport } from './listImport.mjs'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const file = path.join(process.env.ANIMEVAULT_DATA ? path.resolve(process.env.ANIMEVAULT_DATA) : path.join(root, 'data'), 'lists.json')
 export const STATUSES = ['watching', 'planned', 'completed', 'paused', 'dropped']
+export const VISIBILITY_VALUES = new Set(['private', 'shared-link', 'public'])
 const MAX_LISTS = 50
 const MAX_ITEMS = 2000
 let state = { version: 1, lists: [], entries: [] }
@@ -24,7 +25,7 @@ export async function init() {
     if (parsed.lists.length > MAX_LISTS || parsed.entries.length > MAX_ITEMS) throw new Error('List data exceeds limits')
     const ids = new Set()
     for (const list of parsed.lists) {
-      if (typeof list?.id !== 'string' || !/^l_[0-9a-f]{24}$/.test(list.id) || ids.has(list.id) || typeof list.name !== 'string' || !list.name.trim() || list.name.length > 80 || typeof list.description !== 'string' || list.description.length > 500 || (list.cover !== undefined && list.cover !== null && typeof list.cover !== 'string')) throw new Error('Invalid list metadata')
+      if (typeof list?.id !== 'string' || !/^l_[0-9a-f]{24}$/.test(list.id) || ids.has(list.id) || typeof list.name !== 'string' || !list.name.trim() || list.name.length > 80 || typeof list.description !== 'string' || list.description.length > 500 || (list.cover !== undefined && list.cover !== null && typeof list.cover !== 'string') || (list.visibility !== undefined && !VISIBILITY_VALUES.has(list.visibility))) throw new Error('Invalid list metadata')
       ids.add(list.id)
     }
     const mediaIds = new Set()
@@ -88,9 +89,10 @@ export async function createList(body = {}) {
   const name = typeof body?.name === 'string' ? body.name.trim() : ''
   const description = typeof body?.description === 'string' ? body.description.trim() : ''
   const cover = typeof body?.cover === 'string' ? sanitizeCoverUrl(body.cover) : null
+  const visibility = body?.visibility === 'shared-link' || body?.visibility === 'public' ? body.visibility : 'private'
   if (!name || name.length > 80 || description.length > 500) throw error('Name must be 1–80 characters and description at most 500 characters')
   if (state.lists.length >= MAX_LISTS) throw error('List limit reached', 429)
-  const list = { id: `l_${crypto.randomBytes(12).toString('hex')}`, name, description, cover, createdAt: Date.now() }
+  const list = { id: `l_${crypto.randomBytes(12).toString('hex')}`, name, description, cover, visibility, createdAt: Date.now() }
   state.lists.push(list)
   await persist()
   return list
@@ -215,6 +217,19 @@ export async function setCover(id, coverUrl) {
   await persist()
   return { cover: list.cover }
 }
+
+/**
+ * Sets the visibility of a custom list. Built-in lists are always private.
+ * Returns the visibility value.
+ */
+export async function setVisibility(id, visibility) {
+  const list = info(id)
+  if (!list.custom) throw error('Built-in lists cannot change visibility', 400)
+  if (!VISIBILITY_VALUES.has(visibility)) throw error('Visibility must be private, shared-link, or public', 400)
+  list.visibility = visibility
+  await persist()
+  return { visibility: list.visibility }
+}
 // Import into a new custom list. Existing titles keep their metadata and status;
 // imported notes/ratings belong only to the newly-created list.
 export async function importList(document) {
@@ -223,7 +238,7 @@ export async function importList(document) {
   const existing = new Map(state.entries.map((entry) => [entry.mediaId, entry]))
   const newCount = parsed.entries.filter((entry) => !existing.has(entry.mediaId)).length
   if (state.entries.length + newCount > MAX_ITEMS) throw error('Entry limit reached', 429)
-  const list = { id: `l_${crypto.randomBytes(12).toString('hex')}`, name: parsed.name, description: parsed.description, createdAt: Date.now() }
+  const list = { id: `l_${crypto.randomBytes(12).toString('hex')}`, name: parsed.name, description: parsed.description, cover: null, visibility: 'private', createdAt: Date.now() }
   state.lists.push(list)
   for (const item of parsed.entries) {
     let entry = existing.get(item.mediaId)

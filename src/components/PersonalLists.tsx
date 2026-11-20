@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { GripVertical } from 'lucide-react'
 import type { Media } from '../types'
 
-type ListSummary = { id: string; name: string; count: number; description?: string; cover: string | null }
+type ListSummary = { id: string; name: string; count: number; description?: string; cover: string | null; visibility: string }
 type Entry = { mediaId: number; media: Media; status: string | null; note: string; priority: number | null; rating: number | null; position: number | null }
 type Overview = { statuses: ListSummary[]; lists: ListSummary[] }
 type List = ListSummary & { entries: Entry[]; custom: boolean }
@@ -227,6 +227,23 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
           {list.custom && <button type="button" className={button} disabled={busy} onClick={() => {
             if (window.confirm(`Delete list “${list.name}”? Titles with a status will remain in their status lists.`)) void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}`, 'DELETE'); setActive('status:planned') })
           }}>Delete list</button>}
+          {list.custom && (
+            <div className="flex items-center gap-2">
+              <label className="text-[10px] text-white/50">Visibility:</label>
+              <select id="list-visibility" className={input} value={list.visibility ?? 'private'} onChange={(event) => {
+                const visibility = event.target.value
+                void perform(async () => {
+                  await request(`/api/lists/${encodeURIComponent(active)}/visibility`, 'PUT', { visibility })
+                  setRevision((value) => value + 1)
+                  setMessage(`Visibility set to ${visibility}`)
+                })
+              }}>
+                <option value="private">Private</option>
+                <option value="shared-link">Shared link</option>
+                <option value="public">Public</option>
+              </select>
+            </div>
+          )}
         </div>
         <div className="mt-3 flex items-center gap-2">
           <label className="text-sm text-white/70" htmlFor="list-sort">Sort by</label>
