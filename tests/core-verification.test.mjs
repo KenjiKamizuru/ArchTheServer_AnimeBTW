@@ -145,6 +145,23 @@ test('local browse matching enforces AND tags, ignores spoiler tags and exclusio
   assert.ok(browse.matchMediaLocally(media, withFilters({ tags: ['Isekai'] })).reasons.length > 0)
 })
 
+test('local browse matching filters by studio', () => {
+  const media = {
+    genres: ['Fantasy'],
+    studios: ['Studio Ghibli', 'Studio Ponoc'],
+    averageScore: 82,
+    popularity: 1200,
+    seasonYear: 2023,
+  }
+  const base = browse.EMPTY_FILTERS
+  const withFilters = (patch) => ({ ...base, ...patch })
+  assert.equal(browse.matchMediaLocally(media, withFilters({ studio: ['studio ghibli'] })).ok, true)
+  assert.equal(browse.matchMediaLocally(media, withFilters({ studio: ['studio ponoc'] })).ok, true)
+  assert.equal(browse.matchMediaLocally(media, withFilters({ studio: ['madhouse'] })).ok, false)
+  assert.equal(browse.matchMediaLocally(media, withFilters({ studio: ['studio ghibli', 'madhouse'] })).ok, true)
+  assert.equal(browse.matchMediaLocally(media, withFilters({ studio: ['studio ghibli'] })).reasons.length > 0, true)
+})
+
 test('local browse matching filters by original language', () => {
   const mediaJa = {
     genres: ['Fantasy'],
@@ -296,6 +313,17 @@ test('advanced search syntax parses fields and preserves unknown tokens', () => 
   assert.deepEqual(parsed.filters.episodes, { min: 12 })
   assert.equal(search.hasStructuredFilters(parsed.filters), true)
   assert.equal(search.hasStructuredFilters(search.parseSearchQuery('naruto').filters), false)
+})
+
+test('advanced search parses staff and voice actor fields', () => {
+  const parsed = search.parseSearchQuery(
+    'staff:tanaka voiceActor:kugimiya va:mitsuki studio:shaft',
+  )
+  assert.deepEqual(parsed.filters.staff, ['tanaka'])
+  assert.deepEqual(parsed.filters.voiceActor, ['kugimiya', 'mitsuki'])
+  assert.deepEqual(parsed.filters.studio, ['shaft'])
+  assert.equal(parsed.text, '')
+  assert.equal(search.hasStructuredFilters(parsed.filters), true)
 })
 
 test('fuzzy matching handles misspellings, transpositions, accents and aliases', () => {

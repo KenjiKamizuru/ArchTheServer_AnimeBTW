@@ -130,6 +130,9 @@ export function parseBrowseFilters(raw = {}) {
     contentRatings: toStringList(raw.contentRatings, BROWSE_CONTENT_RATINGS),
     genres: toStringList(raw.genres, null),
     genresExclude: toStringList(raw.genresExclude, null),
+    studio: toStringList(raw.studio, null),
+    staff: toStringList(raw.staff, null),
+    voiceActor: toStringList(raw.voiceActor, null),
     tags: toStringList(raw.tags, null, MAX_TAGS),
     tagMode: ['and', 'or', 'not'].includes(String(raw.tagMode ?? '')) ? String(raw.tagMode) : 'and',
     years,
@@ -171,6 +174,9 @@ export function filtersToParams(filters) {
   put('contentRatings', filters.contentRatings)
   put('genres', filters.genres)
   put('genresExclude', filters.genresExclude)
+  put('studio', filters.studio)
+  put('staff', filters.staff)
+  put('voiceActor', filters.voiceActor)
   put('tags', filters.tags)
   put('tagMode', filters.tagMode === 'and' ? null : filters.tagMode)
   put('yearMin', filters.years?.min)
@@ -382,6 +388,14 @@ export function matchMediaLocally(media, filters) {
       if (genres.has(g)) return { ok: false, reasons }
     }
     reasons.push(`no ${filters.genresExclude.join('/')}`)
+  }
+
+  // Studio filter: media must be produced by at least one of the listed studios.
+  if (filters.studio.length) {
+    const studios = new Set((media.studios ?? []).map((s) => String(s).toLowerCase()))
+    const hit = filters.studio.filter((s) => studios.has(s))
+    if (hit.length === 0) return { ok: false, reasons }
+    reasons.push(`studio ${hit.join('/')}`)
   }
 
   // Spoiler tags must never drive discovery, so strip them before matching.
