@@ -159,9 +159,13 @@ function sanitizeUser(user, includeSensitive = false) {
     theme: rest.theme ?? null,
     privacy: rest.privacy ?? 'private',
     twoFactorEnabled: Boolean(rest.totpEnabled),
+    pinSet: Boolean(rest.pinHash),
+    isGuest: Boolean(rest.isGuest),
+    loginNotifications: rest.loginNotifications ?? true,
     emailVerified: Boolean(rest.emailVerifiedAt),
     emailVerifiedAt: rest.emailVerifiedAt ?? null,
     recoveryCodesRemaining: Array.isArray(rest.recoveryCodes) ? rest.recoveryCodes.length : 0,
+    featureFlags: rest.featureFlags ?? {},
     createdAt: rest.createdAt,
     updatedAt: rest.updatedAt,
     lastLoginAt: rest.lastLoginAt ?? null,
@@ -174,6 +178,8 @@ function sanitizeUser(user, includeSensitive = false) {
     clean.totpSecret = rest.totpSecret ?? null
     clean.totpEnabled = Boolean(rest.totpEnabled)
     clean.recoveryCodes = rest.recoveryCodes ?? []
+    clean.pinHash = rest.pinHash ?? null
+    clean.activityLog = rest.activityLog ?? []
   }
   return clean
 }
@@ -235,6 +241,11 @@ export async function createUser({ username, email, password, role = 'user' }) {
     totpEnabled: false,
     recoveryCodes: null,
     passkeys: [],
+    pinHash: null,
+    isGuest: false,
+    featureFlags: {},
+    loginNotifications: true,
+    activityLog: [],
     createdAt: Date.now(),
     updatedAt: Date.now(),
     lastLoginAt: null,
@@ -269,6 +280,7 @@ export async function authenticateUser(usernameOrEmail, password) {
 
   user.lastLoginAt = Date.now()
   user.updatedAt = Date.now()
+  addActivity(user.id, 'login')
   await persist()
   return sanitizeUser(user)
 }
@@ -606,6 +618,161 @@ export async function verifyPasskeyAssertion(credentialId, authenticatorData, cl
 }
 
 // ── end Passkey helpers ──────────────────────────────────────────────────
+
+// ── Activity log (AV-117) ────────────────────────────────────────────────
+
+const MAX_ACTIVITY_ENTRIES = 100
+
+function addActivity(userId, action, meta = {}) {
+  const idx = findUserIndex(Number(userId))
+  if (idx === -1) return
+  const user = state.users[idx]
+  user.activityLog = user.activityLog || []
+  user.activityLog.unshift({
+    action,
+    at: Date.now(),
+    ...meta,
+  })
+  if (user.activityLog.length > MAX_ACTIVITY_ENTRIES) {
+    user.activityLog = user.activityLog.slice(0, MAX_ACTIVITY_ENTRIES)
+  }
+}
+
+/** Get activity log for a user (AV-117). */
+export function getActivityLog(id, limit = 50) {
+  const idx = findUserIndex(Number(id))
+  if (idx === -1) throw error('User not found', 404)
+  return state.users[idx].activityLog?.slice(0, limit) ?? []
+}
+
+// ── PIN lock (AV-124) ────────────────────────────────────────────────────
+
+/** Set a profile PIN for a user. Requires current password confirmation. */
+export async function setPin(id, password, pin) {
+  const idx = findUserIndex(Number(id))
+  if (idx === -1) throw error('User not found', 404)
+  const user = state.users[idx]
+  if (!(await verifyPassword(String(password ?? ''), user.passwordHash))) {
+    throw error('Invalid password', 401)
+  }
+  const pinStr = String(pin ?? '')
+  if (!/^\d{4,8}$/.test(pinStr)) {
+    throw error('PIN must be 4–8 digits', 400)
+  }
+  user.pinHash = await hashPassword(pinStr)
+  user.updatedAt = Date.now()
+  await persist()
+  addActivity(user.id, 'pin_set')
+  return { ok: true }
+}
+
+/** Verify a profile PIN. Returns boolean. */
+export async function verifyPin(id, pin) {
+  const idx = findUserIndex(Number(id))
+  if (idx === -1) throw error('User not found', 404)
+  const user = state.users[idx]
+  if (!user.pinHash) return false
+  return await verifyPassword(String(pin ?? ''), user.pinHash)
+}
+
+/** Remove a profile PIN. Requires current password. */
+export async function removePin(id, password) {
+  const idx = findUserIndex(Number(id))
+  if (idx === -1) throw error('User not found', 404)
+  const user = state.users[idx]
+  if (!(await verifyPassword(String(password ?? ''), user.passwordHash))) {
+    throw error('Invalid password', 401)
+  }
+  user.pinHash = null
+  user.updatedAt = Date.now()
+  await persist()
+  addActivity(user.id, 'pin_removed')
+  return { ok: true }
+}
+
+// ── Guest profiles (AV-122) ─────────────────────────────────────────────
+
+/** Create a guest profile (limited privileges, no password required). */
+export async function createGuest(displayName) {
+  const dn = String(displayName ?? 'Guest').trim().slice(0, MAX_DISPLAY_NAME_LEN)
+  const user = {
+    id: state.nextId++,
+    username: `guest_${Date.now().toString(36)}`,
+    email: null,
+    passwordHash: null,
+    role: 'user',
+    displayName: dn,
+    avatarUrl: null,
+    bio: '',
+    locale: null,
+    preferredSubtitleLanguage: null,
+    preferredAudioLanguage: null,
+    defaultPlaybackQuality: null,
+    contentRatingPreference: null,
+    theme: null,
+    privacy: 'private',
+    twoFactorEnabled: false,
+    emailVerified: false,
+    emailVerifiedAt: null,
+    recoveryCodesRemaining: 0,
+    totpSecret: null,
+    totpEnabled: false,
+    recoveryCodes: null,
+    passkeys: [],
+    pinHash: null,
+    isGuest: true,
+    featureFlags: {},
+    activityLog: [],
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    lastLoginAt: null,
+  }
+  state.users.push(user)
+  await persist()
+  return sanitizeUser(user)
+}
+
+// ── Profile switching (AV-123) ─────────────────────────────────────────
+
+/** Switch active profile within a session. Returns the target user. */
+export async function switchProfile(currentUserId, targetUserId) {
+  const current = state.users.find((u) => u.id === Number(currentUserId))
+  const target = state.users.find((u) => u.id === Number(targetUserId))
+  if (!target) throw error('Target user not found', 404)
+  if (!current || current.id !== target.id) {
+    addActivity(target.id, 'profile_switched', { from: current?.id, to: target.id })
+  }
+  return sanitizeUser(target)
+}
+
+// ── Feature flags (AV-125) ─────────────────────────────────────────────
+
+/** Get feature flags for a user. */
+export function getFeatureFlags(id) {
+  const idx = findUserIndex(Number(id))
+  if (idx === -1) throw error('User not found', 404)
+  return { ...(state.users[idx].featureFlags ?? {}) }
+}
+
+/** Set feature flags for a user (admin or self). */
+export async function setFeatureFlags(id, flags, requestingUserId) {
+  const idx = findUserIndex(Number(id))
+  if (idx === -1) throw error('User not found', 404)
+  const requester = state.users.find((u) => u.id === Number(requestingUserId))
+  if (!requester || (requester.id !== Number(id) && requester.role !== 'admin')) {
+    throw error('Forbidden', 403)
+  }
+  if (typeof flags !== 'object' || Array.isArray(flags) || flags === null) {
+    throw error('Feature flags must be an object', 400)
+  }
+  state.users[idx].featureFlags = { ...flags }
+  state.users[idx].updatedAt = Date.now()
+  await persist()
+  addActivity(Number(id), 'feature_flags_updated')
+  return { featureFlags: state.users[idx].featureFlags }
+}
+
+// ── end remaining features ─────────────────────────────────────────────
 
 /**
  * Verify an email using the email verification token.

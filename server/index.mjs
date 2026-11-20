@@ -972,6 +972,122 @@ app.post(
       path: '/',
     })
     res.json({ user, session })
+  }),
+)
+
+/** GET /api/auth/activity — activity log for the current user (AV-117). */
+app.get(
+  '/api/auth/activity',
+  wrap(async (req, res) => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Authentication required' })
+      return
+    }
+    const limit = Number(req.query.limit ?? 50)
+    res.json({ activity: users.getActivityLog(req.user.id, limit) })
+  })
+),
+
+/** POST /api/auth/pin — set or update profile PIN (AV-124). */
+app.post(
+  '/api/auth/pin',
+  limitMutations,
+  wrap(async (req, res) => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Authentication required' })
+      return
+    }
+    const { password, pin } = req.body ?? {}
+    await users.setPin(req.user.id, password, pin)
+    res.json({ ok: true })
+  })
+),
+
+/** POST /api/auth/pin/verify — verify profile PIN (AV-124). */
+app.post(
+  '/api/auth/pin/verify',
+  limitMutations,
+  wrap(async (req, res) => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Authentication required' })
+      return
+    }
+    const { pin } = req.body ?? {}
+    const ok = await users.verifyPin(req.user.id, pin)
+    res.json({ ok })
+  })
+),
+
+/** DELETE /api/auth/pin — remove profile PIN (AV-124). */
+app.delete(
+  '/api/auth/pin',
+  limitMutations,
+  wrap(async (req, res) => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Authentication required' })
+      return
+    }
+    const { password } = req.body ?? {}
+    await users.removePin(req.user.id, password)
+    res.json({ ok: true })
+  })
+),
+
+/** POST /api/auth/guests — create a guest profile (AV-122). */
+app.post(
+  '/api/auth/guests',
+  limitMutations,
+  wrap(async (req, res) => {
+    if (!req.user || req.user.role !== 'admin') {
+      res.status(403).json({ error: 'Admin access required' })
+      return
+    }
+    const { displayName } = req.body ?? {}
+    const guest = await users.createGuest(displayName)
+    res.status(201).json({ user: guest })
+  })
+),
+
+/** POST /api/auth/switch-profile — switch active profile (AV-123). */
+app.post(
+  '/api/auth/switch-profile',
+  limitMutations,
+  wrap(async (req, res) => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Authentication required' })
+      return
+    }
+    const { targetUserId } = req.body ?? {}
+    const user = await users.switchProfile(req.user.id, Number(targetUserId))
+    res.json({ user })
+  })
+),
+
+/** GET /api/auth/feature-flags — get feature flags for current user (AV-125). */
+app.get(
+  '/api/auth/feature-flags',
+  wrap(async (req, res) => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Authentication required' })
+      return
+    }
+    res.json({ featureFlags: users.getFeatureFlags(req.user.id) })
+  })
+),
+
+/** PUT /api/auth/feature-flags — set feature flags for current user (AV-125). */
+app.put(
+  '/api/auth/feature-flags',
+  limitMutations,
+  wrap(async (req, res) => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Authentication required' })
+      return
+    }
+    const flags = req.body ?? {}
+    const result = await users.setFeatureFlags(req.user.id, flags, req.user.id)
+    res.json(result)
+
   })
 ),
 
