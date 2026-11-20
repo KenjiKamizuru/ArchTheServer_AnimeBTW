@@ -1,48 +1,44 @@
 # Continuation note — 2026-11-19
 
 **Status:** branch `arena/c8881487-archtheserver-animebtw`; working tree clean
-except TODO.md/CONTINUATION.md edits (not yet committed). AV-008 through AV-019
-are complete. Latest `npm run verify`: 412 tests across 15 files, typecheck and
-production build clean. TODO.md records 87/800 checked, with 11 partial items
+except TODO.md/CONTINUATION.md edits (not yet committed). AV-008 through AV-020
+are complete. Latest `npm run verify`: 428 tests across 16 files, typecheck and
+production build clean. TODO.md records 88/800 checked, with 11 partial items
 still open. Live provider responses, ffmpeg, browser E2E, and real
 upload/download I/O remain unavailable.
 
-**Completed this turn: AV-019 — expose a metadata freshness indicator on detail pages.**
+**Completed this turn: AV-020 — per-provider request quotas and backoff policies.**
+
+`server/rateLimit.mjs` (new):
+- `RateLimiter` with per-provider sliding-window quotas and exponential backoff.
+- `canProceed(provider)` gates requests on quota + cooldown and records the attempt against the provider's sliding window; returns `{ ok, reason, retryAfterMs }`.
+- `recordSuccess(provider)` clears backoff; `recordFailure(provider, statusCode)` applies exponential backoff for retryable outcomes (429, 5xx, or network errors with no status; non-retryable 4xx don't back off), capped at `maxMs`, and returns the delay.
+- `status(provider)`, `quotaInfo(provider)`, `reset(provider)` for inspection.
+- `RequestWindow` sliding window prunes expired timestamps on every `count(now)`/`record()`.
+- `rateLimiter` singleton with defaults: AniList 90 req/60s, IMDb 30 req/60s; backoff initial 500ms, max 30s, multiplier 2. Clock injectable (`now`) for deterministic tests.
 
 `src/types.ts`:
-- Added `refreshStatus?: RecordRefreshStatus` to the `MediaDetail` interface.
+- Added `ProviderQuota`, `BackoffConfig`, `ProviderQuotaCheck`, `ProviderRateStatus`, `ProviderQuotaInfo` types.
 
-`server/index.mjs`:
-- Imported `recordRefreshStatus` from `./catalog.mjs`.
-- The `/api/anime/:id` detail route now returns `refreshStatus: recordRefreshStatus(media)`.
+`server/anilist.mjs`:
+- Wired `rateLimiter` into `gql`: quota/cooldown gate returns 503 `PROVIDER_RATE_LIMITED` before calling upstream; 429/5xx responses record failure and sleep the backoff delay; successes clear backoff; network failures back off.
 
-`src/pages/AnimeDetail.tsx`:
-- Imported `RefreshCw` from lucide-react; added `const refreshStatus = detail.refreshStatus`.
-- Renders a "Metadata freshness" SectionCard showing a color-coded summary
-  (all current / N fields need refresh) plus per-field stale field name,
-  freshness state (stale/never_refreshed/unknown) and last-refreshed time.
-  Uses a local `refreshStatus` const to satisfy TypeScript property narrowing
-  inside JSX.
+`tests/rateLimit.test.mjs` (new): quotas/sliding-window expiry, cooldown, exponential backoff + cap, non-retryable 4xx, status/quotaInfo/reset, provider isolation.
 
-`tests/catalog.test.mjs`: added tests for all-fresh records, stale/never-refreshed
-flagging, entity-type TTLs (TV status 1h vs Movie status 7d), record non-mutation,
-fieldFreshness/isFieldStale agreement, and refreshPolicy category/max-age.
+**Honest gaps (not AV-020 scope, recorded for the next turn):**
+- Only the AniList adapter is wired to the rate limiter; IMDb and other adapters are not yet integrated.
+- No API surface exposes quota/backoff status to operators yet (could be a diagnostics endpoint).
 
-**Honest gaps (not AV-019 scope, recorded for the next turn):**
-- The freshness indicator is read-only; there is no UI/action to trigger a metadata refresh.
-- `lastRefreshedAt` is not retained through `server/store.mjs` bookmark sanitization
-  or `server/listStore.mjs`, so staleness is lost on bookmark round trips.
+**Next task:** AV-021 — Cache immutable metadata separately from rapidly changing airing data (split the existing `cache` in anilist.mjs or add a cache layer with different TTLs for immutable vs airing data).
 
-**Next task:** AV-020 — Add per-provider request quotas and backoff policies (built on the provider adapters in server/anilist.mjs and related; likely a rate-limiter/backoff module).
-
-Earlier committed work: AV-002 through AV-019. Related files touched across the series:
+Earlier committed work: AV-002 through AV-020. Related files touched across the series:
 `server/catalog.mjs`, `server/anilist.mjs`, `server/browse.mjs`, `server/detail.mjs`,
 `server/index.mjs`, `server/store.mjs`, `server/identifiers.mjs`,
-`server/duplicateDetection.mjs`, `src/types.ts`, `src/lib/api.ts`,
-`src/pages/AnimeDetail.tsx`, `src/pages/Browse.tsx`, `src/pages/Search.tsx`,
-`tests/catalog.test.mjs`, `tests/anilist.test.mjs`,
+`server/duplicateDetection.mjs`, `server/rateLimit.mjs` (new),
+`src/types.ts`, `src/lib/api.ts`, `src/pages/AnimeDetail.tsx`, `src/pages/Browse.tsx`,
+`src/pages/Search.tsx`, `tests/catalog.test.mjs`, `tests/anilist.test.mjs`,
 `tests/core-verification.test.mjs`, `tests/list-import.test.mjs`,
 `tests/duplicateDetection.test.mjs`, `tests/refresh-policy.test.mjs`,
-`tests/identifiers.test.mjs`, `tests/metadata-provenance.test.mjs`, `TODO.md`,
-`CONTINUATION.md`, `README.md`, `package.json`. `package-lock.json` is unchanged.
-`data/` is gitignored.
+`tests/rateLimit.test.mjs` (new), `tests/identifiers.test.mjs`,
+`tests/metadata-provenance.test.mjs`, `TODO.md`, `CONTINUATION.md`, `README.md`,
+`package.json`. `package-lock.json` is unchanged. `data/` is gitignored.

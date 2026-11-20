@@ -9,6 +9,7 @@ import { readResponseTextLimited, sanitizeCoverUrl, sanitizePublicHttpUrl } from
 import { parseBrowseFilters } from './browse.mjs'
 import { createAnimeRecord } from './catalog.mjs'
 import { remember } from './identifiers.mjs'
+import { rateLimiter } from './rateLimit.mjs'
 
 const ENDPOINT = 'https://graphql.anilist.co'
 const MAX_GQL_BYTES = 6 * 1024 * 1024
@@ -83,6 +84,20 @@ async function gql(query, variables) {
   let lastError = null
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
+      // Enforce the per-provider quota and backoff cooldown before calling
+      // upstream. A rate-limited provider is surfaced as a 503 so callers can
+      // distinguish it from a hard outage.
+      const proceed = rateLimiter.canProceed('anilist')
+      if (!proceed.ok) {
+        const error = new Error(
+          `AniList rate limit ${proceed.reason}; retry after ${Math.round(proceed.retryAfterMs / 1000)}s`,
+        )
+        error.status = 503
+        error.code = 'PROVIDER_RATE_LIMITED'
+        error.retryable = false
+        error.retryAfterMs = proceed.retryAfterMs
+        throw error
+      }
       const res = await fetch(ENDPOINT, {
         method: 'POST',
         headers: {
@@ -97,8 +112,11 @@ async function gql(query, variables) {
       })
       if (res.status === 429 || res.status >= 500) {
         await res.body?.cancel?.().catch(() => {})
+        // Apply exponential backoff and mark the provider as cooling down so
+        // subsequent callers back off too.
+        const backoffMs = rateLimiter.recordFailure('anilist', res.status)
         lastError = new Error(`AniList responded ${res.status}`)
-        await sleep(500 * (attempt + 1))
+        await sleep(Math.max(backoffMs, 500 * (attempt + 1)))
         continue
       }
       if (!res.ok) {
@@ -124,9 +142,15 @@ async function gql(query, variables) {
         error.retryable = false
         throw error
       }
+      rateLimiter.recordSuccess('anilist')
       return json.data
     } catch (err) {
       lastError = err
+      // Network-level failures (no HTTP status) are retryable: back off the
+      // provider so the next caller isn't immediately hammered again.
+      if (err?.status === undefined && err?.retryable !== false) {
+        rateLimiter.recordFailure('anilist', undefined)
+      }
       if (err?.retryable === false) break
       if (attempt < 2) await sleep(400 * (attempt + 1))
     }

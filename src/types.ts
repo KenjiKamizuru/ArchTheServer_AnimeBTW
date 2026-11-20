@@ -117,6 +117,37 @@ export interface RecordRefreshStatus {
   freshness: Record<string, FieldFreshness>
 }
 
+/** Per-provider quota: maximum requests allowed within a sliding time window. */
+export interface ProviderQuota {
+  maxRequests: number
+  windowMs: number
+}
+
+/** Exponential backoff configuration. */
+export interface BackoffConfig {
+  initialMs: number
+  maxMs: number
+  multiplier: number
+}
+
+/** Result of checking whether a provider request may proceed. */
+export interface ProviderQuotaCheck {
+  ok: boolean
+  reason: 'ok' | 'quota_exceeded' | 'cooling_down'
+  retryAfterMs: number
+}
+
+/** Current status of a provider. */
+export type ProviderRateStatus = 'ok' | 'quota_exceeded' | 'cooling_down' | 'unknown'
+
+/** Quota usage info for a provider. */
+export interface ProviderQuotaInfo {
+  used: number
+  maxRequests: number
+  windowMs: number
+  resetAt: number
+}
+
 export interface FieldMetadata {
   /** State of the canonical field value: known, unknown, unannounced, or not_applicable. */
   valueState: FieldValueState
