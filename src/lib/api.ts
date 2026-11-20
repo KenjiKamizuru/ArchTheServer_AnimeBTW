@@ -224,6 +224,26 @@ export interface SeasonComparisonResponse {
   sharedCount: number
 }
 
+export interface SeasonCalendarDay {
+  date: string
+  year: number
+  month: number
+  day: number
+  media: Media[]
+}
+
+export interface SeasonCalendarResponse {
+  season: string
+  year: number
+  total: number
+  returned: number
+  hasNextPage: boolean
+  media: Media[]
+  byDate: Record<string, Media[]>
+  dates: string[]
+  calendar: SeasonCalendarDay[]
+}
+
 interface CacheEntry {
   at: number
   data: unknown
@@ -276,6 +296,16 @@ export const api = {
     }
     const query = qs.toString()
     return get<SeasonComparisonResponse>(`/api/seasons/compare${query ? `?${query}` : ''}`)
+  },
+
+  seasonCalendar(params: { season?: string; year?: number; sort?: string; page?: number } = {}) {
+    const qs = new URLSearchParams()
+    if (params.season) qs.set('season', params.season)
+    if (params.year) qs.set('year', String(params.year))
+    if (params.sort) qs.set('sort', params.sort)
+    if (params.page && params.page > 1) qs.set('page', String(params.page))
+    const query = qs.toString()
+    return get<SeasonCalendarResponse>(`/api/season/calendar${query ? `?${query}` : ''}`)
   },
 
   browse(filters: Record<string, string | number | boolean | undefined | null>) {

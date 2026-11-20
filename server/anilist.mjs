@@ -447,6 +447,66 @@ export async function compareSeasons(seasons) {
   }
 }
 
+/**
+ * Calendar-style seasonal release overview. Fetches one season's media and
+ * groups titles with a known start date by calendar day, so a frontend can
+ * render a month-by-month release calendar. Returns all media sorted by start
+ * date plus a `byDate` map keyed by `YYYY-MM-DD` and a `calendar` array.
+ */
+/**
+ * Pure grouping of already-fetched media by start date, used by seasonCalendar.
+ * Returns media sorted by start date plus a `byDate` map keyed by `YYYY-MM-DD`,
+ * a sorted `dates` array, and a `calendar` array of day entries.
+ */
+export function groupMediaByStartDate(media) {
+  const dated = (media ?? []).filter((m) => m.startDate)
+  const byDate = {}
+  const dates = []
+  for (const m of dated) {
+    const { year: y, month: mo, day: d } = m.startDate
+    const key = `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+    if (!byDate[key]) {
+      byDate[key] = []
+      dates.push(key)
+    }
+    byDate[key].push(m)
+  }
+  dates.sort()
+  const calendar = dates.map((key) => ({
+    date: key,
+    year: Number(key.slice(0, 4)),
+    month: Number(key.slice(5, 7)),
+    day: Number(key.slice(8, 10)),
+    media: byDate[key].sort((a, b) => (b.score ?? 0) - (a.score ?? 0) || (b.popularity ?? 0) - (a.popularity ?? 0)),
+  }))
+  return {
+    media: dated.sort((a, b) => {
+      const da = a.startDate
+      const db = b.startDate
+      if (da.year !== db.year) return da.year - db.year
+      if (da.month !== db.month) return da.month - db.month
+      return da.day - db.day
+    }),
+    byDate,
+    dates,
+    calendar,
+  }
+}
+
+export async function seasonCalendar({ season, year, sort = 'popular', page = 1, perPage = 100 }) {
+  const { season: resolvedSeason, year: resolvedYear } = resolveSeason(season, year)
+  const data = await getSeason({ season: resolvedSeason, year: resolvedYear, sort, page, perPage })
+  const grouped = groupMediaByStartDate(data.media)
+  return {
+    season: resolvedSeason,
+    year: resolvedYear,
+    total: data.total,
+    returned: grouped.media.length,
+    hasNextPage: data.hasNextPage,
+    ...grouped,
+  }
+}
+
 /** Shows still releasing, sorted by their next broadcast (soonest first). */
 /**
  * Executes a browse query built by `browse.mjs` and applies the filters AniList

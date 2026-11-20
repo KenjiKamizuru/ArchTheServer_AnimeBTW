@@ -355,6 +355,18 @@ app.get(
   }),
 )
 
+// AV-043: calendar-style seasonal release overview — titles grouped by start date.
+app.get(
+  '/api/season/calendar',
+  wrap(async (req, res) => {
+    const { season, year } = anilist.resolveSeason(req.query.season, req.query.year)
+    const sort = anilist.resolveSort(req.query.sort)
+    const page = clamp(Number(req.query.page) || 1, 1, 25)
+    const data = await anilist.seasonCalendar({ season, year, sort, page })
+    res.json(data)
+  }),
+)
+
 // Rich browse: server-side filtering that AniList cannot express is applied
 // locally, and the response carries shareable params for the current filters.
 app.get(

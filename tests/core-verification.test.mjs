@@ -708,3 +708,36 @@ test('compareSeasons requires at least two distinct seasons (dedup)', async () =
     (err) => err.message === 'Season comparison requires at least two distinct seasons' && err.status === 400
   )
 })
+
+test('groupMediaByStartDate groups media by start date and sorts dates', () => {
+  const grouped = anilist.groupMediaByStartDate([
+    { id: 1, title: 'Jan 7', score: 80, format: 'TV', startDate: { year: 2023, month: 1, day: 7 } },
+    { id: 2, title: 'Jan 7 B', score: 70, format: 'TV', startDate: { year: 2023, month: 1, day: 7 } },
+    { id: 3, title: 'Jan 14', score: 90, format: 'TV', startDate: { year: 2023, month: 1, day: 14 } },
+    { id: 4, title: 'No date', score: 60, format: 'TV', startDate: null },
+    { id: 5, title: 'Feb 4', score: 85, format: 'TV', startDate: { year: 2023, month: 2, day: 4 } },
+  ])
+
+  assert.equal(grouped.media.length, 4) // excludes the one with no startDate
+  assert.deepEqual(grouped.dates, ['2023-01-07', '2023-01-14', '2023-02-04'])
+  assert.equal(grouped.byDate['2023-01-07'].length, 2)
+  assert.equal(grouped.byDate['2023-01-07'][0].id, 1) // higher score first
+  assert.equal(grouped.byDate['2023-01-07'][1].id, 2)
+  assert.equal(grouped.calendar.length, 3)
+  assert.equal(grouped.calendar[0].date, '2023-01-07')
+  assert.equal(grouped.calendar[0].day, 7)
+  assert.equal(grouped.calendar[0].media.length, 2)
+  // media sorted by start date
+  assert.equal(grouped.media[0].id, 1)
+  assert.equal(grouped.media[1].id, 2)
+  assert.equal(grouped.media[2].id, 3)
+  assert.equal(grouped.media[3].id, 5)
+})
+
+test('groupMediaByStartDate handles empty input', () => {
+  const grouped = anilist.groupMediaByStartDate([])
+  assert.deepEqual(grouped.media, [])
+  assert.deepEqual(grouped.dates, [])
+  assert.deepEqual(grouped.byDate, {})
+  assert.deepEqual(grouped.calendar, [])
+})

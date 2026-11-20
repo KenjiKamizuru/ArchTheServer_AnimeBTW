@@ -23,6 +23,7 @@ export const HomePage = lazyWithPrefetch(() => import('../pages/Home'))
 export const BrowsePage = lazyWithPrefetch(() => import('../pages/Browse'))
 export const SchedulePage = lazyWithPrefetch(() => import('../pages/Schedule'))
 export const SearchPage = lazyWithPrefetch(() => import('../pages/Search'))
+export const SeasonCalendarPage = lazyWithPrefetch(() => import('../pages/SeasonCalendar'))
 export const DownloadsPage = lazyWithPrefetch(() => import('../pages/Downloads'))
 export const DownloadedPage = lazyWithPrefetch(() => import('../pages/Downloaded'))
 export const BookmarksPage = lazyWithPrefetch(() => import('../pages/Bookmarks'))
@@ -46,6 +47,7 @@ const PREFETCHERS: Record<string, (() => Promise<unknown>)[]> = {
   '/studios': [StudiosPage.prefetch, StudioPage.prefetch],
   '/index': [IndexPage.prefetch],
   '/discover': [DiscoverPage.prefetch],
+  '/calendar': [SeasonCalendarPage.prefetch],
   '/compare': [SeasonComparePage.prefetch],
   '/anime': [AnimeDetailPage.prefetch],
 }

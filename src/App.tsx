@@ -16,6 +16,7 @@ import {
   IndexPage,
   SchedulePage,
   SearchPage,
+  SeasonCalendarPage,
   SeasonComparePage,
   SettingsPage,
   StudioPage,
@@ -51,6 +52,7 @@ export default function App() {
               <Route path="anime/:id" element={<LazyPage><AnimeDetailPage /></LazyPage>} />
               <Route path="discover" element={<LazyPage><DiscoverPage /></LazyPage>} />
               <Route path="compare" element={<LazyPage><SeasonComparePage /></LazyPage>} />
+              <Route path="calendar" element={<LazyPage><SeasonCalendarPage /></LazyPage>} />
               <Route path="schedule" element={<LazyPage><SchedulePage /></LazyPage>} />
               <Route path="studios" element={<LazyPage><StudiosPage /></LazyPage>} />
               <Route path="studios/:id" element={<LazyPage><StudioPage /></LazyPage>} />
