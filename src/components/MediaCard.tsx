@@ -217,6 +217,11 @@ export function MediaCard({
       <p className="truncate text-[11px] text-white/40">
         {formatMediaType(media.format)} · {formatSeason(media.season, media.seasonYear)}
       </p>
+      {media.matchReason && (
+        <p className="mt-0.5 truncate text-[10px] text-white/30">
+          {media.matchReason}
+        </p>
+      )}
     </div>
   )
 }

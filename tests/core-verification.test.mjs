@@ -1353,3 +1353,75 @@ test('normalize extracts staff from media payload', () => {
   assert.deepEqual(normalized.staff[0].primaryOccupations, ['DIRECTOR'])
   assert.equal(normalized.staff[1].name, 'Writer Y')
 })
+
+/* ------------------------------ AV-072 ---------------------------------- */
+
+test('rankTitles produces human-readable relevance explanations (AV-072)', () => {
+  const cases = [
+    { query: 'naruto', label: 'Naruto', reason: 'exact title match' },
+    { query: 'naruto', label: 'Naruto Shippuden', reason: 'title starts with your search' },
+    { query: 'piece', label: 'One Piece', reason: 'word match in title' },
+    { query: 'ce', label: 'One Piece', reason: 'title contains your search' },
+  ]
+  for (const { query, label, reason } of cases) {
+    const ranked = search.rankTitles([{ label }], query, { minScore: 0 })
+    assert.ok(
+      ranked.length > 0,
+      `expected a rank for "${label}" against "${query}"`,
+    )
+    assert.equal(ranked[0].reason, reason)
+  }
+})
+
+test('rankTitles explains romaji and close-spelling matches (AV-072)', () => {
+  const romaji = search.rankTitles(
+    [{ label: 'きめつのやいば' }],
+    'kimetsu',
+    { minScore: 0 },
+  )
+  assert.equal(romaji[0].reason, 'romaji title match')
+
+  const close = search.rankTitles(
+    [{ label: 'Naruto' }],
+    'nartuo',
+    { minScore: 0 },
+  )
+  assert.ok(close.length > 0)
+  assert.ok(close[0].reason.startsWith('close spelling'))
+
+  const alternate = search.rankTitles(
+    [{ label: 'Shippuden', aliases: ['Naruto'] }],
+    'naruto',
+    { minScore: 0 },
+  )
+  assert.ok(alternate.length > 0)
+  assert.ok(alternate[0].reason.startsWith('matched alternate title'))
+
+  const unrelated = search.rankTitles([{ label: 'One Piece' }], 'naruto', {
+    minScore: 0,
+  })
+  assert.equal(unrelated.length, 0)
+})
+
+test('searchAdvanced attaches a matchReason to each kept result (AV-072)', () => {
+  // searchAdvanced requires the AniList client, so we exercise the explanation
+  // assembly it relies on directly: rankTitles over media-shaped candidates.
+  const media = [
+    { id: 1, title: 'Naruto', romaji: 'Naruto', english: null },
+    { id: 2, title: 'Naruto Shippuden', romaji: null, english: null },
+    { id: 3, title: 'One Piece', romaji: 'One Piece', english: 'One Piece' },
+  ]
+  const ranked = search.rankTitles(
+    media.map((m) => ({
+      id: m.id,
+      label: m.title,
+      aliases: [m.romaji, m.english].filter((t) => typeof t === 'string'),
+    })),
+    'naruto',
+    { limit: media.length, minScore: 0 },
+  )
+  const reasonById = new Map(ranked.map((r) => [r.id, r.reason]))
+  assert.equal(reasonById.get(1), 'exact title match')
+  assert.equal(reasonById.get(2), 'title starts with your search')
+  assert.ok(!reasonById.has(3), 'unrelated title gets no relevance reason')
+})

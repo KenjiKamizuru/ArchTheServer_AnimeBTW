@@ -8,6 +8,7 @@
 import { readResponseTextLimited, sanitizeCoverUrl, sanitizePublicHttpUrl } from './security.mjs'
 import { parseBrowseFilters } from './browse.mjs'
 import { createAnimeRecord, computeCompletenessScore, recordRefreshStatus } from './catalog.mjs'
+import { rankTitles } from './search.mjs'
 import { remember } from './identifiers.mjs'
 import { rateLimiter } from './rateLimit.mjs'
 import { cachedImmutable, cachedAiring } from './metadataCache.mjs'
@@ -1032,6 +1033,26 @@ export async function searchAdvanced(rawQuery, page, searchModule) {
     } else {
       removed += 1
     }
+  }
+
+  // Attach a human-readable relevance explanation (AV-072): why this title
+  // matched the free-text query, e.g. "title contains your search", "romaji
+  // title match", "close spelling (1 character off)".
+  let reasonById = new Map()
+  if (text && kept.length) {
+    const ranked = searchModule.rankTitles(
+      kept.map((m) => ({
+        id: m.id,
+        label: m.title,
+        aliases: [m.romaji, m.english].filter((t) => typeof t === 'string'),
+      })),
+      text,
+      { limit: kept.length, minScore: 0 },
+    )
+    for (const entry of ranked) reasonById.set(entry.id, entry.reason)
+  }
+  for (const m of kept) {
+    if (reasonById.has(m.id)) m.matchReason = reasonById.get(m.id)
   }
 
   const correction =

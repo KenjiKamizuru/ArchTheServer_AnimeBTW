@@ -167,6 +167,8 @@ export interface Media {
   /** Present on canonical metadata responses; older filtered/bookmark records may omit it. */
   fieldMetadata?: Record<string, FieldMetadata>
   title: string
+  /** Populated on search results: human-readable relevance explanation (AV-072). */
+  matchReason?: string
   romaji: string | null
   english: string | null
   native: string | null
