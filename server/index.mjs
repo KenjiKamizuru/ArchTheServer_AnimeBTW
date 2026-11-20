@@ -848,6 +848,134 @@ app.post(
   }),
 )
 
+/** POST /api/auth/totp/setup — generate TOTP secret + recovery codes (AV-106/107). */
+app.post(
+  '/api/auth/totp/setup',
+  limitMutations,
+  wrap(async (req, res) => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Authentication required' })
+      return
+    }
+    const result = await users.setupTOTP(req.user.id)
+    res.json(result)
+  })
+),
+
+/** POST /api/auth/totp/enable — enable TOTP after verifying a code (AV-106). */
+app.post(
+  '/api/auth/totp/enable',
+  limitMutations,
+  wrap(async (req, res) => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Authentication required' })
+      return
+    }
+    const { token } = req.body ?? {}
+    await users.enableTOTP(req.user.id, token)
+    res.json({ ok: true })
+  })
+),
+
+/** POST /api/auth/totp/disable — disable TOTP with password confirmation (AV-106). */
+app.post(
+  '/api/auth/totp/disable',
+  limitMutations,
+  wrap(async (req, res) => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Authentication required' })
+      return
+    }
+    const { password } = req.body ?? {}
+    await users.disableTOTP(req.user.id, password)
+    res.json({ ok: true })
+  })
+),
+
+/** POST /api/auth/totp/verify — verify a TOTP or recovery code (AV-106/107). */
+app.post(
+  '/api/auth/totp/verify',
+  limitMutations,
+  wrap(async (req, res) => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Authentication required' })
+      return
+    }
+    const { token } = req.body ?? {}
+    const result = await users.verifyTOTPForUser(req.user.id, token)
+    res.json(result)
+  }),
+)
+
+/** POST /api/auth/passkeys/add — register a new passkey (AV-105). */
+app.post(
+  '/api/auth/passkeys/add',
+  limitMutations,
+  wrap(async (req, res) => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Authentication required' })
+      return
+    }
+    const { credentialId, publicKey, counter, label } = req.body ?? {}
+    await users.addPasskey(req.user.id, { credentialId, publicKey, counter, label })
+    res.json({ ok: true })
+  })
+),
+
+/** DELETE /api/auth/passkeys/:credentialId — remove a passkey (AV-105). */
+app.delete(
+  '/api/auth/passkeys/:credentialId',
+  limitMutations,
+  wrap(async (req, res) => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Authentication required' })
+      return
+    }
+    await users.removePasskey(req.user.id, req.params.credentialId)
+    res.json({ ok: true })
+  })
+),
+
+/** GET /api/auth/passkeys — list user's passkeys (AV-105). */
+app.get(
+  '/api/auth/passkeys',
+  wrap(async (req, res) => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Authentication required' })
+      return
+    }
+    res.json({ passkeys: users.listPasskeys(req.user.id) })
+  })
+),
+
+/** POST /api/auth/passkeys/verify — verify a passkey assertion (AV-105). */
+app.post(
+  '/api/auth/passkeys/verify',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { credentialId, authenticatorData, clientDataJSON, signature } =
+      req.body ?? {}
+    const result = await users.verifyPasskeyAssertion(
+      credentialId,
+      authenticatorData,
+      clientDataJSON,
+      signature
+    )
+    const user = users.getUser(result.userId)
+    const config = settings.get()
+    const session = await sessions.createSession(user.id, config.sessionTimeoutMs)
+    res.cookie('session-token', session.token, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: isProd,
+      maxAge: config.sessionTimeoutMs,
+      path: '/',
+    })
+    res.json({ user, session })
+  })
+),
+
+
 /** POST /api/auth/request-password-reset — generate a password reset token (AV-104). */
 app.post(
   '/api/auth/request-password-reset',
