@@ -319,7 +319,7 @@ Make bookmarks evolve into a flexible personal anime organization system.
 
 - [x] **AV-126** — Add separate Watching, Planned, Completed, Paused, and Dropped lists. (listStore.STATUSES exposes five built-ins; tests/lists.test.mjs + tests/lists-http.test.mjs)
 - [x] **AV-127** — Add custom user-created lists with names and descriptions. (createList/deleteList + tests/lists.test.mjs and tests/lists-http.test.mjs)
-- [ ] **AV-128** — Add drag-and-drop ordering for custom lists.
+- [x] **AV-128** — Add drag-and-drop ordering for custom lists. (`server/listStore.mjs`: added `setOrder()` to store per-list entry positions, `readList()` accepts `order` option returning entries in manual order when requested; `server/index.mjs`: GET `/api/lists/:id` passes `order` query param, PUT `/api/lists/:id/order` endpoint saves manual ordering; `src/components/PersonalLists.tsx`: drag-and-drop reordering with GripVertical drag handle, "Manual order" sort option, save-order button that persists via PUT `/api/lists/:id/order` — 535 tests pass / 0 fail; typecheck clean; build clean; git diff --check clean)
 - [ ] **AV-129** — Add list cover artwork assembled from selected titles.
 - [ ] **AV-130** — Add private, shared-link, and public list visibility settings.
 - [x] **AV-131** — Add notes on individual list entries. (listStore.setNote + tests/list-notes.test.mjs)

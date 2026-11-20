@@ -741,6 +741,7 @@ app.put(
     else await kv.remove(`notes:${id}`)
     res.json({ mediaId: id, note: payload?.note ?? '', updatedAt: payload?.updatedAt ?? null })
   }),
+)
 
 // Watch-order ordering notes (AV-084). Stored as a JSON map of related media
 // id -> user note, namespaced by the current media id.
@@ -867,9 +868,9 @@ app.get('/api/lists/:id/export', wrap(async (req, res) => {
   res.send(format === 'csv' ? exportListCsv(list) : exportListJson(list))
 }))
 app.get('/api/lists/:id', wrap(async (req, res) => {
-  const list = listStore.readList(req.params.id)
+  const list = listStore.readList(req.params.id, { order: String(req.query.order ?? 'added') })
   const sort = String(req.query.sort ?? 'added')
-  res.json({ ...list, entries: sortListEntries(list.entries, sort), sort })
+  res.json({ ...list, entries: list.order === 'manual' ? list.entries : sortListEntries(list.entries, sort), sort, order: list.order })
 }))
 app.delete('/api/lists/:id', limitMutations, wrap(async (req, res) => {
   const result = await listStore.deleteList(req.params.id)
@@ -886,6 +887,11 @@ app.put('/api/lists/:id/entries/:mediaId/rating', limitMutations, wrap(async (re
 }))
 app.put('/api/lists/:id/entries/:mediaId/note', limitMutations, wrap(async (req, res) => {
   res.json(await listStore.setNote(req.params.id, req.params.mediaId, req.body?.note))
+}))
+app.put('/api/lists/:id/order', limitMutations, wrap(async (req, res) => {
+  const result = await listStore.setOrder(req.params.id, req.body?.mediaIds)
+  markCatalogIndexDirty()
+  res.json(result)
 }))
 app.delete('/api/lists/:id/entries/:mediaId', limitMutations, wrap(async (req, res) => {
   const result = await listStore.remove(req.params.id, req.params.mediaId)

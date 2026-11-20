@@ -33,6 +33,7 @@ export async function init() {
       if (!media || media.id !== entry.mediaId || mediaIds.has(media.id) || (entry.status !== null && !STATUSES.includes(entry.status)) || !Array.isArray(entry.listIds) || entry.listIds.some((id) => !ids.has(id)) || new Set(entry.listIds).size !== entry.listIds.length || !Number.isFinite(entry.addedAt)) throw new Error('Invalid list entry')
       if (entry.notes !== undefined && (!Array.isArray(entry.notes) || entry.notes.length > MAX_LISTS + 1 || entry.notes.some((note) => !note || typeof note.listId !== 'string' || typeof note.text !== 'string' || note.text.length > 1000 || !((note.listId === `status:${entry.status}`) || entry.listIds.includes(note.listId))) || new Set(entry.notes.map((note) => note.listId)).size !== entry.notes.length)) throw new Error('Invalid entry notes')
       if (entry.ratings !== undefined && (!Array.isArray(entry.ratings) || entry.ratings.length > MAX_LISTS + 1 || entry.ratings.some((r) => !r || !((r.listId === `status:${entry.status}`) || entry.listIds.includes(r.listId)) || (r.priority !== null && (!Number.isInteger(r.priority) || r.priority < 1 || r.priority > 5)) || (r.rating !== null && (!Number.isInteger(r.rating) || r.rating < 1 || r.rating > 10))) || new Set(entry.ratings.map((r) => r.listId)).size !== entry.ratings.length)) throw new Error('Invalid entry ratings')
+      if (entry.positions !== undefined && (!Array.isArray(entry.positions) || entry.positions.length > MAX_LISTS + 1 || entry.positions.some((p) => !p || typeof p.listId !== 'string' || typeof p.position !== 'number' || !entry.listIds.includes(p.listId)) || new Set(entry.positions.map((p) => p.listId)).size !== entry.positions.length)) throw new Error('Invalid entry positions')
       mediaIds.add(media.id)
       entry.media = media
     }
@@ -64,10 +65,17 @@ function info(id) {
 function includes(entry, id) {
   return id.startsWith('status:') ? entry.status === id.slice(7) : entry.listIds.includes(id)
 }
-export function readList(id) {
+export function readList(id, { order = 'added' } = {}) {
   const meta = info(id)
-  const entries = state.entries.filter((item) => includes(item, id)).sort((a, b) => b.addedAt - a.addedAt).map(({ notes, ratings, ...item }) => ({ ...item, note: notes?.find((n) => n.listId === id)?.text ?? '', priority: ratings?.find((r) => r.listId === id)?.priority ?? null, rating: ratings?.find((r) => r.listId === id)?.rating ?? null }))
-  return { ...meta, count: entries.length, entries }
+  const entries = state.entries.filter((item) => includes(item, id)).map(({ notes, ratings, positions, ...item }) => ({ ...item, note: notes?.find((n) => n.listId === id)?.text ?? '', priority: ratings?.find((r) => r.listId === id)?.priority ?? null, rating: ratings?.find((r) => r.listId === id)?.rating ?? null, position: positions?.find((p) => p.listId === id)?.position ?? null }))
+  const ordered = order === 'manual'
+    ? [...entries].sort((a, b) => {
+        const pa = a.position ?? Number.MAX_SAFE_INTEGER
+        const pb = b.position ?? Number.MAX_SAFE_INTEGER
+        return pa - pb || a.mediaId - b.mediaId
+      })
+    : [...entries].sort((a, b) => b.addedAt - a.addedAt)
+  return { ...meta, count: ordered.length, entries: ordered }
 }
 export function summary() {
   return {
@@ -166,6 +174,31 @@ export async function setRating(id, rawId, patch) {
   if (next.priority !== null || next.rating !== null) entry.ratings.push(next)
   await persist()
   return { mediaId, priority: next.priority, rating: next.rating }
+}
+
+/**
+ * Sets a manual ordering for entries in a custom list. `mediaIds` is the
+ * desired order (all entries currently in the list). Returns the number of
+ * entries that received a position. Built-in status lists are not orderable.
+ */
+export async function setOrder(id, mediaIds) {
+  const list = info(id)
+  if (!list.custom) throw error('Built-in lists cannot be manually ordered', 400)
+  if (!Array.isArray(mediaIds) || !mediaIds.every((m) => Number.isInteger(m) && m > 0)) throw error('mediaIds must be an array of positive integers', 400)
+
+  const entries = state.entries.filter((item) => includes(item, id))
+  const entryIds = new Set(entries.map((item) => item.mediaId))
+  const providedIds = new Set(mediaIds)
+  if (entryIds.size !== providedIds.size || [...entryIds].some((id) => !providedIds.has(id))) throw error('mediaIds must match the entries currently in the list', 400)
+
+  // Assign positions 1..N in the requested order.
+  const positionById = new Map(mediaIds.map((mediaId, index) => [mediaId, index + 1]))
+  for (const entry of entries) {
+    entry.positions = (entry.positions ?? []).filter((p) => p.listId !== id)
+    entry.positions.push({ listId: id, position: positionById.get(entry.mediaId) })
+  }
+  await persist()
+  return { ordered: entries.length }
 }
 // Import into a new custom list. Existing titles keep their metadata and status;
 // imported notes/ratings belong only to the newly-created list.

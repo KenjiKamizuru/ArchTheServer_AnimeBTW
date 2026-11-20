@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { GripVertical } from 'lucide-react'
 import type { Media } from '../types'
 
 type ListSummary = { id: string; name: string; count: number; description?: string }
-type Entry = { mediaId: number; media: Media; status: string | null; note: string; priority: number | null; rating: number | null }
+type Entry = { mediaId: number; media: Media; status: string | null; note: string; priority: number | null; rating: number | null; position: number | null }
 type Overview = { statuses: ListSummary[]; lists: ListSummary[] }
 type List = ListSummary & { entries: Entry[]; custom: boolean }
 
@@ -43,11 +44,14 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
   const [busy, setBusy] = useState(false)
   const [revision, setRevision] = useState(0)
   const [pick, setPick] = useState<Entry | null>(null)
+  const [dragSourceIndex, setDragSourceIndex] = useState<number | null>(null)
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
   useEffect(() => {
     let cancelled = false
     setList(null)
     setPick(null)
-    Promise.all([request<Overview>('/api/lists'), request<List>(`/api/lists/${encodeURIComponent(active)}?sort=${encodeURIComponent(sort)}`)])
+    const order = sort === 'manual' ? 'manual' : 'added'
+    Promise.all([request<Overview>('/api/lists'), request<List>(`/api/lists/${encodeURIComponent(active)}?sort=${encodeURIComponent(sort)}&order=${encodeURIComponent(order)}`)])
       .then(([summary, selected]) => { if (!cancelled) { setOverview(summary); setList(selected); setError('') } })
       .catch((err: Error) => { if (!cancelled) setError(err.message) })
     return () => { cancelled = true }
@@ -57,6 +61,51 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
     try { await action(); setRevision((value) => value + 1) }
     catch (err) { setError(err instanceof Error ? err.message : 'Could not update lists') }
     finally { setBusy(false) }
+  }
+
+  async function saveOrder() {
+    if (!list?.custom || !list.entries.length) return
+    const mediaIds = list.entries.map((e) => e.mediaId)
+    setBusy(true)
+    try {
+      await request(`/api/lists/${encodeURIComponent(active)}/order`, 'PUT', { mediaIds })
+      setRevision((value) => value + 1)
+      setMessage('Order saved')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save order')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function handleDragStart(index: number) {
+    setDragSourceIndex(index)
+    setDragOverIndex(index)
+  }
+
+  function handleDragOver(event: React.DragEvent, index: number) {
+    event.preventDefault()
+    if (dragOverIndex !== index) setDragOverIndex(index)
+  }
+
+  function handleDragEnd() {
+    setDragSourceIndex(null)
+    setDragOverIndex(null)
+  }
+
+  function handleDrop() {
+    if (dragSourceIndex === null || dragOverIndex === null || dragSourceIndex === dragOverIndex || !list) {
+      setDragSourceIndex(null)
+      setDragOverIndex(null)
+      return
+    }
+    const entries = [...list.entries]
+    const [moved] = entries.splice(dragSourceIndex, 1)
+    entries.splice(dragOverIndex, 0, moved)
+    setList({ ...list, entries })
+    setDragSourceIndex(null)
+    setDragOverIndex(null)
+    void saveOrder()
   }
   const button = 'rounded-lg bg-white/10 px-3 py-2 text-xs text-white hover:bg-white/20 disabled:opacity-50'
   const input = 'rounded-lg bg-ink-900 px-3 py-2 text-sm text-white ring-1 ring-white/10'
@@ -133,7 +182,9 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
             <option value="title">Title</option>
             <option value="score">Highest score</option>
             <option value="year">Newest season</option>
+            {list?.custom && <option value="manual">Manual order</option>}
           </select>
+          {list?.custom && sort === 'manual' && <button type="button" className="rounded-lg bg-white/10 px-3 py-2 text-xs text-white hover:bg-white/20 disabled:opacity-50" disabled={busy} onClick={saveOrder}>Save order</button>}
         </div>
         {pick && <p role="status" className="mt-3 text-sm text-white/70">Try <Link className="text-white underline" to={`/anime/${pick.mediaId}`}>{pick.media.title}</Link></p>}
         <form className="mt-3 flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); const media = bookmarks.find((item) => String(item.id) === bookmarkId); if (media) void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}/entries`, 'POST', { media }); setBookmarkId('') }) }}>
@@ -145,35 +196,48 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
           <button className={button} disabled={busy || !bookmarkId}>Add to list</button>
         </form>
         {list.entries.length === 0 ? <p className="mt-3 text-sm text-white/50">No titles in this list yet.</p> : <ul className="mt-3 divide-y divide-white/10">
-          {list.entries.map((entry) => <li key={entry.mediaId} className="flex flex-wrap items-center gap-2 py-2">
-            <Link className="min-w-0 flex-1 text-sm text-white hover:underline" to={`/anime/${entry.mediaId}`}>{entry.media.title}</Link>
-            <label className="sr-only" htmlFor={`status-${entry.mediaId}`}>Status for {entry.media.title}</label>
-            <select id={`status-${entry.mediaId}`} className={input} disabled={busy} value={entry.status ?? ''} onChange={(e) => {
-              const status = e.target.value
-              if (status) void perform(async () => { await request(`/api/lists/${encodeURIComponent(`status:${status}`)}/entries`, 'POST', { media: entry.media }) })
-            }}>
-              {!entry.status && <option value="">No status</option>}
-              {overview?.statuses.map((status) => <option key={status.id} value={status.id.slice(7)}>{status.name}</option>)}
-            </select>
-            <button type="button" className={button} disabled={busy} aria-label={`Remove ${entry.media.title} from ${list.name}`} onClick={() => void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}/entries/${entry.mediaId}`, 'DELETE') })}>Remove</button>
-            <label className="sr-only" htmlFor={`priority-${entry.mediaId}`}>Priority for {entry.media.title}</label>
-            <select id={`priority-${entry.mediaId}`} className={input} disabled={busy} value={entry.priority ?? ''} onChange={(event) => {
-              const priority = event.target.value ? Number(event.target.value) : null
-              void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}/entries/${entry.mediaId}/rating`, 'PUT', { priority }) })
-            }}>
-              <option value="">No priority</option>
-              {[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>Priority {value}</option>)}
-            </select>
-            <label className="sr-only" htmlFor={`rating-${entry.mediaId}`}>Personal rating for {entry.media.title}</label>
-            <select id={`rating-${entry.mediaId}`} className={input} disabled={busy} value={entry.rating ?? ''} onChange={(event) => {
-              const rating = event.target.value ? Number(event.target.value) : null
-              void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}/entries/${entry.mediaId}/rating`, 'PUT', { rating }) })
-            }}>
-              <option value="">Unrated</option>
-              {Array.from({ length: 10 }, (_, i) => i + 1).map((value) => <option key={value} value={value}>{value}/10</option>)}
-            </select>
-            <EntryNote entry={entry} listId={active} busy={busy} onSave={(note) => void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}/entries/${entry.mediaId}/note`, 'PUT', { note }) })} />
-          </li>)}
+          {list.entries.map((entry, index) => {
+            const isManual = sort === 'manual'
+            return (
+              <li key={entry.mediaId}
+                  className="flex flex-wrap items-center gap-2 py-2 rounded-lg cursor-move transition-colors hover:bg-white/5"
+                  draggable={isManual}
+                  onDragStart={() => handleDragStart(index)}
+                  onDragOver={(event) => handleDragOver(event, index)}
+                  onDragEnd={handleDragEnd}
+                  onDrop={handleDrop}
+              >
+                {isManual && <GripVertical size={11} className="text-white/30 shrink-0 mr-1" />}
+                <Link className="min-w-0 flex-1 text-sm text-white hover:underline" to={`/anime/${entry.mediaId}`}>{entry.media.title}</Link>
+                <label className="sr-only" htmlFor={`status-${entry.mediaId}`}>Status for {entry.media.title}</label>
+                <select id={`status-${entry.mediaId}`} className={input} disabled={busy} value={entry.status ?? ''} onChange={(e) => {
+                  const status = e.target.value
+                  if (status) void perform(async () => { await request(`/api/lists/${encodeURIComponent(`status:${status}`)}/entries`, 'POST', { media: entry.media }) })
+                }}>
+                  {!entry.status && <option value="">No status</option>}
+                  {overview?.statuses.map((status) => <option key={status.id} value={status.id.slice(7)}>{status.name}</option>)}
+                </select>
+                <button type="button" className={button} disabled={busy} aria-label={`Remove ${entry.media.title} from ${list.name}`} onClick={() => void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}/entries/${entry.mediaId}`, 'DELETE') })}>Remove</button>
+                <label className="sr-only" htmlFor={`priority-${entry.mediaId}`}>Priority for {entry.media.title}</label>
+                <select id={`priority-${entry.mediaId}`} className={input} disabled={busy} value={entry.priority ?? ''} onChange={(event) => {
+                  const priority = event.target.value ? Number(event.target.value) : null
+                  void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}/entries/${entry.mediaId}/rating`, 'PUT', { priority }) })
+                }}>
+                  <option value="">No priority</option>
+                  {[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>Priority {value}</option>)}
+                </select>
+                <label className="sr-only" htmlFor={`rating-${entry.mediaId}`}>Personal rating for {entry.media.title}</label>
+                <select id={`rating-${entry.mediaId}`} className={input} disabled={busy} value={entry.rating ?? ''} onChange={(event) => {
+                  const rating = event.target.value ? Number(event.target.value) : null
+                  void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}/entries/${entry.mediaId}/rating`, 'PUT', { rating }) })
+                }}>
+                  <option value="">Unrated</option>
+                  {Array.from({ length: 10 }, (_, i) => i + 1).map((value) => <option key={value} value={value}>{value}/10</option>)}
+                </select>
+                <EntryNote entry={entry} listId={active} busy={busy} onSave={(note) => void perform(async () => { await request(`/api/lists/${encodeURIComponent(active)}/entries/${entry.mediaId}/note`, 'PUT', { note }) })} />
+              </li>
+            )
+          })}
         </ul>}
       </div>}
     </section>
