@@ -18,6 +18,7 @@ import * as playback from '../server/playback.mjs'
 import * as library from '../server/library.mjs'
 import * as anilist from '../server/anilist.mjs'
 import * as catalog from '../server/catalog.mjs'
+import * as browsePresets from '../src/lib/browsePresets.ts'
 
 /* ------------------------------ AV-001 ---------------------------------- */
 
@@ -740,4 +741,92 @@ test('groupMediaByStartDate handles empty input', () => {
   assert.deepEqual(grouped.dates, [])
   assert.deepEqual(grouped.byDate, {})
   assert.deepEqual(grouped.calendar, [])
+})
+
+/* ------------------------------ AV-049 ---------------------------------- */
+
+function withLocalStore(store, fn) {
+  const orig = globalThis.localStorage
+  globalThis.localStorage = {
+    getItem: (k) => store[k] ?? null,
+    setItem: (k, v) => { store[k] = v },
+    removeItem: (k) => { delete store[k] },
+    clear: () => { Object.keys(store).forEach((key) => delete store[key]) },
+  }
+  try {
+    fn()
+  } finally {
+    globalThis.localStorage = orig
+  }
+}
+
+test('browsePresets readPresets returns empty array when nothing stored', () => {
+  const store = {}
+  let result = null
+  withLocalStore(store, () => { result = browsePresets.readPresets() })
+  assert.deepEqual(result, [])
+})
+
+test('browsePresets writePresets then readPresets round trip', () => {
+  const store = {}
+  const presets = [
+    { id: 'p1', name: 'Action 2020s', query: 'formats=TV&genres=Action&yearMin=2020&yearMax=2029', createdAt: 1000 },
+  ]
+  withLocalStore(store, () => {
+    browsePresets.writePresets(presets)
+    const read = browsePresets.readPresets()
+    assert.deepEqual(read, presets)
+    assert.equal(store[browsePresets.STORAGE_KEY], JSON.stringify(presets))
+  })
+})
+
+test('browsePresets readPresets validates and drops invalid entries', () => {
+  const store = {}
+  const raw = JSON.stringify([
+    { id: 'p1', name: 'Valid', query: 'formats=TV', createdAt: 1000 },
+    { name: 'No id', query: 'formats=TV', createdAt: 2000 },
+    { id: 'p3', name: '', query: 'formats=TV', createdAt: 3000 },
+    { id: 'p4', name: 'Missing query', createdAt: 4000 },
+    { id: 'p5', name: 'No createdAt', query: 'formats=TV' },
+    'not an object',
+  ])
+  store[browsePresets.STORAGE_KEY] = raw
+  let result = null
+  withLocalStore(store, () => { result = browsePresets.readPresets() })
+  // p2 has no id, p4 has no query, p5 has no createdAt, last is not an object.
+  // p3 has an empty name but typeof '' === 'string' so it passes validation.
+  assert.deepEqual(result, [
+    { id: 'p1', name: 'Valid', query: 'formats=TV', createdAt: 1000 },
+    { id: 'p3', name: '', query: 'formats=TV', createdAt: 3000 },
+  ])
+})
+
+test('browsePresets readPresets ignores malformed JSON', () => {
+  const store = {}
+  store[browsePresets.STORAGE_KEY] = '{not valid json'
+  let result = null
+  withLocalStore(store, () => { result = browsePresets.readPresets() })
+  assert.deepEqual(result, [])
+})
+
+test('browsePresets writePresets caps at MAX_PRESETS', () => {
+  const store = {}
+  // Write newest first so index 0 is Preset 39.
+  const many = Array.from({ length: 40 }, (_, i) => ({
+    id: `p${39 - i}`,
+    name: `Preset ${39 - i}`,
+    query: `formats=TV&page=${39 - i}`,
+    createdAt: 39 - i,
+  }))
+  withLocalStore(store, () => {
+    browsePresets.writePresets(many)
+    const read = browsePresets.readPresets()
+    assert.equal(read.length, browsePresets.MAX_PRESETS)
+    assert.equal(read[0].name, 'Preset 39')
+    assert.equal(read[browsePresets.MAX_PRESETS - 1].name, 'Preset 10')
+  })
+})
+
+test('browsePresets MAX_PRESETS is a positive integer', () => {
+  assert.ok(Number.isInteger(browsePresets.MAX_PRESETS) && browsePresets.MAX_PRESETS > 0)
 })
