@@ -286,7 +286,7 @@ server/security.mjs password hashing, auth routes in server/index.mjs).
 Items below marked [x] are implemented via the auth endpoints; remaining
 items need frontend UI or additional backend work.
 
-- [x] **AV-101** — Add optional account registration for multi-user installations. (POST /api/auth/register; settings.allowRegistration gates registration)
+- [x] **AV-101** — Add optional account registration for multi-user installations. (POST /api/auth/register; settings.allowRegistration gates registration; admin bootstrap via ANIMEVAULT_ADMIN_USERNAME + ANIMEVAULT_ADMIN_PASSWORD_HASH env vars with sha256 password verification)
 - [x] **AV-102** — Add secure sign-in and sign-out flows. (POST /api/auth/login creates session + cookie; POST /api/auth/logout destroys session)
 - [x] **AV-103** — Add email verification for installations that enable email accounts. (POST /api/auth/verify-email; settings.requireEmailVerification)
 - [x] **AV-104** — Add password reset with single-use expiring tokens. (POST /api/auth/request-password-reset, POST /api/auth/reset-password; 1-hour token expiry)
