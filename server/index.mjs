@@ -604,6 +604,15 @@ app.get(
   }),
 )
 
+// AV-025: admin metadata inspector — compare raw provider payload against the
+// normalized catalog record for a single media id.
+app.get(
+  '/api/admin/metadata/:id',
+  wrap(async (req, res) => {
+    res.json(await anilist.getMediaInspection(req.params.id))
+  }),
+)
+
 // Per-anime private notes (AV-099). Notes live in the settings store so they
 // survive restarts without a database, and are namespaced by media id.
 app.get(

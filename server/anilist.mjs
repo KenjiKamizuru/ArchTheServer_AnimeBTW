@@ -7,7 +7,7 @@
 
 import { readResponseTextLimited, sanitizeCoverUrl, sanitizePublicHttpUrl } from './security.mjs'
 import { parseBrowseFilters } from './browse.mjs'
-import { createAnimeRecord } from './catalog.mjs'
+import { createAnimeRecord, computeCompletenessScore, recordRefreshStatus } from './catalog.mjs'
 import { remember } from './identifiers.mjs'
 import { rateLimiter } from './rateLimit.mjs'
 import { cachedImmutable, cachedAiring } from './metadataCache.mjs'
@@ -204,7 +204,12 @@ export function extractExternalIds(media) {
   }
 }
 
-function normalize(media) {
+/**
+ * Normalize a raw AniList Media node into a canonical catalog record.
+ * Exported so admin diagnostics and the metadata inspector can transform a
+ * provider response without re-fetching it.
+ */
+export function normalize(media) {
   if (!media) return null
   const links = (media.externalLinks ?? [])
     .map((l) => {
@@ -831,6 +836,56 @@ export async function searchAdvanced(rawQuery, page, searchModule) {
   }
 }
 
+/**
+ * AniList detail query used by both the public detail endpoint and the admin
+ * metadata inspector. Keeping it in one place guarantees the inspector sees
+ * exactly the same raw payload the detail page normalizes.
+ */
+export const DETAIL_QUERY = `query ($id: Int) {
+  Media(id: $id, type: ANIME) {
+    ${MEDIA_FIELDS}
+    trailer { id site }
+    streamingEpisodes { title thumbnail url site }
+    stats { scoreDistribution { score amount } }
+    rankings { rank type context year season allTime }
+    characters(perPage: 12, sort: [ROLE, RELEVANCE, ID]) {
+      edges {
+        role
+        node { id name { full native } image { large } siteUrl }
+        voiceActors(language: JAPANESE, sort: [RELEVANCE, ID]) {
+          id name { full native } image { large } languageV2 siteUrl
+        }
+      }
+    }
+    staff(perPage: 10, sort: [RELEVANCE, ID]) {
+      edges {
+        role
+        node { id name { full native } image { large } siteUrl primaryOccupations }
+      }
+    }
+    relations {
+      edges {
+        relationType
+        node {
+          id
+          type
+          format
+          status
+          episodes
+          chapters
+          averageScore
+          season
+          seasonYear
+          startDate { year month day }
+          title { romaji english native }
+          coverImage { large extraLarge }
+          nextAiringEpisode { episode airingAt }
+        }
+      }
+    }
+  }
+}`
+
 export async function getDetail(id) {
   const numeric = Number(id)
   if (!Number.isInteger(numeric) || numeric <= 0) {
@@ -838,53 +893,7 @@ export async function getDetail(id) {
   }
   const key = `detail:${numeric}`
   return cachedImmutable(key, async () => {
-    const data = await gql(
-      `query ($id: Int) {
-        Media(id: $id, type: ANIME) {
-          ${MEDIA_FIELDS}
-          trailer { id site }
-          streamingEpisodes { title thumbnail url site }
-          stats { scoreDistribution { score amount } }
-          rankings { rank type context year season allTime }
-          characters(perPage: 12, sort: [ROLE, RELEVANCE, ID]) {
-            edges {
-              role
-              node { id name { full native } image { large } siteUrl }
-              voiceActors(language: JAPANESE, sort: [RELEVANCE, ID]) {
-                id name { full native } image { large } languageV2 siteUrl
-              }
-            }
-          }
-          staff(perPage: 10, sort: [RELEVANCE, ID]) {
-            edges {
-              role
-              node { id name { full native } image { large } siteUrl primaryOccupations }
-            }
-          }
-          relations {
-            edges {
-              relationType
-              node {
-                id
-                type
-                format
-                status
-                episodes
-                chapters
-                averageScore
-                season
-                seasonYear
-                startDate { year month day }
-                title { romaji english native }
-                coverImage { large extraLarge }
-                nextAiringEpisode { episode airingAt }
-              }
-            }
-          }
-        }
-      }`,
-      { id: numeric },
-    )
+    const data = await gql(DETAIL_QUERY, { id: numeric })
     const base = normalize(data.Media)
     const relationEdges = (data.Media.relations?.edges ?? []).map((edge) => ({
       relationType: edge?.relationType,
@@ -1011,6 +1020,28 @@ export async function getDetail(id) {
         .filter(Boolean),
     }
   })
+}
+
+/**
+ * Admin metadata inspection: fetch the raw AniList Media node and its normalized
+ * catalog record for a single media id. Returns both so operators can compare
+ * provider payload against the canonical store shape. Never mutates input.
+ */
+export async function getMediaInspection(id) {
+  const numeric = Number(id)
+  if (!Number.isInteger(numeric) || numeric <= 0) {
+    throw Object.assign(new Error('Invalid anime id'), { status: 400 })
+  }
+  const data = await gql(DETAIL_QUERY, { id: numeric })
+  const raw = data.Media ?? null
+  const normalized = raw !== null ? normalize(raw) : null
+  return {
+    id: numeric,
+    raw,
+    normalized,
+    completenessScore: normalized ? computeCompletenessScore(normalized) : null,
+    refreshStatus: normalized ? recordRefreshStatus(normalized) : null,
+  }
 }
 
 /** Batch lookup (no synopsis/trailer) — used to decorate local library files. */
