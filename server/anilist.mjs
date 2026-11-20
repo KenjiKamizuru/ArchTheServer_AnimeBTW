@@ -240,6 +240,28 @@ function normalize(media) {
     native: media.title?.native ?? null,
     cover: sanitizeCoverUrl(media.coverImage?.extraLarge ?? media.coverImage?.large ?? null),
     banner: sanitizeCoverUrl(media.bannerImage ?? null),
+    artwork: [
+      {
+        source: 'anilist',
+        url: media.coverImage?.extraLarge ?? media.coverImage?.large ?? null,
+        kind: 'poster',
+        width: null,
+        height: null,
+        attribution: 'AniList',
+      },
+      ...(media.bannerImage
+        ? [
+            {
+              source: 'anilist',
+              url: media.bannerImage,
+              kind: 'banner',
+              width: null,
+              height: null,
+              attribution: 'AniList',
+            },
+          ]
+        : []),
+    ],
     color,
     description: plainText(media.description),
     episodes: media.episodes ?? null,

@@ -161,6 +161,60 @@ test('default studios array', () => assert.deepEqual(basic().studios, []))
 test('default organizations array', () => assert.deepEqual(basic().organizations, []))
 test('default links array', () => assert.deepEqual(basic().links, []))
 test('default streaming array', () => assert.deepEqual(basic().streams, []))
+test('default artwork is an empty array when no cover or banner is supplied', () => {
+  assert.deepEqual(basic().artwork, [])
+})
+test('artwork derives poster and banner variants from cover and banner', () => {
+  const record = createAnimeRecord({
+    id: 3,
+    cover: 'https://example.com/cover.jpg',
+    banner: 'https://example.com/banner.jpg',
+    metadataSource: 'anilist',
+  })
+  assert.deepEqual(record.artwork, [
+    { source: 'anilist', url: 'https://example.com/cover.jpg', kind: 'poster', width: null, height: null, attribution: null },
+    { source: 'anilist', url: 'https://example.com/banner.jpg', kind: 'banner', width: null, height: null, attribution: null },
+  ])
+})
+test('provider-supplied artwork variants keep source, dimensions and attribution', () => {
+  const record = createAnimeRecord({
+    id: 4,
+    metadataSource: 'anilist',
+    artwork: [
+      { source: 'imdb', url: 'https://example.com/poster.jpg', kind: 'poster', width: 1000, height: 1500, attribution: 'IMDb' },
+      { source: 'local', url: 'https://example.com/banner.jpg', kind: 'banner', width: 2000, height: 600, attribution: 'Local scan' },
+    ],
+  })
+  assert.deepEqual(record.artwork, [
+    { source: 'imdb', url: 'https://example.com/poster.jpg', kind: 'poster', width: 1000, height: 1500, attribution: 'IMDb' },
+    { source: 'local', url: 'https://example.com/banner.jpg', kind: 'banner', width: 2000, height: 600, attribution: 'Local scan' },
+  ])
+})
+test('artwork rejects unsafe URLs and non-object variants', () => {
+  const record = createAnimeRecord({
+    id: 5,
+    metadataSource: 'anilist',
+    artwork: [
+      { source: 'imdb', url: 'javascript:alert(1)', kind: 'poster' },
+      { source: 'imdb', url: 'http://example.com/cover.jpg', kind: 'poster' },
+      'not-an-object',
+      null,
+      { source: 'imdb', url: 'https://example.com/valid.jpg', kind: 'poster', width: -10, height: null },
+    ],
+  })
+  assert.deepEqual(record.artwork, [
+    { source: 'imdb', url: 'https://example.com/valid.jpg', kind: 'poster', width: null, height: null, attribution: null },
+  ])
+})
+test('artwork caps the number of retained variants', () => {
+  const variants = Array.from({ length: 25 }, (_, i) => ({
+    source: 'imdb',
+    url: `https://example.com/v${i}.jpg`,
+    kind: 'poster',
+  }))
+  const record = createAnimeRecord({ id: 6, metadataSource: 'anilist', artwork: variants })
+  assert.equal(record.artwork.length, 16)
+})
 test('default start and end dates are unknown', () => {
   assert.equal(basic().startDate, null)
   assert.equal(basic().endDate, null)

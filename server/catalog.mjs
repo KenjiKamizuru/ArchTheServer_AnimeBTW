@@ -18,7 +18,7 @@ import { sanitizePublicHttpUrl } from './security.mjs'
  * value. The factory supplies stable defaults and copies collections.
  */
 export const CATALOG_METADATA_FIELDS = Object.freeze([
-  'title', 'romaji', 'english', 'native', 'cover', 'banner', 'color', 'description',
+  'title', 'romaji', 'english', 'native', 'cover', 'banner', 'artwork', 'color', 'description',
   'episodes', 'airedEpisodes', 'duration', 'status', 'format', 'season', 'seasonYear', 'startDate', 'endDate',
   'score', 'providerScores', 'popularity', 'favourites', 'genres', 'genreEntities', 'tags', 'source', 'countryOfOrigin',
   'originalLanguage', 'ageRatings', 'nextEpisode', 'studios', 'organizations', 'links', 'streams', 'anidb', 'anidbSearch', 'siteUrl',
@@ -441,6 +441,41 @@ function normalizeMetadataSource(raw) {
   return /^[a-z0-9][a-z0-9._-]{0,63}$/.test(source) ? source : null
 }
 
+const ARTWORK_KINDS = new Set(['poster', 'banner', 'icon', 'still', 'logo'])
+
+// Maximum artwork variants retained per record; keeps the catalog record bounded.
+const MAX_ARTWORK_VARIANTS = 16
+
+function normalizeArtworkDimension(raw) {
+  return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 && raw <= 100_000
+    ? Math.floor(raw)
+    : null
+}
+
+/**
+ * Normalize a single artwork variant into { source, url, kind, width, height,
+ * attribution }. Returns null when the URL is missing or unsafe. Unknown
+ * dimensions/attribution are preserved as null rather than guessed.
+ */
+function normalizeArtworkVariant(raw, defaultSource) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const source = normalizeMetadataSource(raw.source ?? defaultSource) ?? 'unknown'
+  const url = sanitizePublicHttpUrl(raw.url, { httpsOnly: true, maxLen: 512 })
+  if (!url) return null
+  const kind =
+    typeof raw.kind === 'string' && ARTWORK_KINDS.has(raw.kind) ? raw.kind : 'poster'
+  const attribution =
+    typeof raw.attribution === 'string' ? raw.attribution.trim() || null : null
+  return {
+    source,
+    url,
+    kind,
+    width: normalizeArtworkDimension(raw.width),
+    height: normalizeArtworkDimension(raw.height),
+    attribution,
+  }
+}
+
 function normalizeRefreshTime(raw) {
   if (raw === null || raw === undefined || raw === '') return null
   let millis
@@ -670,7 +705,7 @@ export function applyManualCorrection(record, field, correction) {
 /** Catalog fields grouped by how quickly their data goes stale. */
 const REFRESH_CATEGORIES = {
   identity: [
-    'title', 'romaji', 'english', 'native', 'cover', 'banner', 'color', 'source',
+    'title', 'romaji', 'english', 'native', 'cover', 'banner', 'artwork', 'color', 'source',
     'countryOfOrigin', 'originalLanguage', 'siteUrl',
   ],
   airing: ['status', 'format', 'season', 'seasonYear', 'startDate', 'endDate',
@@ -849,6 +884,22 @@ export function createAnimeRecord(input) {
   const studios = Array.isArray(input.studios)
     ? input.studios.filter((name) => typeof name === 'string')
     : organizations.filter((organization) => organization.kind === 'studio').map((organization) => organization.name)
+  const defaultSource = normalizeMetadataSource(input.metadataSource ?? 'unknown') ?? 'unknown'
+  const providerArtwork = Array.isArray(input.artwork) ? input.artwork : []
+  let artwork = providerArtwork
+    .map((variant) => normalizeArtworkVariant(variant, defaultSource))
+    .filter((variant) => variant !== null)
+    .slice(0, MAX_ARTWORK_VARIANTS)
+  if (artwork.length === 0) {
+    const derived = []
+    if (typeof input.cover === 'string' && input.cover) {
+      derived.push(normalizeArtworkVariant({ source: defaultSource, url: input.cover, kind: 'poster' }, defaultSource))
+    }
+    if (typeof input.banner === 'string' && input.banner && input.banner !== input.cover) {
+      derived.push(normalizeArtworkVariant({ source: defaultSource, url: input.banner, kind: 'banner' }, defaultSource))
+    }
+    artwork = derived.filter((variant) => variant !== null)
+  }
   const record = {
     id: input.id,
     title: input.title || `Anime #${input.id}`,
@@ -887,6 +938,7 @@ export function createAnimeRecord(input) {
     anidb: input.anidb ?? null,
     anidbSearch: input.anidbSearch ?? false,
     siteUrl: input.siteUrl ?? null,
+    artwork,
     metadataSchemaVersion: METADATA_SCHEMA_VERSION,
   }
   record.fieldMetadata = createFieldMetadata(input, record)

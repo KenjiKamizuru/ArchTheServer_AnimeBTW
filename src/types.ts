@@ -172,6 +172,8 @@ export interface Media {
   native: string | null
   cover: string | null
   banner: string | null
+  /** Artwork variants with source, dimensions, and attribution metadata. */
+  artwork?: ArtworkVariant[]
   color: string | null
   description: string
   episodes: number | null
@@ -618,6 +620,22 @@ export interface UploadSessionInfo {
 export type ArtworkSlot = 'banner' | 'poster' | 'icon'
 export type ArtworkTargetType = 'app' | 'media' | 'series' | 'file'
 export type ArtworkFocus = 'top' | 'center' | 'bottom'
+
+/** A single artwork variant with its source, dimensions, and attribution. */
+export interface ArtworkVariant {
+  /** Where the artwork originated: 'anilist', 'imdb', 'local', etc. */
+  source: string
+  /** Public https URL of the artwork image. */
+  url: string
+  /** Semantic kind of the artwork. */
+  kind: 'poster' | 'banner' | 'icon' | 'still' | 'logo'
+  /** Intrinsic width in pixels, when known. */
+  width: number | null
+  /** Intrinsic height in pixels, when known. */
+  height: number | null
+  /** Provider attribution / credit text, when known. */
+  attribution: string | null
+}
 
 export interface ClaimedArtworkSlot {
   artId: string
