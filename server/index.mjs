@@ -563,6 +563,61 @@ app.get(
 )
 
 app.get(
+  '/api/search/bookmarks',
+  wrap(async (req, res) => {
+    const q = String(req.query.q ?? '').trim()
+    const needle = searchEngine.normalizeForSearch(q)
+
+    // Collect bookmarked media items.
+    const bookmarked = store.list().map((entry) => entry.media)
+
+    // Collect media from all custom lists and status lists.
+    const listed = []
+    const summary = listStore.summary()
+    for (const list of [...summary.statuses, ...summary.lists]) {
+      const entries = listStore.readList(list.id).entries
+      for (const entry of entries) {
+        listed.push(entry.media)
+      }
+    }
+
+    // Deduplicate by mediaId (a title can be both bookmarked and listed).
+    const seen = new Set()
+    const all = []
+    for (const media of [...bookmarked, ...listed]) {
+      if (media && media.id && !seen.has(media.id)) {
+        seen.add(media.id)
+        all.push(media)
+      }
+    }
+
+    const matches = needle
+      ? all.filter((item) => {
+          const haystack = searchEngine
+            .normalizeForSearch(
+              [item.title, item.romaji, item.english, item.native]
+                .filter(Boolean)
+                .join(' '),
+            )
+            .includes(needle)
+          return haystack
+        })
+      : []
+
+    res.json({
+      query: q,
+      count: matches.length,
+      totalBookmarked: bookmarked.length,
+      totalListed: listed.length,
+      items: matches.slice(0, 200).map((item) => ({
+        ...item,
+        highlight: searchEngine.highlightSegments(item.title || '', q),
+      })),
+    })
+  }),
+)
+
+app.get(
   '/api/search/options',
   wrap(async (_req, res) => {
     res.json({

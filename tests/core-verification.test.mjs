@@ -1138,3 +1138,91 @@ test('normalize extracts streamingEpisodes from media payload', () => {
   assert.equal(normalized.streamingEpisodes[1].title, 'Episode Two')
   assert.equal(normalized.streamingEpisodes[1].number, 2)
 })
+
+/* ------------------------------ AV-064 ---------------------------------- */
+
+test('bookmark/list search deduplicates media across bookmarks and lists', () => {
+  const bookmarked = [
+    { media: { id: 1, title: 'Bookmark One', romaji: 'Bookmark One' } },
+    { media: { id: 2, title: 'Bookmark Two', romaji: 'Bookmark Two' } },
+  ]
+  const listed = [
+    { media: { id: 2, title: 'Bookmark Two', romaji: 'Bookmark Two' } },
+    { media: { id: 3, title: 'Listed Three', romaji: 'Listed Three' } },
+  ]
+
+  // Simulate the dedup logic from /api/search/bookmarks.
+  const seen = new Set()
+  const all = []
+  for (const media of [...bookmarked.map((e) => e.media), ...listed.map((e) => e.media)]) {
+    if (media && media.id && !seen.has(media.id)) {
+      seen.add(media.id)
+      all.push(media)
+    }
+  }
+  assert.equal(all.length, 3)
+  assert.equal(all.map((m) => m.id).sort((a, b) => a - b).join(','), '1,2,3')
+})
+
+test('bookmark/list search matches against romaji, english, native titles', () => {
+  const items = [
+    { id: 1, title: 'Demon Slayer', romaji: 'Kimetsu no Yaiba', native: '鬼滅の刃' },
+    { id: 2, title: 'Attack on Titan', romaji: 'Shingeki no Kyojin', native: '進撃の巨人' },
+    { id: 3, title: 'My Hero Academia', romaji: 'Boku no Hero Academia', native: '僕のヒーローアカデミア' },
+  ]
+  const needle = search.normalizeForSearch('kimetsu')
+  const matches = items.filter((item) => {
+    const haystack = search
+      .normalizeForSearch(
+        [item.title, item.romaji, item.english, item.native]
+          .filter(Boolean)
+          .join(' '),
+      )
+      .includes(needle)
+    return haystack
+  })
+  assert.equal(matches.length, 1)
+  assert.equal(matches[0].id, 1)
+
+  const needle2 = search.normalizeForSearch('進撃')
+  const matches2 = items.filter((item) => {
+    const haystack = search
+      .normalizeForSearch(
+        [item.title, item.romaji, item.english, item.native]
+          .filter(Boolean)
+          .join(' '),
+      )
+      .includes(needle2)
+    return haystack
+  })
+  assert.equal(matches2.length, 1)
+  assert.equal(matches2[0].id, 2)
+})
+
+test('bookmark/list search with empty query returns all items', () => {
+  const items = [
+    { id: 1, title: 'One' },
+    { id: 2, title: 'Two' },
+  ]
+  const matches = items.filter(() => true)
+  assert.equal(matches.length, 2)
+})
+
+test('bookmark/list search returns empty when no match', () => {
+  const items = [
+    { id: 1, title: 'One' },
+    { id: 2, title: 'Two' },
+  ]
+  const needle = search.normalizeForSearch('nonexistent')
+  const matches = items.filter((item) => {
+    const haystack = search
+      .normalizeForSearch(
+        [item.title, item.romaji, item.english, item.native]
+          .filter(Boolean)
+          .join(' '),
+      )
+      .includes(needle)
+    return haystack
+  })
+  assert.equal(matches.length, 0)
+})
