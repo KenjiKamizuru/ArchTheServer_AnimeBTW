@@ -562,13 +562,40 @@ app.get(
   }),
 )
 
+// Server-side full-text index over the local catalog (bookmarked + listed
+// media). Rebuilt on demand and whenever the bookmark store mutates (AV-075).
+let catalogIndex = new searchEngine.FullTextIndex()
+let catalogIndexDirty = true
+
+function ensureCatalogIndex() {
+  if (!catalogIndexDirty) return catalogIndex
+  const docs = []
+  const seen = new Set()
+  const collect = (media) => {
+    if (!media || !media.id || seen.has(media.id)) return
+    seen.add(media.id)
+    docs.push(media)
+  }
+  for (const entry of store.list()) collect(entry.media)
+  const summary = listStore.summary()
+  for (const list of [...summary.statuses, ...summary.lists]) {
+    for (const entry of listStore.readList(list.id).entries) collect(entry.media)
+  }
+  catalogIndex.build(docs)
+  catalogIndexDirty = false
+  return catalogIndex
+}
+
+function markCatalogIndexDirty() {
+  catalogIndexDirty = true
+}
+
 app.get(
   '/api/search/bookmarks',
   wrap(async (req, res) => {
     const q = String(req.query.q ?? '').trim()
-    const needle = searchEngine.normalizeForSearch(q)
 
-    // Collect bookmarked media items.
+    // Collect bookmarked media items (used for totals only).
     const bookmarked = store.list().map((entry) => entry.media)
 
     // Collect media from all custom lists and status lists.
@@ -591,18 +618,10 @@ app.get(
       }
     }
 
-    const matches = needle
-      ? all.filter((item) => {
-          const haystack = searchEngine
-            .normalizeForSearch(
-              [item.title, item.romaji, item.english, item.native]
-                .filter(Boolean)
-                .join(' '),
-            )
-            .includes(needle)
-          return haystack
-        })
-      : []
+    // Ranked full-text search over the local catalog index (AV-075).
+    const hits = q ? ensureCatalogIndex().search(q) : []
+    const byId = new Map(all.map((m) => [m.id, m]))
+    const matches = hits.map((hit) => byId.get(hit.id)).filter(Boolean)
 
     res.json({
       query: q,
@@ -793,10 +812,14 @@ app.get('/api/lists/:id', wrap(async (req, res) => {
   res.json({ ...list, entries: sortListEntries(list.entries, sort), sort })
 }))
 app.delete('/api/lists/:id', limitMutations, wrap(async (req, res) => {
-  res.json(await listStore.deleteList(req.params.id))
+  const result = await listStore.deleteList(req.params.id)
+  markCatalogIndexDirty()
+  res.json(result)
 }))
 app.post('/api/lists/:id/entries', limitMutations, wrap(async (req, res) => {
-  res.json({ entry: await listStore.add(req.params.id, req.body?.media) })
+  const result = await listStore.add(req.params.id, req.body?.media)
+  markCatalogIndexDirty()
+  res.json({ entry: result })
 }))
 app.put('/api/lists/:id/entries/:mediaId/rating', limitMutations, wrap(async (req, res) => {
   res.json(await listStore.setRating(req.params.id, req.params.mediaId, req.body))
@@ -805,7 +828,9 @@ app.put('/api/lists/:id/entries/:mediaId/note', limitMutations, wrap(async (req,
   res.json(await listStore.setNote(req.params.id, req.params.mediaId, req.body?.note))
 }))
 app.delete('/api/lists/:id/entries/:mediaId', limitMutations, wrap(async (req, res) => {
-  res.json(await listStore.remove(req.params.id, req.params.mediaId))
+  const result = await listStore.remove(req.params.id, req.params.mediaId)
+  markCatalogIndexDirty()
+  res.json(result)
 }))
 
 app.get('/api/settings', (req, res) => {
@@ -891,12 +916,14 @@ app.post(
       return
     }
     const entry = store.add(media)
+    markCatalogIndexDirty()
     res.status(201).json({ item: entry, items: store.list() })
   }),
 )
 
 app.delete('/api/bookmarks/:id', (req, res) => {
   const removed = store.remove(req.params.id)
+  markCatalogIndexDirty()
   res.json({ removed, items: store.list() })
 })
 

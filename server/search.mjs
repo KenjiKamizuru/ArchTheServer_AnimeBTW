@@ -520,3 +520,117 @@ export function clampResultCap(value) {
   if (!Number.isFinite(n)) return RESULT_CAP.defaultPerPage
   return Math.min(RESULT_CAP.max, Math.max(RESULT_CAP.min, Math.trunc(n)))
 }
+
+/**
+ * In-memory full-text index over local media catalog records (AV-075).
+ *
+ * Indexes title, romaji, english, native and aliases into per-term posting
+ * lists so local-catalog search is fast, ranked and explainable without a
+ * network round-trip. Pure and deterministic; rebuilt from the local store
+ * whenever the catalog changes.
+ */
+export class FullTextIndex {
+  constructor({ fieldWeights = { title: 3, romaji: 2, english: 2, native: 1, aliases: 1 } } = {}) {
+    this.fieldWeights = fieldWeights
+    this.docs = new Map()   // id -> { id, title, romaji, english, native, aliases }
+    this.postings = new Map() // term -> Map(docId -> { fields: Set<string> })
+  }
+
+  /** Tokenizes text into lowercase searchable terms. */
+  static tokenize(text) {
+    return String(text ?? '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
+  }
+
+  /** Adds or replaces a single document in the index. */
+  add(doc) {
+    const id = Number(doc?.id)
+    if (!Number.isInteger(id) || id <= 0) return
+    this.remove(id)
+
+    const entry = {
+      id,
+      title: doc.title ?? null,
+      romaji: doc.romaji ?? null,
+      english: doc.english ?? null,
+      native: doc.native ?? null,
+      aliases: Array.isArray(doc.aliases) ? doc.aliases : [],
+    }
+    this.docs.set(id, entry)
+
+    const fields = [
+      ['title', entry.title],
+      ['romaji', entry.romaji],
+      ['english', entry.english],
+      ['native', entry.native],
+      ['aliases', entry.aliases.join(' ')],
+    ]
+    for (const [name, value] of fields) {
+      for (const term of FullTextIndex.tokenize(value)) {
+        if (!this.postings.has(term)) this.postings.set(term, new Map())
+        const docPostings = this.postings.get(term)
+        if (!docPostings.has(id)) docPostings.set(id, { fields: new Set() })
+        docPostings.get(id).fields.add(name)
+      }
+    }
+  }
+
+  /** Removes a document from the index by id. */
+  remove(id) {
+    id = Number(id)
+    this.docs.delete(id)
+    for (const [term, docPostings] of this.postings) {
+      docPostings.delete(id)
+      if (docPostings.size === 0) this.postings.delete(term)
+    }
+  }
+
+  /** Rebuilds the index from an array of documents. */
+  build(docs) {
+    this.docs.clear()
+    this.postings.clear()
+    for (const doc of docs || []) this.add(doc)
+  }
+
+  /**
+   * Searches the index for `query`, returning results ranked by relevance.
+   * Each result carries the document fields plus `score` and `matchedTerms`.
+   */
+  search(query, { limit = 50 } = {}) {
+    const needle = normalizeForSearch(query)
+    const terms = needle ? FullTextIndex.tokenize(needle) : []
+    if (!terms.length) return []
+
+    const candidateIds = new Set()
+    for (const term of terms) {
+      const docPostings = this.postings.get(term)
+      if (docPostings) for (const id of docPostings.keys()) candidateIds.add(id)
+    }
+
+    const results = []
+    for (const id of candidateIds) {
+      const doc = this.docs.get(id)
+      if (!doc) continue
+      let score = 0
+      const matchedTerms = []
+      for (const term of terms) {
+        const posting = this.postings.get(term)?.get(id)
+        if (!posting) continue
+        matchedTerms.push(term)
+        let bestWeight = 0
+        for (const field of posting.fields) {
+          const weight = this.fieldWeights[field] ?? 0
+          if (weight > bestWeight) bestWeight = weight
+        }
+        score += bestWeight
+      }
+      if (matchedTerms.length) {
+        results.push({ ...doc, score, matchedTerms })
+      }
+    }
+
+    results.sort(
+      (a, b) => b.score - a.score || (a.title ?? '').localeCompare(b.title ?? ''),
+    )
+    return results.slice(0, Number.isFinite(limit) ? limit : 50)
+  }
+}

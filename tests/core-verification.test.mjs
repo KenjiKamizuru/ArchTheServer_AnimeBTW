@@ -1425,3 +1425,119 @@ test('searchAdvanced attaches a matchReason to each kept result (AV-072)', () =>
   assert.equal(reasonById.get(2), 'title starts with your search')
   assert.ok(!reasonById.has(3), 'unrelated title gets no relevance reason')
 })
+
+/* ------------------------------ AV-075 ---------------------------------- */
+
+test('FullTextIndex tokenizes lowercase alphanumeric terms', () => {
+  const terms = search.FullTextIndex.tokenize('Naruto Shippuden! 2007')
+  assert.deepEqual(terms, ['naruto', 'shippuden', '2007'])
+})
+
+test('FullTextIndex add + search ranks by field weight', () => {
+  const index = new search.FullTextIndex()
+  index.add({
+    id: 1,
+    title: 'Naruto',
+    romaji: 'Naruto',
+    english: 'Naruto',
+    native: 'ナルト',
+    aliases: [],
+  })
+  index.add({
+    id: 2,
+    title: 'Naruto Shippuden',
+    romaji: 'Naruto Shippuden',
+    english: null,
+    native: null,
+    aliases: [],
+  })
+
+  const hits = index.search('naruto')
+  assert.ok(hits.length > 0)
+  assert.equal(hits[0].id, 1) // title match scores highest
+  assert.ok(hits[0].matchedTerms.includes('naruto'))
+})
+
+test('FullTextIndex matches aliases', () => {
+  const index = new search.FullTextIndex()
+  index.add({
+    id: 1,
+    title: 'Attack on Titan',
+    romaji: 'Shingeki no Kyojin',
+    english: 'Attack on Titan',
+    native: null,
+    aliases: ['AOT', 'Shingeki'],
+  })
+
+  const hits = index.search('aot')
+  assert.equal(hits.length, 1)
+  assert.equal(hits[0].id, 1)
+  assert.ok(hits[0].matchedTerms.includes('aot'))
+})
+
+test('FullTextIndex search is case-insensitive', () => {
+  const index = new search.FullTextIndex()
+  index.add({
+    id: 1,
+    title: 'One Piece',
+    romaji: 'One Piece',
+    english: 'One Piece',
+    native: null,
+    aliases: [],
+  })
+
+  const lower = index.search('one piece')
+  const upper = index.search('ONE PIECE')
+  assert.equal(lower.length, upper.length)
+  assert.equal(lower[0].id, upper[0].id)
+})
+
+test('FullTextIndex returns empty for no matches', () => {
+  const index = new search.FullTextIndex()
+  index.add({
+    id: 1,
+    title: 'Naruto',
+    romaji: 'Naruto',
+    english: null,
+    native: null,
+    aliases: [],
+  })
+  assert.deepEqual(index.search('dragon ball'), [])
+})
+
+test('FullTextIndex remove drops a document', () => {
+  const index = new search.FullTextIndex()
+  index.add({ id: 1, title: 'Naruto', romaji: null, english: null, native: null, aliases: [] })
+  index.add({ id: 2, title: 'Bleach', romaji: null, english: null, native: null, aliases: [] })
+  index.remove(1)
+  assert.deepEqual(index.search('naruto'), [])
+  assert.equal(index.search('bleach').length, 1)
+})
+
+test('FullTextIndex rebuild replaces all documents', () => {
+  const index = new search.FullTextIndex()
+  index.build([
+    { id: 1, title: 'Naruto', romaji: null, english: null, native: null, aliases: [] },
+  ])
+  index.build([
+    { id: 2, title: 'Bleach', romaji: null, english: null, native: null, aliases: [] },
+  ])
+  assert.deepEqual(index.search('naruto'), [])
+  assert.equal(index.search('bleach').length, 1)
+})
+
+test('FullTextIndex respects limit', () => {
+  const index = new search.FullTextIndex()
+  for (let i = 1; i <= 5; i++) {
+    index.add({
+      id: i,
+      title: `Show ${i}`,
+      romaji: null,
+      english: null,
+      native: null,
+      aliases: [],
+    })
+  }
+  const hits = index.search('show', { limit: 3 })
+  assert.equal(hits.length, 3)
+})
