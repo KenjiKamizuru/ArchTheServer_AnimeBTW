@@ -89,6 +89,34 @@ export interface FieldManualCorrection {
   reason?: string
 }
 
+/** Entity types used to select a metadata refresh policy. Matches the
+ * normalized `format` values a catalog record can carry. */
+export type EntityType = 'TV' | 'Movie' | 'OVA' | 'ONA' | 'Special' | 'Other'
+
+/** Refresh categories group catalog fields with similar staleness tolerance. */
+export type RefreshCategory = 'identity' | 'airing' | 'score' | 'descriptive' | 'links'
+
+/** Result of a freshness check for a single field. */
+export type FieldFreshness = 'fresh' | 'stale' | 'never_refreshed' | 'unknown'
+
+/** Metadata refresh policy for one category of fields on one entity type. */
+export interface RefreshPolicyEntry {
+  /** Maximum age in milliseconds before the field is considered stale. */
+  maxAgeMs: number
+  /** Refresh category this field belongs to. */
+  category: RefreshCategory
+}
+
+/** Overall refresh assessment for a catalog record. */
+export interface RecordRefreshStatus {
+  /** Whether any field is stale or never refreshed. */
+  needsRefresh: boolean
+  /** Fields whose data is stale or was never refreshed. */
+  staleFields: string[]
+  /** Per-field freshness assessment. */
+  freshness: Record<string, FieldFreshness>
+}
+
 export interface FieldMetadata {
   /** State of the canonical field value: known, unknown, unannounced, or not_applicable. */
   valueState: FieldValueState

@@ -667,6 +667,122 @@ export function applyManualCorrection(record, field, correction) {
   return next
 }
 
+/** Catalog fields grouped by how quickly their data goes stale. */
+const REFRESH_CATEGORIES = {
+  identity: [
+    'title', 'romaji', 'english', 'native', 'cover', 'banner', 'color', 'source',
+    'countryOfOrigin', 'originalLanguage', 'siteUrl',
+  ],
+  airing: ['status', 'format', 'season', 'seasonYear', 'startDate', 'endDate',
+    'episodes', 'airedEpisodes', 'nextEpisode'],
+  score: ['score', 'providerScores', 'popularity', 'favourites'],
+  descriptive: ['description', 'genres', 'genreEntities', 'tags', 'ageRatings',
+    'studios', 'organizations'],
+  links: ['links', 'streams', 'anidb', 'anidbSearch'],
+}
+
+/** Maximum staleness age (ms) per entity type and refresh category. */
+const REFRESH_MAX_AGE_MS = {
+  TV: { identity: 30 * 24 * 60 * 60 * 1000, airing: 60 * 60 * 1000,
+    score: 6 * 60 * 60 * 1000, descriptive: 7 * 24 * 60 * 60 * 1000,
+    links: 30 * 24 * 60 * 60 * 1000 },
+  Movie: { identity: 30 * 24 * 60 * 60 * 1000, airing: 7 * 24 * 60 * 60 * 1000,
+    score: 24 * 60 * 60 * 1000, descriptive: 7 * 24 * 60 * 60 * 1000,
+    links: 30 * 24 * 60 * 60 * 1000 },
+  OVA: { identity: 30 * 24 * 60 * 60 * 1000, airing: 7 * 24 * 60 * 60 * 1000,
+    score: 3 * 24 * 60 * 60 * 1000, descriptive: 7 * 24 * 60 * 60 * 1000,
+    links: 30 * 24 * 60 * 60 * 1000 },
+  ONA: { identity: 30 * 24 * 60 * 60 * 1000, airing: 7 * 24 * 60 * 60 * 1000,
+    score: 3 * 24 * 60 * 60 * 1000, descriptive: 7 * 24 * 60 * 60 * 1000,
+    links: 30 * 24 * 60 * 60 * 1000 },
+  Special: { identity: 30 * 24 * 60 * 60 * 1000, airing: 7 * 24 * 60 * 60 * 1000,
+    score: 3 * 24 * 60 * 60 * 1000, descriptive: 7 * 24 * 60 * 60 * 1000,
+    links: 30 * 24 * 60 * 60 * 1000 },
+  Other: { identity: 30 * 24 * 60 * 60 * 1000, airing: 7 * 24 * 60 * 60 * 1000,
+    score: 3 * 24 * 60 * 60 * 1000, descriptive: 7 * 24 * 60 * 60 * 1000,
+    links: 30 * 24 * 60 * 60 * 1000 },
+}
+
+const DEFAULT_REFRESH_CATEGORY = 'descriptive'
+
+/** Map a catalog `format` string to an entity type used to select a refresh
+ * policy. Unknown or missing formats fall back to `Other`. */
+export function entityTypeFromFormat(format) {
+  if (typeof format !== 'string') return 'Other'
+  const normalized = format.trim().toUpperCase().replace(/[\\s-]+/g, '_')
+  switch (normalized) {
+    case 'TV': return 'TV'
+    case 'MOVIE': return 'Movie'
+    case 'OVA': return 'OVA'
+    case 'ONA': return 'ONA'
+    case 'SPECIAL': return 'Special'
+    default: return 'Other'
+  }
+}
+
+/** Refresh category for a catalog field. Fields without an explicit category
+ * fall back to `descriptive`. */
+export function fieldCategory(field) {
+  for (const [category, fields] of Object.entries(REFRESH_CATEGORIES)) {
+    if (fields.includes(field)) return category
+  }
+  return DEFAULT_REFRESH_CATEGORY
+}
+
+/** Refresh policy entry for one field on one entity type. */
+export function refreshPolicy(entityType, field) {
+  const type = entityType && REFRESH_MAX_AGE_MS[entityType] ? entityType : 'Other'
+  const category = fieldCategory(field)
+  return {
+    maxAgeMs: REFRESH_MAX_AGE_MS[type][category],
+    category,
+  }
+}
+
+/** Freshness of one field given its last-refresh time. */
+export function fieldFreshness(field, lastRefreshedAt, entityType, now = Date.now()) {
+  if (lastRefreshedAt === null || lastRefreshedAt === undefined) return 'never_refreshed'
+  let millis
+  if (typeof lastRefreshedAt === 'number') millis = lastRefreshedAt
+  else millis = Date.parse(lastRefreshedAt)
+  if (!Number.isFinite(millis)) return 'unknown'
+  const maxAgeMs = refreshPolicy(entityType, field).maxAgeMs
+  return now - millis > maxAgeMs ? 'stale' : 'fresh'
+}
+
+/** True when a field is stale or was never refreshed. */
+export function isFieldStale(field, lastRefreshedAt, entityType, now = Date.now()) {
+  return fieldFreshness(field, lastRefreshedAt, entityType, now) !== 'fresh'
+}
+
+/**
+ * Overall refresh assessment for a catalog record. Evaluates every
+ * `CATALOG_METADATA_FIELDS` entry against its entity-type refresh policy and
+ * reports which fields are stale or were never refreshed. The record is not
+ * mutated.
+ */
+export function recordRefreshStatus(record, now = Date.now()) {
+  const entityType = entityTypeFromFormat(record && record.format)
+  const freshness = {}
+  const staleFields = []
+  for (const field of CATALOG_METADATA_FIELDS) {
+    const meta = record.fieldMetadata && typeof record.fieldMetadata === 'object'
+      ? record.fieldMetadata[field]
+      : null
+    const lastRefreshedAt = meta && typeof meta === 'object' && !Array.isArray(meta)
+      ? meta.lastRefreshedAt
+      : null
+    const status = fieldFreshness(field, lastRefreshedAt, entityType, now)
+    freshness[field] = status
+    if (status !== 'fresh') staleFields.push(field)
+  }
+  return {
+    needsRefresh: staleFields.length > 0,
+    staleFields,
+    freshness,
+  }
+}
+
 /** Backfill a missing valueState on a stored observation, inferred from its value. */
 function backfillObservationValueState(observation, field, record) {
   if (!observation || typeof observation !== 'object' || Array.isArray(observation)) return observation

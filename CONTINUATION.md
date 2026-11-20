@@ -1,37 +1,40 @@
 # Continuation note — 2026-11-19
 
 **Status:** branch `arena/c8881487-archtheserver-animebtw`; working tree clean
-except TODO.md/CONTINUATION.md edits (not yet committed). AV-008 through AV-017
-are complete. Latest `npm run verify`: 386 tests across 14 files, typecheck and
-production build clean. TODO.md records 85/800 checked, with 11 partial items
+except TODO.md/CONTINUATION.md edits (not yet committed). AV-008 through AV-018
+are complete. Latest `npm run verify`: 406 tests across 15 files, typecheck and
+production build clean. TODO.md records 86/800 checked, with 11 partial items
 still open. Live provider responses, ffmpeg, browser E2E, and real
 upload/download I/O remain unavailable.
 
-**Completed this turn: AV-017 — support manual corrections without overwriting source metadata.**
+**Completed this turn: AV-018 — add a metadata refresh policy per entity type.**
 
 `src/types.ts`:
-- Added `FieldManualCorrection` interface (`value`, `correctedBy`, `correctedAt`, optional `reason`).
-- `FieldMetadata` gains optional `manualCorrection?: FieldManualCorrection`.
+- Added `EntityType` (`'TV' | 'Movie' | 'OVA' | 'ONA' | 'Special' | 'Other'`).
+- Added `RefreshCategory` (`'identity' | 'airing' | 'score' | 'descriptive' | 'links'`).
+- Added `FieldFreshness` (`'fresh' | 'stale' | 'never_refreshed' | 'unknown'`).
+- Added `RefreshPolicyEntry` (`maxAgeMs`, `category`) and `RecordRefreshStatus` (`needsRefresh`, `staleFields`, `freshness`).
 
 `server/catalog.mjs`:
-- Added `normalizeManualCorrection(raw)`: validates `correctedBy` (non-empty string) and `correctedAt` (ISO timestamp via `normalizeRefreshTime`); returns null for malformed input.
-- `createFieldMetadata` now passes `fieldInfo?.manualCorrection` through to the per-field `fieldMetadata` entry.
-- New exported `applyManualCorrection(record, field, correction)`: returns a new record with the corrected canonical value, records the correction block on `fieldMetadata[field].manualCorrection`, preserves provider `observations` untouched, recomputes `valueState` from the corrected value and `conflict` using the corrector as the selected source (so provider observations from other sources still compare), and never mutates the input. Rejects malformed corrections and unknown fields with TypeError.
+- Groups `CATALOG_METADATA_FIELDS` into refresh categories: identity (title, cover, source, etc. — 30 days), airing (status, nextEpisode, startDate, etc. — TV 1h, movies 7d), score (score, providerScores — TV 6h, movie 1d), descriptive (description, genres, tags — 7d), links (links, streams — 30 days).
+- Exports `entityTypeFromFormat(format)`, `fieldCategory(field)`, `refreshPolicy(entityType, field)`, `fieldFreshness(field, lastRefreshedAt, entityType, now)`, `isFieldStale(...)`, and `recordRefreshStatus(record, now)` which evaluates every field against its entity-type TTL and reports `needsRefresh`/`staleFields`/`freshness` without mutating the record.
+- `fieldFreshness` handles null (`never_refreshed`), unparseable (`unknown`), numeric timestamps, and ISO strings.
 
-`tests/catalog.test.mjs`: added tests for correction storage + observation preservation, source metadata intact for comparison, malformed-input/unknown-field rejection, `createFieldMetadata` pass-through, blank→unknown state, and input non-mutation.
+`tests/refresh-policy.test.mjs`: covers format mapping (incl. case/separator normalization and Other fallback), field categories, per-entity TTLs, freshness boundaries (exactly-at-TTL is fresh), stale/never_refreshed/unknown states, and record-level assessment including non-mutation.
 
-**Honest gaps (not AV-017 scope, recorded for the next turn):**
-- `server/store.mjs` bookmark sanitization and `server/listStore.mjs` do not yet carry `fieldMetadata`/`manualCorrection`, so manual corrections do not survive bookmark/list round trips yet.
-- No API route or UI applies `applyManualCorrection`; that's the integration follow-up.
+**Honest gaps (not AV-018 scope, recorded for the next turn):**
+- `recordRefreshStatus` is not yet wired into any API route, store, or UI — no staleness indicators or automatic refresh triggers exist yet.
+- `lastRefreshedAt` is not retained through `server/store.mjs` bookmark sanitization or `server/listStore.mjs`, so staleness is lost on bookmark round trips.
 
-**Next task:** AV-018 — Add a metadata refresh policy per entity type (e.g., TTL/staleness rules per field or entity kind, built on `lastRefreshedAt` and `fieldMetadata`).
+**Next task:** AV-019 — Expose a metadata freshness indicator on detail pages (consume `recordRefreshStatus` / `fieldFreshness` in the detail page UI to show stale/never-refreshed fields).
 
-Earlier committed work: AV-002 through AV-017. Related files touched across the series:
+Earlier committed work: AV-002 through AV-018. Related files touched across the series:
 `server/catalog.mjs`, `server/anilist.mjs`, `server/browse.mjs`, `server/detail.mjs`,
 `server/store.mjs`, `server/identifiers.mjs`, `server/duplicateDetection.mjs`,
 `src/types.ts`, `src/lib/api.ts`, `src/pages/AnimeDetail.tsx`, `src/pages/Browse.tsx`,
 `src/pages/Search.tsx`, `tests/catalog.test.mjs`, `tests/anilist.test.mjs`,
 `tests/core-verification.test.mjs`, `tests/list-import.test.mjs`,
-`tests/duplicateDetection.test.mjs`, `tests/identifiers.test.mjs`,
-`tests/metadata-provenance.test.mjs`, `TODO.md`, `CONTINUATION.md`, `README.md`,
-`package.json`. `package-lock.json` is unchanged. `data/` is gitignored.
+`tests/duplicateDetection.test.mjs`, `tests/refresh-policy.test.mjs` (new),
+`tests/identifiers.test.mjs`, `tests/metadata-provenance.test.mjs`, `TODO.md`,
+`CONTINUATION.md`, `README.md`, `package.json`. `package-lock.json` is unchanged.
+`data/` is gitignored.
