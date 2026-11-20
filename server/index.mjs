@@ -386,8 +386,11 @@ app.get(
     const page = clamp(Number(req.query.page) || 1, 1, 10)
     const search = String(req.query.q ?? '').trim().slice(0, 60)
     const sort = String(req.query.sort ?? '')
-    const data = await anilist.studios({ page, search, sort })
-    res.json(data)
+    const type = ['animation', 'producer', 'all'].includes(String(req.query.type ?? ''))
+      ? String(req.query.type)
+      : 'all'
+    const data = await anilist.studios({ page, search, sort, type })
+    res.json({ ...data, type })
   }),
 )
 

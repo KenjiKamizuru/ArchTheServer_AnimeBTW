@@ -23,6 +23,7 @@ function StudioBucket({ letter }: { letter: string }) {
 export function StudiosPage() {
   const [params, setParams] = useSearchParams()
   const query = params.get('q') ?? ''
+  const type = (params.get('type') as 'all' | 'animation' | 'producer' ?? 'all')
   const [draft, setDraft] = useState(query)
   const [studios, setStudios] = useState<StudioSummary[]>([])
   const [loading, setLoading] = useState(true)
@@ -31,6 +32,11 @@ export function StudiosPage() {
   const [hasNext, setHasNext] = useState(false)
 
   useEffect(() => setDraft(query), [query])
+
+  // Reset page when the studio/producer type filter changes.
+  useEffect(() => {
+    setPage(1)
+  }, [type])
 
   // Debounced search so typing does not fire one request per keystroke.
   useEffect(() => {
@@ -55,7 +61,7 @@ export function StudiosPage() {
     setLoading(true)
     setError(null)
     api
-      .studios({ page, q: query || undefined })
+      .studios({ page, q: query || undefined, type })
       .then((res) => {
         if (!alive) return
         setStudios((prev) => {
@@ -96,17 +102,47 @@ export function StudiosPage() {
             Animation studios and producers, most-favourited first
           </p>
         </div>
-        <label className="relative">
-          <Search size={14} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-white/30" />
-          <input
-            type="search"
-            value={draft}
-            onChange={(ev) => setDraft(ev.target.value)}
-            placeholder="Find a studio…"
-            aria-label="Search studios"
-            className="w-56 rounded-lg bg-ink-850 py-2 pr-3 pl-8 text-xs text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
-          />
-        </label>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="relative">
+            <Search size={14} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-white/30" />
+            <input
+              type="search"
+              value={draft}
+              onChange={(ev) => setDraft(ev.target.value)}
+              placeholder="Find a studio…"
+              aria-label="Search studios"
+              className="w-56 rounded-lg bg-ink-850 py-2 pr-3 pl-8 text-xs text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
+            />
+          </label>
+          <div className="rounded-lg bg-ink-850 p-1 ring-1 ring-white/5">
+            {[
+              { id: 'all', label: 'All' },
+              { id: 'animation', label: 'Animation' },
+              { id: 'producer', label: 'Producer' },
+            ].map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                role="switch"
+                aria-checked={type === option.id}
+                onClick={() =>
+                  setParams((prev) => {
+                    const next = new URLSearchParams(prev)
+                    next.set('type', option.id)
+                    return next
+                  }, { replace: true })
+                }
+                className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition ${
+                  type === option.id
+                    ? 'bg-accent text-black'
+                    : 'text-white/55 hover:bg-white/5 hover:text-white'
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       {error ? (

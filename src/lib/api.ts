@@ -85,6 +85,7 @@ export interface StudioListResponse {
   page: number
   hasNextPage: boolean
   total: number
+  type: 'all' | 'animation' | 'producer'
 }
 
 export interface StudioFilmographyResponse {
@@ -267,11 +268,17 @@ export const api = {
     return get<DiscoverPick>(`/api/discover/${kind}${query ? `?${query}` : ''}`, false)
   },
 
-  studios(params: { page?: number; q?: string; sort?: 'favourites' | 'name' } = {}) {
+  studios(params: {
+    page?: number
+    q?: string
+    sort?: 'favourites' | 'name'
+    type?: 'all' | 'animation' | 'producer'
+  } = {}) {
     const qs = new URLSearchParams()
     if (params.page && params.page > 1) qs.set('page', String(params.page))
     if (params.q) qs.set('q', params.q)
     if (params.sort) qs.set('sort', params.sort)
+    if (params.type && params.type !== 'all') qs.set('type', params.type)
     const query = qs.toString()
     return get<StudioListResponse>(`/api/studios${query ? `?${query}` : ''}`)
   },

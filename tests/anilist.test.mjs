@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { buildBrowseQuery, parseBrowseFilters } from '../server/browse.mjs'
 import { extractMediaArgs, validateGraphql } from '../server/graphqlCheck.mjs'
+import { flush } from '../server/metadataCache.mjs'
 
 const jsonResponse = (data) =>
   new Response(JSON.stringify({ data }), { status: 200, headers: { 'content-type': 'application/json' } })
@@ -152,4 +153,90 @@ test('AniList GraphQL validation errors are not pointlessly retried', async () =
     )
   })
   assert.equal(attempts, 1)
+})
+
+test('studios lists animation studios and producers with type filter', async () => {
+  await flush()
+  const studios = [
+    { id: 1, name: 'Studio Ghibli', isAnimationStudio: true, favourites: 50000, siteUrl: 'https://ghibli.jp' },
+    { id: 2, name: 'MAPPA', isAnimationStudio: true, favourites: 40000, siteUrl: 'https://mappa.co.jp' },
+    { id: 3, name: 'Some Producer', isAnimationStudio: false, favourites: 10000, siteUrl: null },
+    { id: 4, name: 'Another Producer', isAnimationStudio: false, favourites: 5000, siteUrl: null },
+  ]
+  await withMockFetch(
+    async (_url, init) => {
+      const variables = JSON.parse(init.body).variables
+      assert.equal(variables.sort?.[0], 'FAVOURITES_DESC')
+      return new Response(JSON.stringify({ data: { Page: { pageInfo: { hasNextPage: false, total: 4 }, studios } } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    },
+    async () => {
+      const { studios: listStudios } = await import('../server/anilist.mjs')
+
+      // All (default): returns everything
+      const all = await listStudios({ page: 1 })
+      assert.equal(all.studios.length, 4)
+
+      // Animation only
+      const animation = await listStudios({ page: 1, type: 'animation' })
+      assert.equal(animation.studios.length, 2)
+      assert.ok(animation.studios.every((s) => s.isAnimationStudio))
+      assert.ok(animation.studios.some((s) => s.name === 'Studio Ghibli'))
+      assert.ok(animation.studios.some((s) => s.name === 'MAPPA'))
+
+      // Producer only
+      const producer = await listStudios({ page: 1, type: 'producer' })
+      assert.equal(producer.studios.length, 2)
+      assert.ok(producer.studios.every((s) => !s.isAnimationStudio))
+      assert.ok(producer.studios.some((s) => s.name === 'Some Producer'))
+
+      // Invalid type falls back to all
+      const fallback = await listStudios({ page: 1, type: 'bogus' })
+      assert.equal(fallback.studios.length, 4)
+    },
+  )
+})
+
+test('studios search and sort are passed through to AniList', async () => {
+  await flush()
+  let captured
+  await withMockFetch(
+    async (_url, init) => {
+      captured = { variables: JSON.parse(init.body).variables }
+      return new Response(JSON.stringify({ data: { Page: { pageInfo: { hasNextPage: false, total: 0 }, studios: [] } } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    },
+    async () => {
+      const { studios: listStudios } = await import('../server/anilist.mjs')
+      await listStudios({ page: 2, search: 'ghibli', sort: 'name', type: 'animation' })
+      assert.equal(captured.variables.page, 2)
+      assert.equal(captured.variables.search, 'ghibli')
+      assert.equal(captured.variables.sort?.[0], 'NAME')
+    },
+  )
+})
+
+test('studios buckets and metadata are preserved', async () => {
+  await flush()
+  await withMockFetch(
+    async () =>
+      new Response(JSON.stringify({ data: { Page: { pageInfo: { hasNextPage: false, total: 1 }, studios: [{ id: 7, name: 'Test Studio', isAnimationStudio: true, favourites: 100, siteUrl: null }] } } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    async () => {
+      const { studios: listStudios } = await import('../server/anilist.mjs')
+      const result = await listStudios({ page: 1, type: 'animation' })
+      assert.equal(result.studios[0].bucket, 'T')
+      assert.equal(result.studios[0].isAnimationStudio, true)
+      assert.equal(result.studios[0].favourites, 100)
+      assert.equal(result.page, 1)
+      assert.equal(result.hasNextPage, false)
+      assert.equal(result.total, 1)
+    },
+  )
 })

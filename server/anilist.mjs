@@ -452,12 +452,16 @@ export async function discover(kind, filters, browseModule) {
 
 /**
  * Studio search/listing for the studio explorer. Sorted by favourites so the
- * landing page opens on recognisable names.
+ * landing page opens on recognisable names. `type` filters AniList's
+ * `isAnimationStudio` flag: 'animation' keeps animation studios only,
+ * 'producer' keeps non-animation studios (producers/other orgs), 'all'
+ * returns everything.
  */
-export async function studios({ page = 1, search = '', sort = '' } = {}) {
+export async function studios({ page = 1, search = '', sort = '', type = 'all' } = {}) {
   const allowed = new Set(['favourites', 'name'])
   const studioSort = allowed.has(sort) ? sort : 'favourites'
-  const key = `studios:${page}:${search}:${studioSort}`
+  const studioType = ['animation', 'producer', 'all'].includes(type) ? type : 'all'
+  const key = `studios:${page}:${search}:${studioSort}:${studioType}`
   return cachedImmutable(key, async () => {
     const data = await gql(
       `query Studios($page: Int, $perPage: Int, $search: String, $sort: [StudioSort]) {
@@ -495,6 +499,11 @@ export async function studios({ page = 1, search = '', sort = '' } = {}) {
           : null,
       )
       .filter(Boolean)
+      .filter((studio) => {
+        if (studioType === 'all') return true
+        if (studioType === 'animation') return studio.isAnimationStudio
+        return !studio.isAnimationStudio
+      })
     return {
       studios: media,
       page,
