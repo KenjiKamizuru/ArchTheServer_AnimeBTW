@@ -562,6 +562,21 @@ function normalizeFieldValueState(raw, field, value, record) {
   return requested
 }
 
+function normalizeManualCorrection(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const correctedBy = typeof raw.correctedBy === 'string' && raw.correctedBy.trim()
+    ? raw.correctedBy.trim()
+    : null
+  const correctedAt = normalizeRefreshTime(raw.correctedAt)
+  if (!correctedBy || !correctedAt) return null
+  return {
+    value: raw.value,
+    correctedBy,
+    correctedAt,
+    ...(typeof raw.reason === 'string' && raw.reason.trim() ? { reason: raw.reason.trim() } : {}),
+  }
+}
+
 function observationsConflict(field, record, selectedSource, observations, canonicalState) {
   const comparableValues = new Set()
   const addComparable = (value, valueState) => {
@@ -598,6 +613,7 @@ function createFieldMetadata(input, record) {
       : defaults.lastRefreshedAt
     const observations = normalizeObservations(fieldInfo?.observations, lastRefreshedAt, field, record)
     const canonicalState = normalizeFieldValueState(fieldInfo?.valueState, field, record[field], record)
+    const manualCorrection = normalizeManualCorrection(fieldInfo?.manualCorrection)
     return [field, {
       // The canonical field value is selected by the adapter/input record; this
       // metadata preserves conflicting provider observations without replacing it.
@@ -606,8 +622,49 @@ function createFieldMetadata(input, record) {
       lastRefreshedAt,
       observations,
       conflict: observationsConflict(field, record, source, observations, canonicalState),
+      ...(manualCorrection ? { manualCorrection } : {}),
     }]
   }))
+}
+
+/**
+ * Apply a manual correction to one field of a catalog record, returning a new
+ * record. The corrected value becomes the canonical value and is recorded in
+ * `fieldMetadata[field].manualCorrection`; provider observations are preserved
+ * untouched so the original source data can be restored or compared later.
+ * The input record is never mutated.
+ */
+export function applyManualCorrection(record, field, correction) {
+  const normalized = normalizeManualCorrection(correction)
+  if (!normalized) throw new TypeError('Invalid manual correction: correctedBy and correctedAt are required')
+  if (!CATALOG_METADATA_FIELDS.includes(field)) throw new TypeError(`Unknown catalog field: ${field}`)
+
+  const next = { ...record, [field]: normalized.value }
+  const fieldMeta = next.fieldMetadata && typeof next.fieldMetadata === 'object' && !Array.isArray(next.fieldMetadata)
+    ? next.fieldMetadata
+    : {}
+  const existing = fieldMeta[field] && typeof fieldMeta[field] === 'object' && !Array.isArray(fieldMeta[field])
+    ? fieldMeta[field]
+    : null
+  const observations = Array.isArray(existing?.observations) ? existing.observations : []
+  const lastRefreshedAt = existing && Object.hasOwn(existing, 'lastRefreshedAt') ? existing.lastRefreshedAt : null
+  const valueState = normalizeFieldValueState(undefined, field, normalized.value, next)
+  // The corrected value's source is the corrector, so provider observations
+  // from other sources are still compared against it for conflicts.
+  const conflict = observationsConflict(field, next, normalized.correctedBy, observations, valueState)
+
+  next.fieldMetadata = {
+    ...fieldMeta,
+    [field]: {
+      valueState,
+      source: normalized.correctedBy,
+      lastRefreshedAt,
+      observations,
+      conflict,
+      manualCorrection: normalized,
+    },
+  }
+  return next
 }
 
 /** Backfill a missing valueState on a stored observation, inferred from its value. */

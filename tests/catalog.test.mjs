@@ -5,6 +5,7 @@ import {
   CATALOG_METADATA_FIELDS,
   METADATA_SCHEMA_VERSION,
   migrateMetadataSchema,
+  applyManualCorrection,
 } from '../server/catalog.mjs'
 const basic = () => createAnimeRecord({ id: 1 })
 test('id retained', () => assert.equal(basic().id, 1))
@@ -708,6 +709,137 @@ test('migrateMetadataSchema treats missing, null, and garbage versions as migrat
     assert.equal(migrated.metadataSchemaVersion, METADATA_SCHEMA_VERSION)
     assert.ok(Object.keys(migrated.fieldMetadata).length > 0)
   }
+})
+
+test('manual correction overrides canonical value while preserving provider observations', () => {
+  const refreshed = '2026-11-19T12:34:56.000Z'
+  const record = createAnimeRecord({
+    id: 100,
+    title: 'Wrong Title',
+    metadataSource: 'anilist',
+    lastRefreshedAt: refreshed,
+    fieldMetadata: {
+      title: {
+        source: 'anilist',
+        lastRefreshedAt: refreshed,
+        observations: [
+          { source: 'anilist', value: 'Wrong Title', lastRefreshedAt: refreshed },
+          { source: 'mal', value: 'Wrong Title', lastRefreshedAt: refreshed },
+        ],
+      },
+    },
+  })
+
+  const corrected = applyManualCorrection(record, 'title', {
+    value: 'Right Title',
+    correctedBy: 'user-42',
+    correctedAt: '2026-11-19T13:00:00.000Z',
+    reason: 'Provider title was misspelled',
+  })
+
+  // Canonical value is the correction.
+  assert.equal(corrected.title, 'Right Title')
+  assert.equal(record.title, 'Wrong Title') // input not mutated
+
+  // Manual correction recorded on the field metadata.
+  assert.equal(corrected.fieldMetadata.title.manualCorrection.value, 'Right Title')
+  assert.equal(corrected.fieldMetadata.title.manualCorrection.correctedBy, 'user-42')
+  assert.equal(corrected.fieldMetadata.title.manualCorrection.correctedAt, '2026-11-19T13:00:00.000Z')
+  assert.equal(corrected.fieldMetadata.title.manualCorrection.reason, 'Provider title was misspelled')
+
+  // Provider observations are preserved untouched.
+  assert.deepEqual(corrected.fieldMetadata.title.observations, [
+    { source: 'anilist', value: 'Wrong Title', lastRefreshedAt: refreshed, valueState: 'known' },
+    { source: 'mal', value: 'Wrong Title', lastRefreshedAt: refreshed, valueState: 'known' },
+  ])
+})
+
+test('manual correction keeps provider source metadata intact for comparison', () => {
+  const refreshed = '2026-11-19T12:34:56.000Z'
+  const record = createAnimeRecord({
+    id: 101,
+    title: 'Provider Title',
+    description: 'Provider description',
+    fieldMetadata: {
+      title: {
+        source: 'anilist',
+        observations: [{ source: 'anilist', value: 'Provider Title', lastRefreshedAt: refreshed }],
+      },
+      description: {
+        source: 'anilist',
+        observations: [{ source: 'anilist', value: 'Provider description', lastRefreshedAt: refreshed }],
+      },
+    },
+  })
+
+  const corrected = applyManualCorrection(record, 'title', {
+    value: 'Manual Title',
+    correctedBy: 'editor',
+    correctedAt: refreshed,
+  })
+
+  assert.equal(corrected.title, 'Manual Title')
+  // Other fields untouched.
+  assert.equal(corrected.description, 'Provider description')
+  assert.equal(corrected.fieldMetadata.description.source, 'anilist')
+  // Corrected field still carries the provider observation alongside.
+  assert.deepEqual(corrected.fieldMetadata.title.observations.map((o) => [o.source, o.value]), [
+    ['anilist', 'Provider Title'],
+  ])
+  // Correction conflicts with the provider value, as expected.
+  assert.equal(corrected.fieldMetadata.title.conflict, true)
+})
+
+test('applyManualCorrection rejects malformed corrections and unknown fields', () => {
+  const refreshed = '2026-11-19T12:34:56.000Z'
+  const record = createAnimeRecord({ id: 102, title: 'T' })
+  assert.throws(() => applyManualCorrection(record, 'title', { value: 'X' }), TypeError) // no correctedBy
+  assert.throws(() => applyManualCorrection(record, 'title', { correctedBy: 'u', correctedAt: 'not-a-date' }), TypeError)
+  assert.throws(() => applyManualCorrection(record, 'notAField', { value: 'X', correctedBy: 'u', correctedAt: refreshed }), TypeError)
+})
+
+test('correction passed through createFieldMetadata is stored per field', () => {
+  const refreshed = '2026-11-19T12:34:56.000Z'
+  const record = createAnimeRecord({
+    id: 103,
+    title: 'Corrected Title',
+    description: 'Corrected description',
+    metadataSource: 'anilist',
+    lastRefreshedAt: refreshed,
+    fieldMetadata: {
+      title: {
+        source: 'manual-editor',
+        lastRefreshedAt: refreshed,
+        manualCorrection: {
+          value: 'Corrected Title',
+          correctedBy: 'manual-editor',
+          correctedAt: refreshed,
+        },
+        observations: [{ source: 'anilist', value: 'Provider Title', lastRefreshedAt: refreshed }],
+      },
+    },
+  })
+
+  assert.equal(record.fieldMetadata.title.manualCorrection.value, 'Corrected Title')
+  assert.equal(record.fieldMetadata.title.source, 'manual-editor')
+  // Provider observation retained so the original can be compared/restored.
+  assert.deepEqual(record.fieldMetadata.title.observations.map((o) => [o.source, o.value]), [
+    ['anilist', 'Provider Title'],
+  ])
+  // Fields without a correction have no manualCorrection block.
+  assert.equal(record.fieldMetadata.description.manualCorrection, undefined)
+})
+
+test('corrected blank value is treated as unknown', () => {
+  const record = createAnimeRecord({ id: 104, title: 'T' })
+  const corrected = applyManualCorrection(record, 'title', {
+    value: '',
+    correctedBy: 'user',
+    correctedAt: '2026-11-19T12:34:56.000Z',
+  })
+  assert.equal(corrected.title, '')
+  assert.equal(corrected.fieldMetadata.title.valueState, 'unknown')
+  assert.equal(corrected.fieldMetadata.title.manualCorrection.value, '')
 })
 
 test('genres preserve provider labels and expose stable unique taxonomy entities', () => {

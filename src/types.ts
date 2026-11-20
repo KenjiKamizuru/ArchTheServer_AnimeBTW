@@ -75,6 +75,20 @@ export interface FieldObservation {
   lastRefreshedAt: string | null
 }
 
+/** A manual correction applied to a canonical field value. Provider
+ * observations are preserved untouched so the original source data can be
+ * restored or compared later. */
+export interface FieldManualCorrection {
+  /** The manually corrected canonical value. */
+  value: unknown
+  /** Who or what applied the correction (for example a user id or 'user'). */
+  correctedBy: string
+  /** ISO timestamp when the correction was applied. */
+  correctedAt: string
+  /** Optional free-text reason for the correction. */
+  reason?: string
+}
+
 export interface FieldMetadata {
   /** State of the canonical field value: known, unknown, unannounced, or not_applicable. */
   valueState: FieldValueState
@@ -83,6 +97,10 @@ export interface FieldMetadata {
   lastRefreshedAt: string | null
   observations: FieldObservation[]
   conflict: boolean
+  /** Manual correction applied to the canonical value. Provider observations
+   * are preserved untouched so the original source data can be restored or
+   * compared later. */
+  manualCorrection?: FieldManualCorrection
 }
 
 export interface Media {
