@@ -326,9 +326,27 @@ export interface DetailSection {
   always?: boolean
 }
 
+/**
+ * A single entry in a recommended watch order (AV-084). `note` is a
+ * user-editable ordering note, persisted per media id in the server KV store.
+ */
+export interface WatchOrderEntry {
+  id: number
+  title: string
+  relationType: 'PREQUEL' | 'SEQUEL' | 'SIDE_STORY' | 'SPIN_OFF' | 'OTHER' | 'CURRENT'
+  position: number
+  format: string | null
+  seasonYear: number | null
+  season: string | null
+  cover: string | null
+  episodes: number | null
+  note: string | null
+}
+
 export interface MediaDetail extends Media {
   streamingEpisodes: StreamingEpisode[]
   relatedSeasons?: RelatedSeason[]
+  watchOrder?: WatchOrderEntry[]
   startDate?: MediaDate | null
   endDate?: MediaDate | null
   rankings?: { rank: number; type: string; context: string; year: number | null; season: MediaSeason | null; allTime: boolean }[]

@@ -1541,3 +1541,191 @@ test('FullTextIndex respects limit', () => {
   const hits = index.search('show', { limit: 3 })
   assert.equal(hits.length, 3)
 })
+
+/* ------------------------------ AV-084 ---------------------------------- */
+
+test('buildWatchOrder orders prequels first, then current, then sequels', () => {
+  const media = {
+    id: 10,
+    title: 'Current Series',
+    format: 'TV',
+    seasonYear: 2020,
+    season: 'SPRING',
+    episodes: 12,
+    cover: null,
+  }
+  const relations = [
+    {
+      key: 'PREQUEL',
+      label: 'Prequel',
+      items: [
+        {
+          id: 1,
+          title: 'Prequel Series',
+          relationType: 'PREQUEL',
+          format: 'TV',
+          seasonYear: 2018,
+          season: 'WINTER',
+          cover: null,
+          episodes: 12,
+        },
+      ],
+    },
+    {
+      key: 'SEQUEL',
+      label: 'Sequel',
+      items: [
+        {
+          id: 2,
+          title: 'Sequel Series',
+          relationType: 'SEQUEL',
+          format: 'TV',
+          seasonYear: 2022,
+          season: 'FALL',
+          cover: null,
+          episodes: 12,
+        },
+      ],
+    },
+  ]
+  const order = detail.buildWatchOrder(media, relations)
+  assert.equal(order.length, 3)
+  assert.equal(order[0].position, 1)
+  assert.equal(order[0].id, 1)
+  assert.equal(order[0].relationType, 'PREQUEL')
+  assert.equal(order[1].position, 2)
+  assert.equal(order[1].id, 10)
+  assert.equal(order[1].relationType, 'CURRENT')
+  assert.equal(order[2].position, 3)
+  assert.equal(order[2].id, 2)
+  assert.equal(order[2].relationType, 'SEQUEL')
+})
+
+test('buildWatchOrder includes side stories and spin-offs after sequels', () => {
+  const media = {
+    id: 10,
+    title: 'Current Series',
+    format: 'TV',
+    seasonYear: 2020,
+    season: 'SPRING',
+    episodes: 12,
+    cover: null,
+  }
+  const relations = [
+    {
+      key: 'SIDE_STORY',
+      label: 'Side story',
+      items: [
+        {
+          id: 3,
+          title: 'Side Story',
+          relationType: 'SIDE_STORY',
+          format: 'OVA',
+          seasonYear: 2021,
+          season: 'SUMMER',
+          cover: null,
+          episodes: 2,
+        },
+      ],
+    },
+    {
+      key: 'SPIN_OFF',
+      label: 'Spin-off',
+      items: [
+        {
+          id: 4,
+          title: 'Spin-off',
+          relationType: 'SPIN_OFF',
+          format: 'ONA',
+          seasonYear: 2023,
+          season: 'WINTER',
+          cover: null,
+          episodes: 6,
+        },
+      ],
+    },
+  ]
+  const order = detail.buildWatchOrder(media, relations)
+  assert.equal(order.length, 3)
+  assert.equal(order[0].id, 10) // current only, since prequels/sequels absent
+  assert.equal(order[1].id, 3)
+  assert.equal(order[1].relationType, 'SIDE_STORY')
+  assert.equal(order[2].id, 4)
+  assert.equal(order[2].relationType, 'SPIN_OFF')
+})
+
+test('buildWatchOrder with no relations returns just the current title', () => {
+  const media = {
+    id: 10,
+    title: 'Standalone Series',
+    format: 'MOVIE',
+    seasonYear: 2019,
+    season: null,
+    episodes: 1,
+    cover: null,
+  }
+  const order = detail.buildWatchOrder(media, [])
+  assert.equal(order.length, 1)
+  assert.equal(order[0].position, 1)
+  assert.equal(order[0].id, 10)
+  assert.equal(order[0].relationType, 'CURRENT')
+})
+
+test('buildWatchOrder sorts within groups by air date', () => {
+  const media = {
+    id: 10,
+    title: 'Current Series',
+    format: 'TV',
+    seasonYear: 2020,
+    season: 'SPRING',
+    episodes: 12,
+    cover: null,
+  }
+  const relations = [
+    {
+      key: 'PREQUEL',
+      label: 'Prequel',
+      items: [
+        {
+          id: 1,
+          title: 'Later Prequel',
+          relationType: 'PREQUEL',
+          format: 'TV',
+          seasonYear: 2019,
+          season: 'FALL',
+          cover: null,
+          episodes: 12,
+        },
+        {
+          id: 2,
+          title: 'Earlier Prequel',
+          relationType: 'PREQUEL',
+          format: 'TV',
+          seasonYear: 2018,
+          season: 'WINTER',
+          cover: null,
+          episodes: 12,
+        },
+      ],
+    },
+  ]
+  const order = detail.buildWatchOrder(media, relations)
+  assert.equal(order[0].id, 2) // earlier prequel first
+  assert.equal(order[1].id, 1)
+  assert.equal(order[2].id, 10) // current last
+})
+
+test('buildWatchOrder entries include episodes and note fields', () => {
+  const media = {
+    id: 10,
+    title: 'Current Series',
+    format: 'TV',
+    seasonYear: 2020,
+    season: 'SPRING',
+    episodes: 12,
+    cover: null,
+  }
+  const order = detail.buildWatchOrder(media, [])
+  assert.equal(order[0].episodes, 12)
+  assert.equal(order[0].note, null)
+})

@@ -259,7 +259,7 @@ Turn the current detail modal into a complete information hub.
 - [x] **AV-081** — Add a related-content section grouped by relationship type. (detail.groupRelations; tests/core-verification.test.mjs)
 - [x] **AV-082** — Add canonical sequel, prequel, side-story, and spin-off relationships. (RELATION_GROUPS covers sequel/prequel/side story/spin-off; tests/core-verification.test.mjs)
 - [x] **AV-083** — Add a franchise timeline with chronological and release-order modes. (detail.buildTimeline release/chronological modes + UI toggle; tests/core-verification.test.mjs)
-- [ ] **AV-084** — Add watch-order recommendations with editable ordering notes.
+- [x] **AV-084** — Add watch-order recommendations with editable ordering notes. (`server/detail.mjs`: added `buildWatchOrder()` — orders prequels first, then current, then sequels, side stories and spin-offs, sorted by air date within each group; `server/index.mjs`: detail route includes `watchOrder` from `buildWatchOrder`; `src/types.ts`: added `WatchOrderEntry` interface + `watchOrder?: WatchOrderEntry[]` on `MediaDetail`; `src/lib/api.ts`: added `animeWatchOrderNotes()` + `saveAnimeWatchOrderNotes()`; `server/index.mjs`: GET/PUT `/api/anime/:id/watchorder-notes` endpoints storing notes as JSON map in KV store; `src/pages/AnimeDetail.tsx`: watch order section with `<ListOrdered>` rows, per-entry editable notes via `Edit` icon, save button — 531 tests pass / 0 fail in core-verification; typecheck clean; build clean)
 - [ ] **AV-085** — Add a character gallery with character detail pages.
 - [ ] **AV-086** — Add staff pages for directors, writers, composers, and animators.
 - [ ] **AV-087** — Add voice-actor profiles and role credits.

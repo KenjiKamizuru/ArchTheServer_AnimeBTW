@@ -366,6 +366,77 @@ export function applySectionOrder(order) {
   return out
 }
 
+/**
+ * Builds a recommended watch order from a media's relations (AV-084).
+ *
+ * Orders entries: PREQUELs first, then the current title, then SEQUELs,
+ * then SIDE_STORYs and SPIN_OFFs, then anything else. Within each group,
+ * entries are sorted by air date (seasonYear, season, id).
+ *
+ * Returns entries with a recommended position and an optional user note.
+ */
+export function buildWatchOrder(media, relations) {
+  const seasonIndex = { WINTER: 0, SPRING: 1, SUMMER: 2, FALL: 3 }
+  const sortKey = (e) =>
+    (e.seasonYear ?? 9999) * 12 + (seasonIndex[e.season] ?? 12) + e.id / 100000
+
+  const current = {
+    id: media.id,
+    title: media.title,
+    relationType: 'CURRENT',
+    position: 0,
+    format: media.format ?? null,
+    seasonYear: media.seasonYear ?? null,
+    season: media.season ?? null,
+    cover: media.cover ?? null,
+    episodes: media.episodes ?? null,
+    note: null,
+  }
+
+  const groups = { PREQUEL: [], SEQUEL: [], SIDE_STORY: [], SPIN_OFF: [], OTHER: [] }
+  for (const group of Array.isArray(relations) ? relations : []) {
+    for (const item of group.items) {
+      const entry = {
+        id: item.id,
+        title: item.title,
+        relationType: item.relationType,
+        position: 0,
+        format: item.format ?? null,
+        seasonYear: item.seasonYear ?? null,
+        season: item.season ?? null,
+        cover: item.cover ?? null,
+        episodes: item.episodes ?? null,
+        note: null,
+      }
+      const key =
+        item.relationType === 'PREQUEL'
+          ? 'PREQUEL'
+          : item.relationType === 'SEQUEL'
+            ? 'SEQUEL'
+            : item.relationType === 'SIDE_STORY'
+              ? 'SIDE_STORY'
+              : item.relationType === 'SPIN_OFF'
+                ? 'SPIN_OFF'
+                : 'OTHER'
+      groups[key].push(entry)
+    }
+  }
+
+  const ordered = [
+    ...groups.PREQUEL.sort((a, b) => sortKey(a) - sortKey(b)),
+    current,
+    ...groups.SEQUEL.sort((a, b) => sortKey(a) - sortKey(b)),
+    ...groups.SIDE_STORY.sort((a, b) => sortKey(a) - sortKey(b)),
+    ...groups.SPIN_OFF.sort((a, b) => sortKey(a) - sortKey(b)),
+    ...groups.OTHER.sort((a, b) => sortKey(a) - sortKey(b)),
+  ]
+
+  return ordered.map((entry, index) => ({
+    ...entry,
+    position: index + 1,
+  }))
+}
+
 /** Printable information sheet (AV-100) as plain markdown-ish lines. */
 export function informationSheet(detail) {
   if (!detail) return ''

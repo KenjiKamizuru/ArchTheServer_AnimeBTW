@@ -694,6 +694,7 @@ app.get(
       relations: detailEngine.groupRelations(
         (media.rawRelations ?? media.relations ?? []),
       ),
+      watchOrder: detailEngine.buildWatchOrder(media, media.rawRelations ?? media.relations ?? []),
       timeline: detailEngine.buildTimeline(media.timelineNodes ?? [], String(req.query.order ?? 'release')),
       scores: detailEngine.scoreDistribution(media.scoreBuckets),
       scoreMean: detailEngine.distributionMean(media.scoreBuckets),
@@ -740,6 +741,39 @@ app.put(
     else await kv.remove(`notes:${id}`)
     res.json({ mediaId: id, note: payload?.note ?? '', updatedAt: payload?.updatedAt ?? null })
   }),
+
+// Watch-order ordering notes (AV-084). Stored as a JSON map of related media
+// id -> user note, namespaced by the current media id.
+app.get(
+  '/api/anime/:id/watchorder-notes',
+  wrap(async (req, res) => {
+    const id = Number(req.params.id)
+    if (!Number.isInteger(id) || id <= 0) throw Object.assign(new Error('Invalid anime id'), { status: 400 })
+    const notes = await kv.get(`watchorder:${id}`, {})
+    res.json({ mediaId: id, notes: typeof notes === 'object' && notes !== null ? notes : {} })
+  }),
+)
+
+app.put(
+  '/api/anime/:id/watchorder-notes',
+  wrap(async (req, res) => {
+    const id = Number(req.params.id)
+    if (!Number.isInteger(id) || id <= 0) throw Object.assign(new Error('Invalid anime id'), { status: 400 })
+    const notes = req.body?.notes
+    if (!notes || typeof notes !== 'object' || Array.isArray(notes)) {
+      throw Object.assign(new Error('Notes must be an object'), { status: 400 })
+    }
+    const clean = {}
+    for (const [key, value] of Object.entries(notes)) {
+      const mediaId = Number(key)
+      if (Number.isInteger(mediaId) && mediaId > 0 && typeof value === 'string') {
+        clean[mediaId] = value.slice(0, 500)
+      }
+    }
+    await kv.set(`watchorder:${id}`, clean)
+    res.json({ mediaId: id, notes: clean })
+  }),
+
 )
 
 // Metadata correction suggestions (AV-096), queued for review.

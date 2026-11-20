@@ -444,6 +444,18 @@ export const api = {
     return send<AnimeNote>(`/api/anime/${id}/notes`, 'PUT', { note })
   },
 
+  animeWatchOrderNotes(id: number) {
+    return get<{ mediaId: number; notes: Record<number, string> }>(`/api/anime/${id}/watchorder-notes`, false)
+  },
+
+  saveAnimeWatchOrderNotes(id: number, notes: Record<number, string>) {
+    return send<{ mediaId: number; notes: Record<number, string> }>(
+      `/api/anime/${id}/watchorder-notes`,
+      'PUT',
+      { notes },
+    )
+  },
+
   reportAnimeIssue(
     id: number,
     payload: { field?: string; message: string; kind?: 'metadata' | 'episode-order' },
