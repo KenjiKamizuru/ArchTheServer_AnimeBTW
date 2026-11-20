@@ -944,3 +944,69 @@ export function createAnimeRecord(input) {
   record.fieldMetadata = createFieldMetadata(input, record)
   return record
 }
+
+// Weight per catalog field for the completeness score. Core identity fields
+// contribute most; supplemental fields contribute less. The total weight is
+// 50 so a fully complete record scores 100. `id`, `fieldMetadata`,
+// `metadataSchemaVersion` and `anidbSearch` are excluded: they are identity/
+// bookkeeping fields rather than descriptive metadata.
+const COMPLETENESS_FIELD_WEIGHTS = Object.freeze({
+  title: 3, cover: 3, description: 3,
+  romaji: 2, english: 2, native: 2, status: 2, format: 2, score: 2,
+  genres: 2, studios: 2, episodes: 2,
+  banner: 1, artwork: 1, color: 1, duration: 1, season: 1, seasonYear: 1,
+  startDate: 1, endDate: 1, popularity: 1, favourites: 1, countryOfOrigin: 1,
+  siteUrl: 1, links: 1, streams: 1, organizations: 1, tags: 1, genreEntities: 1,
+  source: 1, originalLanguage: 1, ageRatings: 1, nextEpisode: 1, airedEpisodes: 1,
+  anidb: 1,
+})
+
+/**
+ * Is one catalog field meaningfully populated for completeness purposes?
+ * Empty collections, empty strings, `null`, `undefined`, zero placeholders,
+ * the `Anime #N` title fallback and the `'UNKNOWN'` status are treated as
+ * absent information rather than complete metadata.
+ */
+function isCompletenessFieldPresent(value, field, record) {
+  if (value === null || value === undefined) return false
+  if (typeof value === 'string') {
+    const text = value.trim()
+    if (!text || text.toUpperCase() === 'UNKNOWN') return false
+    if (field === 'title' && text === `Anime #${record.id}`) return false
+    return true
+  }
+  if (typeof value === 'number') return Number.isFinite(value) && value !== 0
+  if (Array.isArray(value)) return value.length > 0
+  if (typeof value === 'object') return Object.keys(value).length > 0
+  return true
+}
+
+/**
+ * Compute a metadata completeness score (0-100) for a catalog record. Each
+ * `CATALOG_METADATA_FIELDS` entry carries a weight; a field counts toward the
+ * score when its value is meaningfully present and its `fieldMetadata`
+ * `valueState` is not explicitly `unknown`, `unannounced` or `not_applicable`.
+ * Defaults and placeholders do not count as complete. A bare record scores 0;
+ * a fully populated record scores 100. The input is never mutated.
+ */
+export function computeCompletenessScore(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return 0
+  const meta = record.fieldMetadata && typeof record.fieldMetadata === 'object' && !Array.isArray(record.fieldMetadata)
+    ? record.fieldMetadata
+    : {}
+  let presentWeight = 0
+  let totalWeight = 0
+  for (const field of CATALOG_METADATA_FIELDS) {
+    // `id`, `fieldMetadata` and `metadataSchemaVersion` are bookkeeping, and
+    // `anidbSearch` is a provider flag — none describe catalog completeness.
+    if (field === 'id' || field === 'fieldMetadata' || field === 'metadataSchemaVersion' || field === 'anidbSearch') continue
+    const weight = COMPLETENESS_FIELD_WEIGHTS[field] ?? 1
+    totalWeight += weight
+    const fieldMeta = meta[field]
+    const valueState = fieldMeta && typeof fieldMeta === 'object' ? fieldMeta.valueState : null
+    const known = valueState === null || valueState === 'known'
+    if (known && isCompletenessFieldPresent(record[field], field, record)) presentWeight += weight
+  }
+  if (totalWeight === 0) return 0
+  return Math.round((presentWeight / totalWeight) * 100)
+}

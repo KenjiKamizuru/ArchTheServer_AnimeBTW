@@ -216,7 +216,12 @@ export interface Media {
   siteUrl: string | null
   /** Metadata schema version applied when the record was created or last migrated. */
   metadataSchemaVersion?: number
+  /** Derived metadata completeness score (0-100); absent on legacy records. */
+  completenessScore?: MetadataCompletenessScore
 }
+
+/** Metadata completeness score for a catalog entry, 0 (empty) to 100 (complete). */
+export type MetadataCompletenessScore = number
 
 export interface StreamingEpisode {
   title: string

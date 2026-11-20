@@ -10,6 +10,7 @@ import {
   fieldFreshness,
   isFieldStale,
   refreshPolicy,
+  computeCompletenessScore,
 } from '../server/catalog.mjs'
 const basic = () => createAnimeRecord({ id: 1 })
 test('id retained', () => assert.equal(basic().id, 1))
@@ -214,6 +215,105 @@ test('artwork caps the number of retained variants', () => {
   }))
   const record = createAnimeRecord({ id: 6, metadataSource: 'anilist', artwork: variants })
   assert.equal(record.artwork.length, 16)
+})
+test('completeness score of a bare record is zero', () => {
+  assert.equal(computeCompletenessScore(basic()), 0)
+})
+test('completeness score rejects non-record input', () => {
+  assert.equal(computeCompletenessScore(null), 0)
+  assert.equal(computeCompletenessScore(undefined), 0)
+  assert.equal(computeCompletenessScore('not a record'), 0)
+  assert.equal(computeCompletenessScore([1, 2]), 0)
+})
+test('completeness score grows as more fields are known', () => {
+  const sparse = computeCompletenessScore(createAnimeRecord({
+    id: 7,
+    title: 'Cowboy Bebop',
+    cover: 'https://example.com/cover.jpg',
+    description: 'A space western.',
+  }))
+  const richer = computeCompletenessScore(createAnimeRecord({
+    id: 8,
+    title: 'Cowboy Bebop',
+    romaji: 'Kowboy Bebop',
+    english: 'Cowboy Bebop',
+    cover: 'https://example.com/cover.jpg',
+    banner: 'https://example.com/banner.jpg',
+    description: 'A space western.',
+    episodes: 26,
+    status: 'FINISHED',
+    format: 'TV',
+    score: 87,
+    genres: ['Sci-Fi', 'Action'],
+    studios: ['Sunrise'],
+    source: 'manga',
+  }))
+  assert.ok(sparse > 0)
+  assert.ok(richer > sparse)
+  assert.ok(richer < 100)
+})
+test('completeness score reaches 100 for a fully populated record', () => {
+  const record = createAnimeRecord({
+    id: 9,
+    title: 'Fullmetal Alchemist: Brotherhood',
+    romaji: 'Hagane no Renkinjutsushi: Brotherhood',
+    english: 'Fullmetal Alchemist: Brotherhood',
+    native: '鋼の錬金術師 FULLMETAL ALCHEMIST',
+    cover: 'https://example.com/cover.jpg',
+    banner: 'https://example.com/banner.jpg',
+    artwork: [{ source: 'anilist', url: 'https://example.com/poster.jpg', kind: 'poster' }],
+    color: '#ffffff',
+    description: 'Two brothers search for the Philosopher\'s Stone.',
+    episodes: 64,
+    airedEpisodes: 64,
+    duration: 24,
+    status: 'FINISHED',
+    format: 'TV',
+    season: 'SPRING',
+    seasonYear: 2009,
+    startDate: { year: 2009, month: 4, day: 5 },
+    endDate: { year: 2010, month: 7, day: 3 },
+    score: 91,
+    providerScores: [{ source: 'anilist', value: 91, scale: 100, normalized: 91 }],
+    popularity: 95,
+    favourites: 120_000,
+    genres: ['Action', 'Adventure'],
+    genreEntities: [],
+    tags: [{ name: 'action', rank: 10, isMediaSpoiler: false }],
+    source: 'manga',
+    countryOfOrigin: 'JP',
+    originalLanguage: 'jpn',
+    ageRatings: [{ region: 'US', system: 'MPAA', rating: 'TV-14' }],
+    nextEpisode: { episode: 65, airingAt: 0 },
+    studios: ['Bones'],
+    organizations: [{ kind: 'studio', name: 'Bones', source: 'anilist' }],
+    links: [{ site: 'Official Site', url: 'https://example.com' }],
+    streams: [{ site: 'Crunchyroll', url: 'https://crunchyroll.com' }],
+    anidb: '1234',
+    siteUrl: 'https://anilist.co/anime/9',
+    metadataSource: 'anilist',
+  })
+  assert.equal(computeCompletenessScore(record), 100)
+})
+test('completeness score respects fieldMetadata valueState', () => {
+  const record = createAnimeRecord({
+    id: 10,
+    title: 'Known Title',
+    description: 'A synopsis.',
+    cover: null,
+  })
+  const base = computeCompletenessScore(record)
+  assert.equal(base, 12) // title + description -> 6/50 * 100 = 12
+  // Mark description explicitly unknown: it no longer counts even though the
+  // text is present.
+  const withUnknown = {
+    ...record,
+    fieldMetadata: {
+      ...record.fieldMetadata,
+      description: { ...record.fieldMetadata.description, valueState: 'unknown' },
+    },
+  }
+  assert.equal(computeCompletenessScore(withUnknown), 6) // title only -> 3/50 * 100 = 6
 })
 test('default start and end dates are unknown', () => {
   assert.equal(basic().startDate, null)
