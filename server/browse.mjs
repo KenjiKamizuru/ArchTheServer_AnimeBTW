@@ -111,7 +111,7 @@ export function parseBrowseFilters(raw = {}) {
     genres: toStringList(raw.genres, null),
     genresExclude: toStringList(raw.genresExclude, null),
     tags: toStringList(raw.tags, null, MAX_TAGS),
-    tagMode: ['and', 'or'].includes(String(raw.tagMode ?? '')) ? String(raw.tagMode) : 'and',
+    tagMode: ['and', 'or', 'not'].includes(String(raw.tagMode ?? '')) ? String(raw.tagMode) : 'and',
     years,
     episodes: clampRange(raw.episodesMin, raw.episodesMax, 1, 9999),
     duration: clampRange(raw.durationMin, raw.durationMax, 1, 600),
@@ -346,13 +346,19 @@ export function matchMediaLocally(media, filters) {
       (media.tags ?? []).filter((t) => !t.isMediaSpoiler).map((t) => t.name),
     )
     const hit = filters.tags.filter((t) => names.has(t))
-    if (hit.length === 0) return { ok: false, reasons }
-    // AniList's `tag_in` is any-of, so AND mode needs an explicit local check
-    // or a title matching only one requested tag would slip through.
-    if (filters.tagMode === 'and' && hit.length !== filters.tags.length) {
-      return { ok: false, reasons }
+    if (filters.tagMode === 'not') {
+      // NOT mode: exclude any media that carries even one of the requested tags.
+      if (hit.length > 0) return { ok: false, reasons }
+      reasons.push(`no tags ${filters.tags.join(', ')}`)
+    } else {
+      if (hit.length === 0) return { ok: false, reasons }
+      // AniList's `tag_in` is any-of, so AND mode needs an explicit local check
+      // or a title matching only one requested tag would slip through.
+      if (filters.tagMode === 'and' && hit.length !== filters.tags.length) {
+        return { ok: false, reasons }
+      }
+      reasons.push(`tag ${hit.join(filters.tagMode === 'and' ? ' + ' : ' or ')}`)
     }
-    reasons.push(`tag ${hit.join(filters.tagMode === 'and' ? ' + ' : ' or ')}`)
   }
 
   if (filters.minScore !== null && (media.averageScore ?? 0) < filters.minScore) {
@@ -395,7 +401,16 @@ export function describeFilters(filters) {
   if (filters.statuses.length) parts.push(filters.statuses.join('/'))
   if (filters.genres.length) parts.push(filters.genres.join(', '))
   if (filters.genresExclude.length) parts.push(`without ${filters.genresExclude.join(', ')}`)
-  if (filters.tags.length) parts.push(`tags ${filters.tagMode === 'and' ? 'all of' : 'any of'} ${filters.tags.join(', ')}`)
+  if (filters.tags.length)
+    parts.push(
+      `tags ${
+        filters.tagMode === 'and'
+          ? 'all of'
+          : filters.tagMode === 'or'
+            ? 'any of'
+            : 'none of'
+      } ${filters.tags.join(', ')}`,
+    )
   if (filters.years) parts.push(yearsLabel(filters.years))
   if (filters.season && filters.year) parts.push(`${filters.season} ${filters.year}`)
   else if (filters.year) parts.push(filters.includeOlderSeasons ? `any season ${filters.year}` : String(filters.year))

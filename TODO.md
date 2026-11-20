@@ -194,7 +194,7 @@ Expand the existing season browser into a complete catalog exploration experienc
 - [x] **AV-026** — Add browse filters for TV, movie, OVA, ONA, and special formats. (BROWSE_FORMATS + parseBrowseFilters; tests/core-verification.test.mjs)
 - [x] **AV-027** — Add filters for currently airing, upcoming, finished, and cancelled shows. (BROWSE_STATUSES + parseBrowseFilters; tests/core-verification.test.mjs)
 - [x] **AV-028** — Add multi-select genre filters with include and exclude modes. (genres/genresExclude parsing and local predicate; tests/core-verification.test.mjs)
-- [ ] **AV-029** — Add tag filters with AND, OR, and NOT combinations. (partially verified: AND/OR tag modes work (core-verification test); NOT-tag mode is still missing)
+- [x] **AV-029** — Add tag filters with AND, OR, and NOT combinations. (`server/browse.mjs`: `tagMode` now accepts 'not' alongside 'and'/'or'; `matchMediaLocally` rejects media carrying any requested tag in NOT mode and ignores spoiler tags; `describeFilters` renders "none of" for NOT mode; `filtersToParams` serializes 'not' for shareable URLs; `buildBrowseQuery` keeps `tag_in` pushdown AND-only since NOT/OR are evaluated locally. `tests/core-verification.test.mjs`: NOT-mode accept/reject, spoiler-tag exclusion, combined NOT + existing filters — 457 pass / 0 fail across full suite; `npm run verify` clean)
 - [ ] **AV-030** — Add studio and producer browsing pages.
 - [x] **AV-031** — Add decade and release-year range filters. (decade shorthand and clamped year ranges; tests/core-verification.test.mjs)
 - [x] **AV-032** — Add season filters that include historical seasons. (includeOlderSeasons (share URL key `older`); tests/core-verification.test.mjs)

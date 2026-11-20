@@ -122,6 +122,15 @@ test('local browse matching enforces AND tags, ignores spoiler tags and exclusio
   assert.equal(browse.matchMediaLocally(media, withFilters({ tags: ['Isekai'], tagMode: 'and' })).ok, true)
   assert.equal(browse.matchMediaLocally(media, withFilters({ tags: ['Isekai', 'Cooking'], tagMode: 'and' })).ok, false)
   assert.equal(browse.matchMediaLocally(media, withFilters({ tags: ['Isekai', 'Cooking'], tagMode: 'or' })).ok, true)
+  assert.equal(browse.matchMediaLocally(media, withFilters({ tags: ['Isekai', 'Cooking'], tagMode: 'not' })).ok, false)
+  assert.equal(browse.matchMediaLocally(media, withFilters({ tags: ['Isekai'], tagMode: 'not' })).ok, false)
+  assert.equal(browse.matchMediaLocally(media, withFilters({ tags: ['Time Travel'], tagMode: 'not' })).ok, true)
+  assert.equal(browse.matchMediaLocally(media, withFilters({ tags: ['Isekai', 'Time Travel'], tagMode: 'not' })).ok, false)
+  // NOT mode ignores spoiler tags (they never drive discovery).
+  assert.equal(
+    browse.matchMediaLocally(media, withFilters({ tags: ['Cooking'], tagMode: 'not' })).ok,
+    true,
+  )
   assert.equal(browse.matchMediaLocally(media, withFilters({ genresExclude: ['Hentai'] })).ok, false)
   assert.equal(browse.matchMediaLocally(media, withFilters({ minScore: 90 })).ok, false)
   assert.equal(browse.matchMediaLocally(media, withFilters({ maxPopularity: 1000 })).ok, false)
