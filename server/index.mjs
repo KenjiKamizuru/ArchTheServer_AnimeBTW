@@ -143,7 +143,9 @@ app.use('/api', (req, res, next) => {
 // are exempt; all other API routes require either a valid API token (when
 // ANIMEVAULT_API_TOKEN is set) or a valid session token via
 // Authorization: Bearer <token> or the session-token cookie.
-const PUBLIC_AUTH_ROUTES = new Set(['/api/auth/register', '/api/auth/login'])
+// Express 5 strips the "/api" prefix from req.path inside app.use('/api', ...)
+// middleware, so these must be the stripped paths.
+const PUBLIC_AUTH_ROUTES = new Set(['/auth/register', '/auth/login'])
 app.use('/api', (req, res, next) => {
   if (PUBLIC_AUTH_ROUTES.has(req.path)) return next()
   // API token auth (ANIMEVAULT_API_TOKEN) takes precedence over sessions.
