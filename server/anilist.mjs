@@ -8,6 +8,7 @@
 import { readResponseTextLimited, sanitizeCoverUrl, sanitizePublicHttpUrl } from './security.mjs'
 import { parseBrowseFilters } from './browse.mjs'
 import { createAnimeRecord } from './catalog.mjs'
+import { remember } from './identifiers.mjs'
 
 const ENDPOINT = 'https://graphql.anilist.co'
 const MAX_GQL_BYTES = 6 * 1024 * 1024
@@ -18,6 +19,7 @@ const cache = new Map()
 
 const MEDIA_FIELDS = `
   id
+  idMal
   title { romaji english native }
   coverImage { extraLarge large color }
   bannerImage
@@ -28,6 +30,8 @@ const MEDIA_FIELDS = `
   format
   season
   seasonYear
+  startDate { year month day }
+  endDate { year month day }
   averageScore
   popularity
   favourites
@@ -37,7 +41,7 @@ const MEDIA_FIELDS = `
   countryOfOrigin
   siteUrl
   nextAiringEpisode { episode airingAt }
-  studios(isMain: true) { nodes { name } }
+  studios(isMain: true) { nodes { id name isAnimationStudio siteUrl } }
   externalLinks { site url type }
 `
 
@@ -180,6 +184,25 @@ function airedEpisodes(media) {
   return media.episodes ?? 0
 }
 
+/** Pulls the numeric AniDB id out of a direct AniDB link when present. */
+export function anidbIdFromUrl(raw) {
+  const match = String(raw ?? '').match(/anidb\.net\/(?:anime|adb\.anime)\/(\d+)/i)
+  return match ? match[1] : null
+}
+
+/** Provider identifiers extracted from an AniList payload (AV-002). */
+export function extractExternalIds(media) {
+  if (!media || !Number.isSafeInteger(media.id)) return {}
+  const links = Array.isArray(media.externalLinks) ? media.externalLinks : []
+  const directAnidb = links.find((l) => /anidb/i.test(l?.site ?? '') || /anidb\.net/i.test(l?.url ?? ''))?.url ?? null
+  const anidbId = anidbIdFromUrl(directAnidb)
+  return {
+    anilist: String(media.id),
+    ...(Number.isFinite(media.idMal) && media.idMal > 0 ? { mal: String(media.idMal) } : {}),
+    ...(anidbId ? { anidb: anidbId } : {}),
+  }
+}
+
 function normalize(media) {
   if (!media) return null
   const links = (media.externalLinks ?? [])
@@ -199,9 +222,17 @@ function normalize(media) {
   const anidb = directAnidb ?? `https://anidb.net/search/anime?adb.search=${encodeURIComponent(title)}`
   const rawColor = typeof media.coverImage?.color === 'string' ? media.coverImage.color.trim() : ''
   const color = /^#[0-9a-fA-F]{3,8}$/.test(rawColor) ? rawColor : null
+  const studioNodes = Array.isArray(media.studios?.nodes) ? media.studios.nodes : []
+
+  const externalIds = extractExternalIds(media)
+  // Provider IDs are persisted separately from the canonical catalog record.
+  // Registration is non-fatal: malformed IDs must not break browsing (AV-002/022).
+  remember({ id: media.id, externalIds })
 
   return createAnimeRecord({
     id: media.id,
+    metadataSource: 'anilist',
+    lastRefreshedAt: new Date().toISOString(),
     title,
     romaji: media.title?.romaji ?? null,
     english: media.title?.english ?? null,
@@ -213,11 +244,16 @@ function normalize(media) {
     episodes: media.episodes ?? null,
     airedEpisodes: airedEpisodes(media),
     duration: media.duration ?? null,
+    durationUnit: 'minutes',
     status: media.status ?? 'UNKNOWN',
     format: media.format ?? null,
     season: media.season ?? null,
     seasonYear: media.seasonYear ?? null,
+    startDate: media.startDate ?? null,
+    endDate: media.endDate ?? null,
+    // AniList's `averageScore` is already a percentage on a 0–100 scale.
     score: media.averageScore ?? null,
+    scoreScale: 100,
     popularity: media.popularity ?? 0,
     favourites: media.favourites ?? null,
     genres: media.genres ?? [],
@@ -234,7 +270,17 @@ function normalize(media) {
     nextEpisode: media.nextAiringEpisode
       ? { episode: media.nextAiringEpisode.episode, airingAt: media.nextAiringEpisode.airingAt }
       : null,
-    studios: (media.studios?.nodes ?? []).map((n) => n.name).filter(Boolean),
+    studios: studioNodes
+      .map((studio) => studio?.name)
+      .filter((name) => typeof name === 'string' && name.length > 0),
+    organizations: studioNodes.map((studio) => ({
+      kind: 'studio',
+      name: studio?.name,
+      source: 'anilist',
+      providerId: studio?.id,
+      siteUrl: studio?.siteUrl,
+      isAnimationStudio: studio?.isAnimationStudio,
+    })),
     links: links.map((l) => ({ site: l.site, url: l.url })),
     streams,
     anidb,
@@ -333,6 +379,12 @@ export async function browse(filters, browseModule) {
  * Discovery picks: a deterministic "spotlight" for the day, a random pick with
  * optional filter awareness, and a hidden-gems collection.
  */
+/** Deterministic index for the rotating daily spotlight (AV-040). */
+export function dailyPickIndex(length, now = Date.now()) {
+  if (!Number.isSafeInteger(length) || length <= 0) return -1
+  return Math.floor(now / 86_400_000) % length
+}
+
 export async function discover(kind, filters, browseModule) {
   if (kind === 'random') {
     // Random page within a bounded depth keeps the request cheap while still
@@ -348,8 +400,7 @@ export async function discover(kind, filters, browseModule) {
     const result = await browse({ ...filters, page: 1, perPage: 50, sort: 'popular' }, browseModule)
     if (result.media.length === 0) return { kind, media: null }
     // Stable per-day index: same pick all day, changes at midnight.
-    const day = Math.floor(Date.now() / 86_400_000)
-    return { kind, media: result.media[day % result.media.length] }
+    return { kind, media: result.media[dailyPickIndex(result.media.length)] }
   }
 
   if (kind === 'hidden-gems') {
@@ -769,8 +820,6 @@ export async function getDetail(id) {
         Media(id: $id, type: ANIME) {
           ${MEDIA_FIELDS}
           trailer { id site }
-          startDate { year month day }
-          endDate { year month day }
           streamingEpisodes { title thumbnail url site }
           stats { scoreDistribution { score amount } }
           rankings { rank type context year season allTime }
@@ -877,15 +926,15 @@ export async function getDetail(id) {
           episodes: base.episodes,
           season: base.season,
           seasonYear: base.seasonYear,
-          startDate: data.Media.startDate ?? null,
+          startDate: base.startDate,
           coverImage: { large: base.cover },
         },
         ...(data.Media.relations?.edges ?? [])
           .filter((edge) => edge?.node?.type === 'ANIME')
           .map((edge) => edge.node),
       ],
-      startDate: data.Media.startDate ?? null,
-      endDate: data.Media.endDate ?? null,
+      startDate: base.startDate,
+      endDate: base.endDate,
       rankings: (data.Media.rankings ?? [])
         .filter((r) => r && Number.isFinite(r.rank))
         .slice(0, 8)

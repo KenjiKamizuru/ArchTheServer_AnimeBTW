@@ -14,6 +14,45 @@ after(async () => { await store.flush(); await rm(dir, { recursive: true, force:
 const doc = () => ({ format: 'animevault-list', version: 1, list: { name: '  Import  ', description: ' desc ', entries: [{ mediaId: 1, media: { id: 1, title: 'First' }, status: 'completed', addedAt: 123, note: 'note', priority: 3, rating: 8 }] } })
 const invalid = (mutate) => { const d = doc(); mutate(d); assert.throws(() => parseListImport(d), { status: 400 }) }
 test('parses valid document', () => assert.equal(parseListImport(doc()).entries.length, 1))
+test('preserves normalized provider score scales on imported media', () => {
+  const document = doc()
+  document.list.entries[0].media.score = 84.75
+  document.list.entries[0].media.providerScores = [
+    { source: 'MAL', value: '8.4', scale: 10, normalized: 999 },
+    { source: 'AniList', value: 80, scale: 100, normalized: 1 },
+    { source: 'Unscaled', value: 8 },
+    { source: 'Invalid', value: 11, scale: 10 },
+  ]
+  const media = parseListImport(document).entries[0].media
+
+  assert.equal(media.score, 84.75)
+  assert.deepEqual(media.providerScores, [
+    { source: 'anilist', value: 80, scale: 100, normalized: 80 },
+    { source: 'mal', value: 8.4, scale: 10, normalized: 84 },
+  ])
+})
+test('preserves partial dates and validated Unix-second airing timestamps on imported media', () => {
+  const document = doc()
+  document.list.entries[0].media.startDate = { year: 2024, month: 2, day: 29 }
+  document.list.entries[0].media.endDate = { year: 2025, month: null, day: null }
+  document.list.entries[0].media.nextEpisode = { episode: 3, airingAt: 1_735_689_600 }
+  const media = parseListImport(document).entries[0].media
+
+  assert.deepEqual(media.startDate, { year: 2024, month: 2, day: 29 })
+  assert.deepEqual(media.endDate, { year: 2025, month: null, day: null })
+  assert.deepEqual(media.nextEpisode, { episode: 3, airingAt: 1_735_689_600 })
+})
+test('invalid dates and millisecond air times do not leak into imported media', () => {
+  const document = doc()
+  document.list.entries[0].media.startDate = { year: 2023, month: 2, day: 29 }
+  document.list.entries[0].media.endDate = '2024-03-04'
+  document.list.entries[0].media.nextEpisode = { episode: 3, airingAt: 1_735_689_600_000 }
+  const media = parseListImport(document).entries[0].media
+
+  assert.equal(media.startDate, null)
+  assert.equal(media.endDate, null)
+  assert.equal(media.nextEpisode, null)
+})
 test('trims list name', () => assert.equal(parseListImport(doc()).name, 'Import'))
 test('trims description', () => assert.equal(parseListImport(doc()).description, 'desc'))
 test('preserves note', () => assert.equal(parseListImport(doc()).entries[0].note, 'note'))

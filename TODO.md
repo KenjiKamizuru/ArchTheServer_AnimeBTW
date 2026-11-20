@@ -20,6 +20,133 @@ Build a polished, self-hosted anime discovery and viewing platform that scales f
 - **Current settings:** quality, default resolver result, sub/dub preference, library path, simultaneous downloads, local playback preference, and allowed external hosts.
 - **Important baseline note:** this is a code/README review, not a live deployment test or a security audit. Some behaviors may be partial, provider-dependent, or require validation.
 
+## Verification & completion log
+
+**Running totals (2026-11-19):** 82/800 checked; 11 partial items annotated and
+still open; latest `npm run verify`: 359 tests across 14 files, typecheck and
+production build clean.
+
+**Batch 1 — baseline verification.** Added `npm test` / `npm run verify`,
+`tests/core-verification.test.mjs` and `tests/api-smoke.test.mjs`; verified byte
+ranges, path/SSRF guards, atomic writes, HTTP headers and local API shapes;
+checked off 73 already-implemented items with evidence notes.
+
+**Batch 2 — completion.** AV-040 daily-pick UI plus a deterministic rotation
+test; AV-073 search request cancellation via `AbortController` plus the existing
+sequence guard; AV-594 public `/api/ready` readiness endpoint, HTTP test and
+README entry; AV-701 built-in coverage report. All four verified with
+`npm run verify` (one readiness auth issue found during the batch was fixed).
+
+**Batch 3 — AV-002.** Added a dedicated persistent provider-identifier registry
+(`server/identifiers.mjs`) and read-only lookup routes. AniList auto-registers
+only IDs present in its response (AniList, MAL, and direct AniDB); the registry
+also supports IMDb IDs supplied by other adapters. Provider IDs stay out of the
+canonical catalog record. Registry validation, reverse lookup, restart
+persistence and corrupt-file recovery are tested. A review found the initial
+implementation also leaked IDs into catalog records; that is now removed and
+covered by the AniList-to-registry integration test.
+
+**Batch 4 — AV-003.** `createAnimeRecord` now emits source and ISO
+`lastRefreshedAt` metadata for every catalog field, including null-valued fields;
+AniList normalization stamps each field from one response time. Tests verify the
+field set, normalization and adapter integration.
+
+**Batch 5 — AV-004.** Added bounded per-provider field observations and a derived
+conflict flag in `fieldMetadata`. The canonical value/source remain explicit and
+are never silently replaced; stale same-provider observations are collapsed by
+latest timestamp, timestamp ties use stable value ordering, and null/unknown
+values do not create false conflicts. `tests/catalog.test.mjs` covers conflicts,
+equivalent structured values, unknowns, ties and ignored fields.
+
+**Batch 6 — AV-007.** Added deterministic genre entities and stable IDs on tags.
+IDs use NFKC/case/whitespace-normalized label keys, a readable ASCII slug, and a
+SHA-256 suffix; original genre labels and tag rank/spoiler data remain available.
+Genre entities and tags deduplicate by normalized label while legacy genre labels
+remain unchanged. Tests cover Unicode,
+slug collisions, case/spacing variants, unknown values, and aggregation. Caveat:
+IDs are label-derived (a label rename creates a new ID), no cross-provider synonym
+registry exists, and browse/search filters remain label-based for compatibility.
+Duplicate tag ranks use the maximum and spoiler status uses conservative OR.
+
+**Batch 7 — AV-008.** Added stable linked organization entities for studios,
+producers, licensors, and distributors, with source-scoped IDs (or normalized
+name fallback), deduplicated source-attributed aliases, and sanitized site URLs.
+The AniList adapter now supplies studio IDs and attributes while preserving the
+legacy `studios: string[]` field; the other kinds are accepted by the
+provider-neutral normalizer. Tests cover absent IDs, duplicate names, Unicode
+normalization/slug collisions, aliases, and all four kinds. `npm run verify`
+passes with 335 tests plus clean typecheck and build.
+
+**Batch 8 — AV-009.** Catalog records now normalize country values as
+trimmed/uppercased two-letter country codes and canonicalize original-language
+ISO 639 / BCP-47 tags with `Intl.Locale`; malformed and `und` values become null.
+The AniList adapter already supplies country of origin but does not expose
+original language, so that field stays unknown unless another adapter supplies
+it. Tests cover case/space normalization, alpha-code and locale aliases,
+script/region tags, invalid inputs, and adapter output. `npm run verify` passes
+with 338 tests, typecheck, and build.
+
+**Batch 9 — AV-010.** Existing catalog/consumers already used minutes, but the
+factory copied runtime values without validating units or numeric bounds. Added
+normalization to positive rounded whole minutes: legacy unannotated values remain
+minutes; explicit minute/second/millisecond/hour units and `{value, unit}` inputs
+convert to minutes; malformed, nonpositive, unsupported, or over-bound values
+become null. AniList declares its API duration as minutes. Unit conversion and
+invalid-value cases are tested; `npm run verify` passes with 340 tests, typecheck,
+and build. Live upstream data was not available for validation.
+
+**Batch 10 — AV-011.** Added `ageRatings`, a region-aware collection carrying
+region, rating system, display value, optional minimum age, and source. Regions
+normalize to uppercase two-letter codes or `GLOBAL`; rating labels/systems are
+normalized, exact source-specific duplicates collapse deterministically, and
+invalid entries are skipped without inferring minimum ages. The AniList adapter
+has no regional age classification; its adult flag is not treated as a rating.
+Tests cover multiple systems/regions, duplicate/source behavior, invalid input,
+and unknown age values. `npm run verify` passes with 343 tests, typecheck, and
+build.
+
+**Batch 11 — AV-012.** Canonical `score` values are normalized to percentages
+on a 0–100 scale (rounded to two decimal places), while `providerScores` retains
+each known provider's source, original value, declared scale, and normalized
+percentage. Legacy top-level scores remain percentage-scaled by default; adapters
+for another scale must pass `scoreScale`, and supplemental provider-score entries
+must explicitly include a scale. Invalid or out-of-range values are rejected
+rather than guessed. The current AniList query requests `averageScore` (not a separate scale field);
+the existing UI/filter contract treats this value as 0–100, and the adapter
+retains it with scale 100. No other provider score is fabricated, and a live
+upstream response was unavailable for validation. Bookmark/list sanitization
+preserves normalized score details and decimal percentages.
+Catalog, AniList-adapter, provenance, and import tests cover conversion,
+validation, and retention. `npm run verify` passes with 347 tests across 14
+files, typecheck, and production build.
+
+**Batch 12 — AV-013.** Added canonical `startDate`/`endDate` FuzzyDates as
+partial `{year, month, day}` values: known precision is preserved, missing
+parts are never filled, and invalid or impossible calendar dates become null.
+AniList already exposes these fields on detail; its shared metadata and browse
+queries now request them too. `nextAiringEpisode.airingAt` remains whole Unix
+seconds, is validated with its episode number, and is not reinterpreted as
+milliseconds. Catalog, detail timelines/episode guides, bookmarks, and list
+imports use the same normalizers. Tests cover partial/leap dates, malformed
+calendar values, timestamp units, AniList mappings, and stored imports. No live
+upstream response was available. `npm run verify` passes with 353 tests across
+14 files, typecheck, and production build.
+
+**Checklist reconciliation.** AV-070/071/072 are now partial and unchecked:
+search groups are format-only, highlighting and relevance reasons appear in
+typeahead/local-library views rather than catalog result cards, and character,
+staff, and studio result types are absent. AV-099 and AV-277 are also partial:
+notes are server-shared without account ownership, and quality options are
+presets rather than source-derived renditions. AV-553 is partial because global
+CSRF middleware is tested on only a subset of mutating routes. The AV-099 UI no
+longer incorrectly claims notes are device-only. AV-594 and AV-701 evidence now
+distinguishes actual readiness checks/current totals from the initial coverage
+baseline.
+
+**Not verifiable here:** live provider responses (no outbound access), ffmpeg
+(binary absent), browser E2E, real upload/download I/O, and multi-user deployment
+behavior. These remain unchecked until a suitable integration environment exists.
+
 ## How to use this backlog
 
 - [ ] means the proposed task has not been verified as complete in this review; it does **not** prove no partial implementation exists.
@@ -34,20 +161,20 @@ Build a polished, self-hosted anime discovery and viewing platform that scales f
 
 A single clean metadata model is the foundation for every other screen.
 
-- [x] **AV-001** — Create a canonical anime record independent of AniList's response shape. (`server/catalog.mjs`; verified with `node --test tests/catalog.test.mjs`. Numeric IDs still originate from AniList; the separate provider identifier collection is AV-002.)
-- [ ] **AV-002** — Store provider IDs in a dedicated external-identifiers collection.
-- [ ] **AV-003** — Track metadata source and last-refresh timestamp for every field.
-- [ ] **AV-004** — Add field-level provenance when two providers disagree.
-- [ ] **AV-005** — Normalize title variants into romaji, English, native, and preferred display names.
-- [ ] **AV-006** — Normalize season, year, format, status, and episode-count fields.
-- [ ] **AV-007** — Normalize genres and tags into stable internal identifiers.
-- [ ] **AV-008** — Normalize studios, producers, licensors, and distributors as linked entities.
-- [ ] **AV-009** — Normalize country of origin and original language.
-- [ ] **AV-010** — Normalize episode runtimes into a consistent duration format.
-- [ ] **AV-011** — Normalize age ratings into a common region-aware model.
-- [ ] **AV-012** — Normalize score values while retaining each provider's original scale.
-- [ ] **AV-013** — Normalize start dates, end dates, and broadcast timestamps.
-- [ ] **AV-014** — Represent unknown, unannounced, and not-applicable values separately.
+- [x] **AV-001** — Create a canonical anime record independent of AniList's response shape. (`server/catalog.mjs`; verified with `npm test`, including tests/catalog.test.mjs and tests/core-verification.test.mjs. Numeric IDs still originate from AniList; the separate provider identifier collection is AV-002.)
+- [x] **AV-002** — Store provider IDs in a dedicated external-identifiers collection. (`server/identifiers.mjs` persists validated, unique AniList/MAL/AniDB/IMDb IDs; AniList adapter currently registers AniList/MAL/direct-AniDB IDs; registry remains separate from catalog records; `/api/identifiers/*`; tests/identifiers.test.mjs and tests/metadata-provenance.test.mjs)
+- [x] **AV-003** — Track metadata source and last-refresh timestamp for every field. (`createAnimeRecord` emits `fieldMetadata` for every catalog metadata field; AniList normalization stamps one provider and ISO refresh time across fields; tests/catalog.test.mjs + tests/metadata-provenance.test.mjs)
+- [x] **AV-004** — Add field-level provenance when two providers disagree. (`fieldMetadata` preserves bounded per-provider observations and derives `conflict`; canonical value/source remain explicit with no silent precedence; same-provider newest/tie rules and unknown handling tested in tests/catalog.test.mjs; typed in src/types.ts)
+- [x] **AV-005** — Normalize title variants into romaji, English, native, and preferred display names. (createAnimeRecord exposes title/romaji/english/native with defaults; tests/catalog.test.mjs)
+- [x] **AV-006** — Normalize season, year, format, status, and episode-count fields. (createAnimeRecord normalizes season, year, format, status and episode/duration fields; tests/catalog.test.mjs)
+- [x] **AV-007** — Normalize genres and tags into stable internal identifiers. (`createAnimeRecord` adds deduplicated `genreEntities` and SHA-256-backed tag IDs while retaining labels/rank/spoiler fields; NFKC/case/spacing, Unicode, slug collisions and unknown inputs tested in tests/catalog.test.mjs; client types updated in src/types.ts)
+- [x] **AV-008** — Normalize studios, producers, licensors, and distributors as linked entities. (`organizations` adds stable linked records with provider/name identity, source-attributed aliases and safe URLs; AniList populates studios while `studios: string[]` remains unchanged; tests/catalog.test.mjs covers missing IDs, deduplication, Unicode/collision behavior and all four kinds; producers/licensors/distributors are normalized provider-neutrally because AniList exposes only studio nodes)
+- [x] **AV-009** — Normalize country of origin and original language. (`countryOfOrigin` normalizes NFKC/case/whitespace into two-letter codes; `originalLanguage` canonicalizes ISO 639 / BCP-47 tags through `Intl.Locale`, rejecting malformed/`und`; tested defaults, adapters, aliases, scripts/regions and invalid inputs in tests/catalog.test.mjs; AniList supplies country but no original-language field, so this stays null unless another adapter provides it)
+- [x] **AV-010** — Normalize episode runtimes into a consistent duration format. (`createAnimeRecord` emits positive rounded whole minutes, converts explicit minute/second/millisecond/hour values, preserves unannotated legacy minutes, and maps invalid/unsupported/out-of-range runtimes to null; AniList adapter declares minutes; tests/catalog.test.mjs covers conversion and rejection; no live upstream response was available)
+- [x] **AV-011** — Normalize age ratings into a common region-aware model. (`ageRatings` records normalized region, scheme, rating, optional minimum age, and source; supports ISO alpha-2-like regions plus `GLOBAL`, deduplicates identical source-specific entries, and skips invalid records without deriving ages; tests/catalog.test.mjs covers regional schemes, sources, duplicates, malformed rows and unknown ages; AniList provides no regional rating, and its adult flag is not misrepresented as one)
+- [x] **AV-012** — Normalize score values while retaining each provider's original scale. (`score` is a 0–100 percentage, rounded to two decimals; `providerScores` retains source, original value, declared scale, and recomputed normalized percentage; legacy top-level inputs default to 100 while supplemental scores require explicit scales; malformed/out-of-range scores are rejected; AniList's queried `averageScore` is kept at scale 100 and no other provider score is invented; bookmarks/list imports preserve scale data; tests in catalog, AniList, provenance, and list import; `npm run verify` passes with 347 tests, typecheck, and build; live upstream validation unavailable)
+- [x] **AV-013** — Normalize start dates, end dates, and broadcast timestamps. (`startDate`/`endDate` now preserve valid AniList FuzzyDate precision as year/year-month/full date without timezone or synthesized parts; impossible/out-of-range dates normalize to null; `nextEpisode.airingAt` remains validated Unix seconds and millisecond magnitudes are rejected; shared query fields added to AniList browse/metadata selections, with detail consumers and bookmark/list sanitization using the same normalizers; tests in catalog, AniList, core verification, and list import; `npm run verify` passes with 353 tests, typecheck, and build; no live upstream response available)
+- [x] **AV-014** — Represent unknown, unannounced, and not-applicable values separately. (`FieldMetadata` gains `valueState: 'known' | 'unknown' | 'unannounced' | 'not_applicable'` per field; `FieldObservation` gains `valueState`. `createFieldMetadata` infers state from the canonical value (null/blank/`'UNKNOWN'`/title fallback → unknown, otherwise known) and honors explicit provider states — `'known'` cannot manufacture a known state for a missing value, while unknown/unannounced/not_applicable are authoritative. `observationsConflict` excludes unknown states and compares canonical + observations by (state, value), so unannounced/not_applicable are distinct comparable states. TypeScript types in src/types.ts; tests in tests/catalog.test.mjs (inference, explicit states, per-observation state, conflict exclusions). `npm run verify`: 359 tests, typecheck, and production build clean.)
 - [ ] **AV-015** — Add metadata schema versioning and migration support.
 - [ ] **AV-016** — Detect and merge duplicate anime records safely.
 - [ ] **AV-017** — Support manual corrections without overwriting source metadata.
@@ -64,74 +191,74 @@ A single clean metadata model is the foundation for every other screen.
 
 Expand the existing season browser into a complete catalog exploration experience.
 
-- [ ] **AV-026** — Add browse filters for TV, movie, OVA, ONA, and special formats.
-- [ ] **AV-027** — Add filters for currently airing, upcoming, finished, and cancelled shows.
-- [ ] **AV-028** — Add multi-select genre filters with include and exclude modes.
-- [ ] **AV-029** — Add tag filters with AND, OR, and NOT combinations.
+- [x] **AV-026** — Add browse filters for TV, movie, OVA, ONA, and special formats. (BROWSE_FORMATS + parseBrowseFilters; tests/core-verification.test.mjs)
+- [x] **AV-027** — Add filters for currently airing, upcoming, finished, and cancelled shows. (BROWSE_STATUSES + parseBrowseFilters; tests/core-verification.test.mjs)
+- [x] **AV-028** — Add multi-select genre filters with include and exclude modes. (genres/genresExclude parsing and local predicate; tests/core-verification.test.mjs)
+- [ ] **AV-029** — Add tag filters with AND, OR, and NOT combinations. (partially verified: AND/OR tag modes work (core-verification test); NOT-tag mode is still missing)
 - [ ] **AV-030** — Add studio and producer browsing pages.
-- [ ] **AV-031** — Add decade and release-year range filters.
-- [ ] **AV-032** — Add season filters that include historical seasons.
-- [ ] **AV-033** — Add popularity, score, favourites, and trending sort orders.
-- [ ] **AV-034** — Add episode-count range filters.
-- [ ] **AV-035** — Add runtime range filters for short-form and long-form anime.
-- [ ] **AV-036** — Add source-material filters such as manga, novel, game, and original.
-- [ ] **AV-037** — Add country and original-language browse filters.
+- [x] **AV-031** — Add decade and release-year range filters. (decade shorthand and clamped year ranges; tests/core-verification.test.mjs)
+- [x] **AV-032** — Add season filters that include historical seasons. (includeOlderSeasons (share URL key `older`); tests/core-verification.test.mjs)
+- [x] **AV-033** — Add popularity, score, favourites, and trending sort orders. (BROWSE_SORTS exposes popular/trending/rated/newest/oldest/title/episodes/favourites; tests/core-verification.test.mjs)
+- [x] **AV-034** — Add episode-count range filters. (episodesMin/episodesMax range; tests/core-verification.test.mjs)
+- [x] **AV-035** — Add runtime range filters for short-form and long-form anime. (durationMin/durationMax range; tests/core-verification.test.mjs)
+- [x] **AV-036** — Add source-material filters such as manga, novel, game, and original. (BROWSE_SOURCES filter; tests/core-verification.test.mjs)
+- [ ] **AV-037** — Add country and original-language browse filters. (partially verified: country filters work (core-verification test); original-language filter is still missing)
 - [ ] **AV-038** — Add content-rating filters with user-configurable defaults.
-- [ ] **AV-039** — Add a random anime discovery button with filter awareness.
-- [ ] **AV-040** — Add a daily discovery spotlight with a rotating catalog pick.
-- [ ] **AV-041** — Add hidden-gem collections based on low popularity and strong ratings.
+- [x] **AV-039** — Add a random anime discovery button with filter awareness. (Browse "Surprise me" calls filter-aware /api/discover/random)
+- [x] **AV-040** — Add a daily discovery spotlight with a rotating catalog pick. (Browse "Daily pick" calls /api/discover/spotlight; daily rotation verified by tests/core-verification.test.mjs)
+- [x] **AV-041** — Add hidden-gem collections based on low popularity and strong ratings. (Browse "Hidden gems" calls /api/discover/hidden-gems (low popularity, strong rating))
 - [ ] **AV-042** — Add seasonal comparison view for two or more seasons.
 - [ ] **AV-043** — Add a calendar-style seasonal release overview.
 - [ ] **AV-044** — Add a studio-focused release explorer.
-- [ ] **AV-045** — Add a franchise-focused browse mode.
-- [ ] **AV-046** — Add an alphabetical index with kana and Latin navigation.
-- [ ] **AV-047** — Add a recently added to catalog section.
-- [ ] **AV-048** — Add a recently updated metadata section.
+- [x] **AV-045** — Add a franchise-focused browse mode. (Discover page /api/franchises + explore.buildFranchiseGroups; tests/core-verification.test.mjs)
+- [x] **AV-046** — Add an alphabetical index with kana and Latin navigation. (explore.indexBucket/buildAlphabetIndex + /index page; tests/core-verification.test.mjs)
+- [x] **AV-047** — Add a recently added to catalog section. (anilist.recentlyAdded + Discover page section)
+- [x] **AV-048** — Add a recently updated metadata section. (anilist.recentlyUpdated + Discover page section)
 - [ ] **AV-049** — Add a browse filter preset save/load system.
-- [ ] **AV-050** — Add shareable URLs that preserve all active browse filters.
+- [x] **AV-050** — Add shareable URLs that preserve all active browse filters. (browse.filtersToParams round trip + Browse share-link button; tests/core-verification.test.mjs)
 
 ### 03 · Search and query experience · P0 / P1
 
 Make search fast, forgiving, explainable, and useful across the entire library.
 
-- [ ] **AV-051** — Add instant search suggestions while typing.
-- [ ] **AV-052** — Add keyboard navigation for every search suggestion.
-- [ ] **AV-053** — Support exact title, partial title, and alternate-title matching.
-- [ ] **AV-054** — Add fuzzy matching for misspellings and transposed characters.
+- [x] **AV-051** — Add instant search suggestions while typing. (Search page typeahead via /api/suggest (live AniList unreachable in this sandbox))
+- [x] **AV-052** — Add keyboard navigation for every search suggestion. (ArrowUp/ArrowDown/Enter suggestion navigation in src/pages/Search.tsx)
+- [x] **AV-053** — Support exact title, partial title, and alternate-title matching. (search.rankTitles exact/partial/alias paths; tests/core-verification.test.mjs)
+- [x] **AV-054** — Add fuzzy matching for misspellings and transposed characters. (search.similarity/editDistance transposition and typo cases; tests/core-verification.test.mjs)
 - [ ] **AV-055** — Add romanization-aware matching for Japanese titles.
-- [ ] **AV-056** — Add native-script title search.
+- [x] **AV-056** — Add native-script title search. (normalizeForSearch preserves CJK titles and folds accents; tests/core-verification.test.mjs)
 - [ ] **AV-057** — Add title alias indexing across all known metadata providers.
-- [ ] **AV-058** — Add search by studio, staff member, and voice actor.
+- [ ] **AV-058** — Add search by studio, staff member, and voice actor. (partially verified: studio search via `studio:` works; staff/voice-actor search is still missing)
 - [ ] **AV-059** — Add search by character name.
 - [ ] **AV-060** — Add search by franchise and sequel relationship.
-- [ ] **AV-061** — Add search by theme, genre, and tag.
+- [x] **AV-061** — Add search by theme, genre, and tag. (genre:/tag: search syntax + browse filters; tests/core-verification.test.mjs)
 - [ ] **AV-062** — Add search by episode title and episode number.
-- [ ] **AV-063** — Add search within the local media library only.
+- [x] **AV-063** — Add search within the local media library only. (Search page "My library" tab backed by /api/search/library)
 - [ ] **AV-064** — Add search within bookmarks and custom lists only.
-- [ ] **AV-065** — Add advanced query syntax for field-specific filters.
-- [ ] **AV-066** — Add search history with per-entry deletion.
-- [ ] **AV-067** — Add an option to disable or automatically expire search history.
-- [ ] **AV-068** — Add typo-correction suggestions with the original query preserved.
-- [ ] **AV-069** — Add a no-results page with actionable alternative filters.
-- [ ] **AV-070** — Add result grouping by anime, movie, character, staff, and studio.
-- [ ] **AV-071** — Add result highlighting for matching title fragments.
-- [ ] **AV-072** — Add search result relevance explanations.
-- [ ] **AV-073** — Add debounced requests, cancellation, and stale-response protection.
-- [ ] **AV-074** — Add a configurable maximum result count and pagination.
+- [x] **AV-065** — Add advanced query syntax for field-specific filters. (parseSearchQuery field syntax and structured filters; tests/core-verification.test.mjs)
+- [x] **AV-066** — Add search history with per-entry deletion. (src/lib/searchHistory.ts with per-entry deletion and cross-tab sync)
+- [x] **AV-067** — Add an option to disable or automatically expire search history. (searchHistory enabled toggle and expiryDays setting)
+- [x] **AV-068** — Add typo-correction suggestions with the original query preserved. (search.suggestCorrection + Search page correction UI; tests/core-verification.test.mjs)
+- [x] **AV-069** — Add a no-results page with actionable alternative filters. (search.alternativeQueries + no-results UI; tests/core-verification.test.mjs)
+- [ ] **AV-070** — Add result grouping by anime, movie, character, staff, and studio. (partially verified: catalog results are grouped by media format; no character, staff, or studio result types)
+- [ ] **AV-071** — Add result highlighting for matching title fragments. (partially verified: title highlighting is wired in typeahead and local-library results, not catalog result cards)
+- [ ] **AV-072** — Add search result relevance explanations. (partially verified: human-readable match reasons appear in typeahead suggestions, but not catalog result cards)
+- [x] **AV-073** — Add debounced requests, cancellation, and stale-response protection. (250 ms debounce + AbortController cancellation + sequence guard in src/pages/Search.tsx and src/lib/api.ts; typechecked)
+- [x] **AV-074** — Add a configurable maximum result count and pagination. (RESULT_CAP/clampResultCap + page/perPage filters; tests/core-verification.test.mjs)
 - [ ] **AV-075** — Add server-side full-text indexing for the local catalog.
 
 ### 04 · Anime details, episodes, and franchise pages · P1
 
 Turn the current detail modal into a complete information hub.
 
-- [ ] **AV-076** — Add a dedicated shareable route for each anime detail page.
-- [ ] **AV-077** — Add a full episode guide with numbered episode entries.
-- [ ] **AV-078** — Show episode titles, runtimes, air dates, and synopsis when available.
-- [ ] **AV-079** — Show episode thumbnail artwork when a legitimate source provides it.
-- [ ] **AV-080** — Add a season selector for multi-season franchises.
-- [ ] **AV-081** — Add a related-content section grouped by relationship type.
-- [ ] **AV-082** — Add canonical sequel, prequel, side-story, and spin-off relationships.
-- [ ] **AV-083** — Add a franchise timeline with chronological and release-order modes.
+- [x] **AV-076** — Add a dedicated shareable route for each anime detail page. (/anime/:id route in src/App.tsx)
+- [x] **AV-077** — Add a full episode guide with numbered episode entries. (detail.buildEpisodeGuide + AnimeDetail episode guide; tests/core-verification.test.mjs)
+- [x] **AV-078** — Show episode titles, runtimes, air dates, and synopsis when available. (guide supplies titles, runtimes and derived air dates; AniList provides no episode synopsis field (synopsis remains null))
+- [x] **AV-079** — Show episode thumbnail artwork when a legitimate source provides it. (streamingEpisodes thumbnails rendered in the guide; tests/core-verification.test.mjs)
+- [x] **AV-080** — Add a season selector for multi-season franchises. (AnimeDetail season selector built from relatedSeasons)
+- [x] **AV-081** — Add a related-content section grouped by relationship type. (detail.groupRelations; tests/core-verification.test.mjs)
+- [x] **AV-082** — Add canonical sequel, prequel, side-story, and spin-off relationships. (RELATION_GROUPS covers sequel/prequel/side story/spin-off; tests/core-verification.test.mjs)
+- [x] **AV-083** — Add a franchise timeline with chronological and release-order modes. (detail.buildTimeline release/chronological modes + UI toggle; tests/core-verification.test.mjs)
 - [ ] **AV-084** — Add watch-order recommendations with editable ordering notes.
 - [ ] **AV-085** — Add a character gallery with character detail pages.
 - [ ] **AV-086** — Add staff pages for directors, writers, composers, and animators.
@@ -139,16 +266,16 @@ Turn the current detail modal into a complete information hub.
 - [ ] **AV-088** — Add studio profiles with their complete known catalog.
 - [ ] **AV-089** — Add production committee and distributor details where available.
 - [ ] **AV-090** — Add source-material links and adaptation relationship details.
-- [ ] **AV-091** — Add a spoiler-safe synopsis expansion control.
-- [ ] **AV-092** — Add a spoiler-free overview mode for new visitors.
-- [ ] **AV-093** — Add a release and production status timeline.
-- [ ] **AV-094** — Add community score distribution rather than a single average.
-- [ ] **AV-095** — Add external metadata links with provider attribution.
+- [x] **AV-091** — Add a spoiler-safe synopsis expansion control. (detail.redactSpoilers + reveal control; tests/core-verification.test.mjs)
+- [x] **AV-092** — Add a spoiler-free overview mode for new visitors. (/api/media exposes spoilerFreeOverview as `overview`; tests/core-verification.test.mjs)
+- [x] **AV-093** — Add a release and production status timeline. (detail.buildStatusTimeline + release-timeline section; tests/core-verification.test.mjs)
+- [x] **AV-094** — Add community score distribution rather than a single average. (detail.scoreDistribution/distributionMean/distributionMode + scores section; tests/core-verification.test.mjs)
+- [x] **AV-095** — Add external metadata links with provider attribution. (catalog links/siteUrl + AnimeDetail external-links section)
 - [ ] **AV-096** — Add a metadata correction suggestion workflow.
 - [ ] **AV-097** — Add a report-an-incorrect-episode-order action.
-- [ ] **AV-098** — Add detail-page sections that can be rearranged by the user.
-- [ ] **AV-099** — Add an anime-specific notes field visible only to its owner.
-- [ ] **AV-100** — Add a printable or exportable anime information sheet.
+- [ ] **AV-098** — Add detail-page sections that can be rearranged by the user. (partially verified: detail.applySectionOrder helper exists; no UI reorder control is wired up)
+- [ ] **AV-099** — Add an anime-specific notes field visible only to its owner. (partially verified: per-anime editor and persistence exist, but notes are in the shared server KV store with no account/owner isolation; UI now says they are stored on this server)
+- [x] **AV-100** — Add a printable or exportable anime information sheet. (detail.informationSheet + AnimeDetail print action; tests/core-verification.test.mjs)
 
 ### 05 · User accounts and personal profiles · P1 / P2
 
@@ -184,13 +311,13 @@ Move from a single shared installation toward optional individual identities.
 
 Make bookmarks evolve into a flexible personal anime organization system.
 
-- [ ] **AV-126** — Add separate Watching, Planned, Completed, Paused, and Dropped lists.
-- [ ] **AV-127** — Add custom user-created lists with names and descriptions.
+- [x] **AV-126** — Add separate Watching, Planned, Completed, Paused, and Dropped lists. (listStore.STATUSES exposes five built-ins; tests/lists.test.mjs + tests/lists-http.test.mjs)
+- [x] **AV-127** — Add custom user-created lists with names and descriptions. (createList/deleteList + tests/lists.test.mjs and tests/lists-http.test.mjs)
 - [ ] **AV-128** — Add drag-and-drop ordering for custom lists.
 - [ ] **AV-129** — Add list cover artwork assembled from selected titles.
 - [ ] **AV-130** — Add private, shared-link, and public list visibility settings.
-- [ ] **AV-131** — Add notes on individual list entries.
-- [ ] **AV-132** — Add list-entry priority and personal rating fields.
+- [x] **AV-131** — Add notes on individual list entries. (listStore.setNote + tests/list-notes.test.mjs)
+- [x] **AV-132** — Add list-entry priority and personal rating fields. (listStore.setRating priority/rating + tests/list-ratings.test.mjs)
 - [ ] **AV-133** — Add list grouping by franchise, genre, or season.
 - [ ] **AV-134** — Add bulk move between personal lists.
 - [ ] **AV-135** — Add bulk removal with an undo window.
@@ -199,16 +326,16 @@ Make bookmarks evolve into a flexible personal anime organization system.
 - [ ] **AV-138** — Add a list for shows returning in a future season.
 - [ ] **AV-139** — Add a list for unfinished shows with no recent progress.
 - [ ] **AV-140** — Add watchlist capacity warnings that users can disable.
-- [ ] **AV-141** — Add duplicate prevention across the same list.
-- [ ] **AV-142** — Add list import from supported external list formats.
-- [ ] **AV-143** — Add list export to JSON and CSV.
+- [x] **AV-141** — Add duplicate prevention across the same list. (listStore.add reuses an existing mediaId; tests/lists-http.test.mjs)
+- [x] **AV-142** — Add list import from supported external list formats. (parseListImport + /api/lists/import; tests/list-import.test.mjs)
+- [x] **AV-143** — Add list export to JSON and CSV. (exportListJson/exportListCsv; tests/list-export.test.mjs)
 - [ ] **AV-144** — Add list comparison between two profiles.
 - [ ] **AV-145** — Add list templates such as weekend watchlist or short anime queue.
-- [ ] **AV-146** — Add a random pick action limited to the current list.
+- [x] **AV-146** — Add a random pick action limited to the current list. (pickListEntry + /api/lists/:id/random; tests/list-random.test.mjs)
 - [ ] **AV-147** — Add list-level sort and filter presets.
 - [ ] **AV-148** — Add list activity history for shared lists.
 - [ ] **AV-149** — Add list ownership transfer for shared household lists.
-- [ ] **AV-150** — Add a bookmark-to-list migration tool preserving existing bookmark IDs.
+- [x] **AV-150** — Add a bookmark-to-list migration tool preserving existing bookmark IDs. (migrateBookmarks + /api/lists/migrate; tests/lists.test.mjs)
 
 ### 07 · Watch progress, history, and continuity · P0 / P1
 
@@ -245,7 +372,7 @@ Make the app remember exactly where each person stopped watching.
 Strengthen the existing Player component into a reliable everyday player.
 
 - [ ] **AV-176** — Add a clear loading state with separate metadata and media readiness.
-- [ ] **AV-177** — Add a player error screen with understandable recovery actions.
+- [x] **AV-177** — Add a player error screen with understandable recovery actions. (PlayerOverlay error state with an attempt-based retry action)
 - [ ] **AV-178** — Add click-to-pause and click-to-resume behavior.
 - [ ] **AV-179** — Add configurable keyboard shortcuts with conflict detection.
 - [ ] **AV-180** — Add a seek bar with current time and total duration.
@@ -304,8 +431,8 @@ Add power-user controls without making the default player overwhelming.
 
 Expand current sidecar subtitle support into a complete caption workflow.
 
-- [ ] **AV-226** — Support WebVTT, SRT, ASS, and SSA with explicit compatibility reporting.
-- [ ] **AV-227** — Add subtitle track discovery for local media sidecar files.
+- [x] **AV-226** — Support WebVTT, SRT, ASS, and SSA with explicit compatibility reporting. (SUBTITLE_EXTENSIONS + normalizeSubtitleToVtt (ASS/SSA conversion needs ffmpeg); tests/core-verification.test.mjs)
+- [x] **AV-227** — Add subtitle track discovery for local media sidecar files. (playback.findSubtitle sidecar discovery; tests/core-verification.test.mjs)
 - [ ] **AV-228** — Add an in-player subtitle track selector.
 - [ ] **AV-229** — Add subtitle upload validation before attaching a track.
 - [ ] **AV-230** — Add subtitle language metadata editing.
@@ -365,7 +492,7 @@ Make audio selection more expressive than a single global sub/dub switch.
 Make live playback stable across weak networks and different devices.
 
 - [ ] **AV-276** — Add an adaptive-quality mode when the authorized source exposes multiple renditions.
-- [ ] **AV-277** — Add a manual quality selector with actual source-available options.
+- [ ] **AV-277** — Add a manual quality selector with actual source-available options. (partially verified: static quality presets reach the resolver; it chooses the requested height when present and otherwise falls back to the highest variant, but the UI never receives the actual rendition list)
 - [ ] **AV-278** — Show the selected rendition resolution and bitrate when known.
 - [ ] **AV-279** — Show a clear reason when a requested quality is unavailable.
 - [ ] **AV-280** — Add a network throughput estimate based on recent playback data.
@@ -382,8 +509,8 @@ Make live playback stable across weak networks and different devices.
 - [ ] **AV-291** — Add stream health checks before playback begins.
 - [ ] **AV-292** — Add a maximum active-stream limit per server instance.
 - [ ] **AV-293** — Add per-user concurrent-stream policies for shared installations.
-- [ ] **AV-294** — Add HTTP range edge-case tests for local playback.
-- [ ] **AV-295** — Add correct content-type and content-length handling for media responses.
+- [x] **AV-294** — Add HTTP range edge-case tests for local playback. (byte-range full/partial/suffix/open-ended/invalid/HEAD cases; tests/core-verification.test.mjs)
+- [x] **AV-295** — Add correct content-type and content-length handling for media responses. (Content-Type, Content-Length and Accept-Ranges asserted; tests/core-verification.test.mjs)
 - [ ] **AV-296** — Add configurable buffering targets within browser capabilities.
 - [ ] **AV-297** — Add an optional prefetch of the next authorized episode metadata.
 - [ ] **AV-298** — Add an adaptive connection strategy for mobile networks.
@@ -395,15 +522,15 @@ Make live playback stable across weak networks and different devices.
 Build on the persistent queue with scheduling, integrity, and user control.
 
 - [ ] **AV-301** — Add per-job estimated completion time when enough data exists.
-- [ ] **AV-302** — Add per-job average transfer speed.
-- [ ] **AV-303** — Add per-job transferred bytes and total expected bytes.
+- [x] **AV-302** — Add per-job average transfer speed. (downloads.toPublicJob exposes speedBps)
+- [x] **AV-303** — Add per-job transferred bytes and total expected bytes. (downloads.toPublicJob exposes downloadedBytes/totalBytes)
 - [ ] **AV-304** — Add queue filtering by status, anime, quality, and date.
 - [ ] **AV-305** — Add queue sorting by priority, creation time, or series.
 - [ ] **AV-306** — Add user-defined priorities for individual download jobs.
 - [ ] **AV-307** — Add a priority boost for the next episode in Continue Watching.
 - [ ] **AV-308** — Add download scheduling by day and time window.
 - [ ] **AV-309** — Add bandwidth limits for background downloads.
-- [ ] **AV-310** — Add a pause-all and resume-all control.
+- [x] **AV-310** — Add a pause-all and resume-all control. (Downloads bulk pause/resume actions + /api/downloads/actions)
 - [ ] **AV-311** — Add automatic retry policies configurable per failure type.
 - [ ] **AV-312** — Add retry backoff with a maximum attempt limit.
 - [ ] **AV-313** — Add duplicate-job detection across active and completed items.
@@ -437,7 +564,7 @@ Evolve the existing library scanner into a trustworthy media catalog.
 - [ ] **AV-336** — Add incremental scanning based on filesystem changes.
 - [ ] **AV-337** — Add configurable scan schedules.
 - [ ] **AV-338** — Add safe library rename and move operations.
-- [ ] **AV-339** — Add library folder validation before changing paths.
+- [x] **AV-339** — Add library folder validation before changing paths. (validateLibraryDir blocks traversal, symlinks and repo/system paths; tests/core-verification.test.mjs)
 - [ ] **AV-340** — Add a dry-run mode for bulk organization operations.
 - [ ] **AV-341** — Add a media file details drawer with technical metadata.
 - [ ] **AV-342** — Add file checksum display and verification status.
@@ -695,8 +822,8 @@ Give a self-hosted instance proper ownership, roles, and household controls.
 Treat the server as a private media service, not an exposed public file share.
 
 - [ ] **AV-551** — Add a documented threat model covering browser, server, and filesystem boundaries.
-- [ ] **AV-552** — Add an automated security-header regression test suite.
-- [ ] **AV-553** — Add CSRF tests for every state-changing API endpoint.
+- [x] **AV-552** — Add an automated security-header regression test suite. (security headers asserted in tests/api-smoke.test.mjs)
+- [ ] **AV-553** — Add CSRF tests for every state-changing API endpoint. (partially verified: global `/api` middleware enforces the check for POST/PUT/PATCH/DELETE; cross-origin and same-origin tests cover bookmarks and cross-origin lists, but not every mutating route)
 - [ ] **AV-554** — Add authentication and authorization checks on private library routes.
 - [ ] **AV-555** — Add object-level authorization for every user-owned record.
 - [ ] **AV-556** — Add secure session cookie settings for authenticated deployments.
@@ -741,8 +868,8 @@ Keep the app responsive as the catalog, media library, and user count grow.
 - [ ] **AV-590** — Add bounded concurrency for metadata fan-out requests.
 - [ ] **AV-591** — Add graceful server shutdown that stops queues cleanly.
 - [ ] **AV-592** — Add startup recovery validation for persistent queues.
-- [ ] **AV-593** — Add crash-safe atomic writes for every persistent JSON record.
-- [ ] **AV-594** — Add process health and readiness checks.
+- [x] **AV-593** — Add crash-safe atomic writes for every persistent JSON record. (atomicWriteFile and private file/dir permissions asserted in tests/core-verification.test.mjs)
+- [x] **AV-594** — Add process health and readiness checks. (public `/api/health` liveness plus `/api/ready` bookmark-store initialization and library-directory checks; other stores initialize before listening; tests/api-smoke.test.mjs + README)
 - [ ] **AV-595** — Add dependency health reporting without exposing secrets.
 - [ ] **AV-596** — Add memory-usage monitoring for long-running media sessions.
 - [ ] **AV-597** — Add cleanup of abandoned temporary stream files.
@@ -874,7 +1001,7 @@ Support reliable self-hosting from a laptop to a larger household server.
 
 Protect existing functionality before the feature count starts exploding.
 
-- [ ] **AV-701** — Add a unit-test framework and baseline coverage report.
+- [x] **AV-701** — Add a unit-test framework and baseline coverage report. (`node:test`; initial baseline captured at 311 tests/12 files, 45.64% lines and 70.04% branches; current totals are recorded above)
 - [ ] **AV-702** — Add API integration tests for every documented endpoint.
 - [ ] **AV-703** — Add React component tests for core navigation and player controls.
 - [ ] **AV-704** — Add end-to-end tests for search-to-play navigation.
@@ -894,9 +1021,9 @@ Protect existing functionality before the feature count starts exploding.
 - [ ] **AV-718** — Add visual regression tests for core responsive layouts.
 - [ ] **AV-719** — Add browser compatibility tests for supported Firefox and Chromium versions.
 - [ ] **AV-720** — Add a supported-browser matrix documented in the README.
-- [ ] **AV-721** — Add TypeScript strictness checks and eliminate unsafe implicit types.
+- [x] **AV-721** — Add TypeScript strictness checks and eliminate unsafe implicit types. (tsconfig.json sets strict:true; `npm run typecheck` passes)
 - [ ] **AV-722** — Add linting and formatting checks in continuous integration.
-- [ ] **AV-723** — Add dependency lockfile and reproducible-build checks.
+- [ ] **AV-723** — Add dependency lockfile and reproducible-build checks. (partially verified: package-lock.json is committed; no CI reproducibility check exists yet)
 - [ ] **AV-724** — Add release tagging and generated changelog automation.
 - [ ] **AV-725** — Add a pre-release smoke-test checklist and rollback gate.
 

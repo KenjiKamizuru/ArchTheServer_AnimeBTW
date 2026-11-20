@@ -4,6 +4,8 @@
 // Pure functions only. The shapes here are what the detail route returns, so
 // each one is verifiable without touching the network.
 
+import { normalizeFuzzyDate, normalizeNextEpisode } from './catalog.mjs'
+
 /** Relationship groups the detail page renders, in display order. */
 export const RELATION_GROUPS = [
   { key: 'SEQUEL', label: 'Sequel', order: 1 },
@@ -58,7 +60,7 @@ export function groupRelations(edges) {
       chapters: node.chapters ?? null,
       season: node.season ?? null,
       seasonYear: node.seasonYear ?? null,
-      startDate: node.startDate ?? null,
+      startDate: normalizeFuzzyDate(node.startDate),
       cover: node.coverImage?.large ?? node.coverImage?.extraLarge ?? null,
       averageScore: node.averageScore ?? null,
       relationType: key,
@@ -83,10 +85,10 @@ export function groupRelations(edges) {
 const seasonIndex = { WINTER: 0, SPRING: 1, SUMMER: 2, FALL: 3 }
 
 /** Sortable key for a media start date; undated entries sort last. */
-function chronologicalKey(item) {
-  const year = item?.seasonYear ?? item?.startDate?.year ?? null
-  const month = item?.startDate?.month ?? (item?.season ? seasonIndex[item.season] * 3 + 1 : null)
-  const day = item?.startDate?.day ?? 1
+function chronologicalKey(item, startDate = normalizeFuzzyDate(item?.startDate)) {
+  const year = item?.seasonYear ?? startDate?.year ?? null
+  const month = startDate?.month ?? (item?.season ? seasonIndex[item.season] * 3 + 1 : null)
+  const day = startDate?.day ?? 1
   if (!Number.isFinite(year)) return { sortable: false, value: Number.MAX_SAFE_INTEGER }
   return { sortable: true, value: year * 10_000 + (month ?? 1) * 100 + (day ?? 1) }
 }
@@ -101,8 +103,9 @@ export function buildTimeline(nodes, mode = 'release') {
   const items = (Array.isArray(nodes) ? nodes : [])
     .filter((node) => node && Number.isInteger(node.id))
     .map((node) => {
-      const { sortable, value } = chronologicalKey(node)
-      const releaseYear = node.seasonYear ?? node.startDate?.year ?? null
+      const startDate = normalizeFuzzyDate(node.startDate)
+      const { sortable, value } = chronologicalKey(node, startDate)
+      const releaseYear = node.seasonYear ?? startDate?.year ?? null
       return {
         id: node.id,
         title: node.title?.english || node.title?.romaji || node.title?.native || `#${node.id}`,
@@ -114,7 +117,7 @@ export function buildTimeline(nodes, mode = 'release') {
         sortable,
         key: value,
         releaseKey: Number.isFinite(releaseYear)
-          ? releaseYear * 10_000 + (node.startDate?.month ?? 6) * 100 + (node.startDate?.day ?? 15)
+          ? releaseYear * 10_000 + (startDate?.month ?? 6) * 100 + (startDate?.day ?? 15)
           : Number.MAX_SAFE_INTEGER,
       }
     })
@@ -198,7 +201,7 @@ export function buildEpisodeGuide(media, streamingEpisodes = []) {
   }
 
   const duration = Number.isFinite(media?.duration) && media.duration > 0 ? media.duration : null
-  const next = media?.nextEpisode ?? null
+  const next = normalizeNextEpisode(media?.nextEpisode)
   const episodes = []
   for (let number = 1; number <= total; number += 1) {
     const streamed = byNumber.get(number)
@@ -292,15 +295,18 @@ export function buildStatusTimeline(media) {
       display: formatDate(date),
     })
   }
-  push(media?.startDate, 'Premiered', media?.season ? `${media.season} ${media.seasonYear ?? ''}`.trim() : null)
-  push(media?.endDate, 'Finished airing', null)
+  const startDate = normalizeFuzzyDate(media?.startDate)
+  const endDate = normalizeFuzzyDate(media?.endDate)
+  const nextEpisode = normalizeNextEpisode(media?.nextEpisode)
+  push(startDate, 'Premiered', media?.season ? `${media.season} ${media.seasonYear ?? ''}`.trim() : null)
+  push(endDate, 'Finished airing', null)
   if (media?.status === 'NOT_YET_RELEASED') {
     events.push({ label: 'Announced', detail: null, sort: -1, display: 'TBA' })
   }
-  if (media?.nextEpisode) {
-    const when = new Date(media.nextEpisode.airingAt * 1000)
+  if (nextEpisode) {
+    const when = new Date(nextEpisode.airingAt * 1000)
     events.push({
-      label: `Episode ${media.nextEpisode.episode}`,
+      label: `Episode ${nextEpisode.episode}`,
       detail: 'next broadcast',
       // Sort by the real air date so it interleaves correctly with premieres;
       // the previous sentinel (9_999_999) was below any YYYYMMDD value and
@@ -313,12 +319,13 @@ export function buildStatusTimeline(media) {
 }
 
 export function formatDate(date) {
-  if (!date?.year) return 'TBA'
-  const month = Number.isFinite(date.month) ? String(date.month).padStart(2, '0') : null
-  const day = Number.isFinite(date.day) ? String(date.day).padStart(2, '0') : null
-  if (month && day) return `${date.year}-${month}-${day}`
-  if (month) return `${date.year}-${month}`
-  return String(date.year)
+  const normalized = normalizeFuzzyDate(date)
+  if (!normalized?.year) return 'TBA'
+  const month = normalized.month === null ? null : String(normalized.month).padStart(2, '0')
+  const day = normalized.day === null ? null : String(normalized.day).padStart(2, '0')
+  if (month && day) return `${normalized.year}-${month}-${day}`
+  if (month) return `${normalized.year}-${month}`
+  return String(normalized.year)
 }
 
 /** Section ids the detail page can reorder (AV-098). */

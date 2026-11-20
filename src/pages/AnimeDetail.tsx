@@ -804,7 +804,7 @@ export default function AnimeDetailPage() {
               value={noteDraft}
               onChange={(event) => setNoteDraft(event.target.value.slice(0, 4000))}
               rows={4}
-              placeholder="Private notes for this title — only visible on this device."
+              placeholder="Notes for this title — stored on this AnimeVault server."
               className="w-full resize-y rounded-lg bg-ink-850 p-2.5 text-[11px] leading-relaxed text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
             />
             <div className="mt-2 flex items-center gap-2">

@@ -220,10 +220,10 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T
 }
 
-async function get<T>(url: string, useCache = true): Promise<T> {
+async function get<T>(url: string, useCache = true, signal?: AbortSignal): Promise<T> {
   const hit = cache.get(url)
   if (useCache && hit && Date.now() - hit.at < TTL) return hit.data as T
-  const data = await request<T>(url)
+  const data = await request<T>(url, signal ? { signal } : undefined)
   cache.set(url, { at: Date.now(), data })
   return data
 }
@@ -317,19 +317,19 @@ export const api = {
     return get<{ media: Media[]; hasNextPage: boolean }>(`/api/search?q=${encodeURIComponent(q)}&page=${page}`)
   },
 
-  suggest(q: string) {
-    return get<SuggestResponse>(`/api/search/suggest?q=${encodeURIComponent(q)}`, false)
+  suggest(q: string, signal?: AbortSignal) {
+    return get<SuggestResponse>(`/api/search/suggest?q=${encodeURIComponent(q)}`, false, signal)
   },
 
-  searchAdvanced(q: string, params: { page?: number; perPage?: number } = {}) {
+  searchAdvanced(q: string, params: { page?: number; perPage?: number } = {}, signal?: AbortSignal) {
     const qs = new URLSearchParams({ q })
     if (params.page && params.page > 1) qs.set('page', String(params.page))
     if (params.perPage) qs.set('perPage', String(params.perPage))
-    return get<AdvancedSearchResponse>(`/api/search/advanced?${qs.toString()}`, false)
+    return get<AdvancedSearchResponse>(`/api/search/advanced?${qs.toString()}`, false, signal)
   },
 
-  searchLibrary(q: string) {
-    return get<SearchLibraryResponse>(`/api/search/library?q=${encodeURIComponent(q)}`, false)
+  searchLibrary(q: string, signal?: AbortSignal) {
+    return get<SearchLibraryResponse>(`/api/search/library?q=${encodeURIComponent(q)}`, false, signal)
   },
 
   searchOptions() {

@@ -22,6 +22,9 @@ test('browse year ranges use AniList FuzzyDateInt start-date arguments', () => {
   assert.match(query, /startDate_greater: \$yearMin/)
   assert.match(query, /startDate_lesser: \$yearMax/)
   assert.doesNotMatch(query, /seasonYear_(?:greater|lesser)/)
+  assert.match(query, /startDate\s*\{\s*year month day\s*\}/)
+  assert.match(query, /endDate\s*\{\s*year month day\s*\}/)
+  assert.match(query, /studios\(isMain: true\)\s*\{\s*nodes\s*\{\s*id name isAnimationStudio siteUrl\s*\}\s*\}/)
   assert.deepEqual(extractMediaArgs(query).filter((arg) => arg.includes('Date') || arg.includes('Year')), [
     'startDate_greater',
     'startDate_lesser',
@@ -40,6 +43,9 @@ test('detail requests score distribution from Media.stats and maps relations', a
         id: 983421,
         title: { english: 'Regression Title', romaji: 'Regression Title', native: null },
         coverImage: { large: 'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/example.jpg' },
+        startDate: { year: 2024, month: 2, day: 29 },
+        endDate: { year: 2024, month: 4, day: null },
+        nextAiringEpisode: { episode: 4, airingAt: 1_735_689_600 },
         stats: { scoreDistribution: [{ score: 80, amount: 17 }] },
         relations: {
           edges: [
@@ -67,12 +73,18 @@ test('detail requests score distribution from Media.stats and maps relations', a
   }, async () => {
     const { getDetail } = await import('../server/anilist.mjs')
     const detail = await getDetail(983421)
+    assert.deepEqual(detail.startDate, { year: 2024, month: 2, day: 29 })
+    assert.deepEqual(detail.endDate, { year: 2024, month: 4, day: null })
+    assert.deepEqual(detail.nextEpisode, { episode: 4, airingAt: 1_735_689_600 })
     assert.deepEqual(detail.scoreBuckets, [{ score: 80, amount: 17 }])
     assert.equal(detail.relatedSeasons[0].relationType, 'SEQUEL')
     assert.equal(detail.relatedSeasons[0].title, 'Regression Sequel')
   })
 
   assert.equal(calls.length, 1)
+  assert.match(calls[0], /startDate\s*\{\s*year month day\s*\}/)
+  assert.match(calls[0], /endDate\s*\{\s*year month day\s*\}/)
+  assert.match(calls[0], /nextAiringEpisode\s*\{\s*episode airingAt\s*\}/)
   assert.match(calls[0], /stats\s*\{\s*scoreDistribution\s*\{\s*score amount\s*\}\s*\}/)
   assert.doesNotMatch(calls[0], /Media\([^)]*\)\s*\{[^}]*scoreDistribution/)
   assert.equal(validateGraphql(calls[0]).ok, true)

@@ -1,12 +1,94 @@
 export type MediaSeason = 'WINTER' | 'SPRING' | 'SUMMER' | 'FALL'
 
+/** Provider-supplied date precision; null components are kept unknown, never filled. */
+export interface MediaDate {
+  year: number | null
+  month: number | null
+  day: number | null
+}
+
 export interface MediaLink {
   site: string
   url: string
 }
 
+export interface GenreEntity {
+  id: string
+  label: string
+}
+
+export interface MediaTag {
+  id: string
+  name: string
+  rank: number | null
+  isMediaSpoiler: boolean
+}
+
+export type OrganizationKind = 'studio' | 'producer' | 'licensor' | 'distributor'
+
+export interface OrganizationAlias {
+  name: string
+  source: string | null
+}
+
+export interface OrganizationEntity {
+  /** Stable source-scoped entity key, or a normalized-name key when IDs are absent. */
+  id: string
+  kind: OrganizationKind
+  name: string
+  source: string | null
+  /** Provider ID for this organization, distinct from the anime's external IDs. */
+  providerId: string | null
+  aliases: OrganizationAlias[]
+  siteUrl: string | null
+  isAnimationStudio: boolean | null
+}
+
+export interface MediaAgeRating {
+  /** ISO alpha-2-like region code, GLOBAL, or null when unspecified. */
+  region: string | null
+  /** Rating scheme such as BBFC, MPAA, or PEGI. */
+  system: string | null
+  /** Display value from that scheme; never inferred from minimumAge. */
+  rating: string
+  minimumAge: number | null
+  source: string | null
+}
+
+export interface ProviderScore {
+  /** Provider's original score value before normalization. */
+  value: number
+  /** Provider's declared maximum score scale. */
+  scale: number
+  /** Normalized percentage on a 0–100 scale. */
+  normalized: number
+  source: string | null
+}
+
+export type FieldValueState = 'known' | 'unknown' | 'unannounced' | 'not_applicable'
+
+export interface FieldObservation {
+  source: string
+  value: unknown
+  /** Explicit value state reported by the provider; inferred when absent. */
+  valueState: FieldValueState
+  lastRefreshedAt: string | null
+}
+
+export interface FieldMetadata {
+  /** State of the canonical field value: known, unknown, unannounced, or not_applicable. */
+  valueState: FieldValueState
+  /** Source of the currently selected canonical field value. */
+  source: string | null
+  lastRefreshedAt: string | null
+  observations: FieldObservation[]
+  conflict: boolean
+}
+
 export interface Media {
   id: number
+  /** Present on canonical metadata responses; older filtered/bookmark records may omit it. */
+  fieldMetadata?: Record<string, FieldMetadata>
   title: string
   romaji: string | null
   english: string | null
@@ -17,15 +99,36 @@ export interface Media {
   description: string
   episodes: number | null
   airedEpisodes: number
+  /** Typical episode runtime in positive whole minutes. */
   duration: number | null
   status: string
   format: string | null
   season: MediaSeason | null
   seasonYear: number | null
+  /** Partial provider-supplied FuzzyDates; absent on legacy records. */
+  startDate?: MediaDate | null
+  endDate?: MediaDate | null
+  /** ISO 3166-1 alpha-2 country code; absent on legacy records. */
+  countryOfOrigin?: string | null
+  /** Canonical BCP-47 language tag; absent when the provider does not supply it. */
+  originalLanguage?: string | null
+  /** Region-specific age classifications; absent on legacy media records. */
+  ageRatings?: MediaAgeRating[]
+  /** Normalized percentage on a 0–100 scale; null when unavailable. */
   score: number | null
+  /** Original value and scale for each known provider score; absent on legacy records. */
+  providerScores?: ProviderScore[]
   popularity: number
+  /** Original provider labels retained for display and existing filters. */
   genres: string[]
+  /** Stable internal taxonomy entities; absent on filtered legacy records. */
+  genreEntities?: GenreEntity[]
+  tags?: MediaTag[]
+  /** Next episode air time as a whole Unix timestamp in seconds. */
   nextEpisode: { episode: number; airingAt: number } | null
+  /** Linked production/rights entities; absent on legacy records. */
+  organizations?: OrganizationEntity[]
+  /** Original studio labels retained for display and existing filters. */
   studios: string[]
   links: MediaLink[]
   streams: MediaLink[]
@@ -79,7 +182,7 @@ export interface RelatedItem {
   chapters?: number | null
   season: MediaSeason | null
   seasonYear: number | null
-  startDate: { year: number | null; month: number | null; day: number | null } | null
+  startDate: MediaDate | null
   cover: string | null
   averageScore: number | null
   relationType: string
@@ -138,8 +241,8 @@ export interface DetailSection {
 export interface MediaDetail extends Media {
   streamingEpisodes: StreamingEpisode[]
   relatedSeasons?: RelatedSeason[]
-  startDate?: { year: number | null; month: number | null; day: number | null } | null
-  endDate?: { year: number | null; month: number | null; day: number | null } | null
+  startDate?: MediaDate | null
+  endDate?: MediaDate | null
   rankings?: { rank: number; type: string; context: string; year: number | null; season: MediaSeason | null; allTime: boolean }[]
   /** Server-computed detail sections. */
   episodesGuide?: EpisodeEntry[]

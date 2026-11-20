@@ -11,6 +11,7 @@ import * as searchEngine from './search.mjs'
 import * as detailEngine from './detail.mjs'
 import * as kv from './kv.mjs'
 import * as listStore from './listStore.mjs'
+import * as identifiers from './identifiers.mjs'
 import { exportListJson, exportListCsv } from './listExport.mjs'
 import { pickListEntry } from './listRandom.mjs'
 import { sortListEntries } from './listSort.mjs'
@@ -52,7 +53,7 @@ const APP_CSP = [
   "form-action 'self'",
 ].join('; ')
 
-await Promise.all([store.init(), settings.init(), resolver.init(), imdb.init(), kv.init(), listStore.init()])
+await Promise.all([store.init(), settings.init(), resolver.init(), imdb.init(), kv.init(), listStore.init(), identifiers.init()])
 await library.init()
 await downloads.init()
 
@@ -124,7 +125,7 @@ app.use('/api', (req, res, next) => {
     res.status(403).json({ error: 'Cross-origin state-changing requests are not allowed' })
     return
   }
-  if (API_TOKEN && req.path !== '/health') {
+  if (API_TOKEN && req.path !== '/health' && req.path !== '/ready') {
     const authHeader = String(req.headers.authorization ?? '')
     const bearer = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : ''
     const headerToken = String(req.headers['x-api-token'] ?? '').trim()
@@ -298,6 +299,34 @@ function readStreamToBuffer(readable, maxBytes) {
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, season: anilist.currentSeason() })
 })
+
+// Liveness (/api/health) is separate from readiness. All persistent stores are
+// initialized before the listener starts; this runtime check confirms that the
+// bookmark store remains initialized and the shared library directory exists.
+app.get('/api/ready', (req, res) => {
+  const libraryDir = settings.resolveLibraryDir()
+  const checks = {
+    bookmarkStore: store.isReady(),
+    library: Boolean(libraryDir) && existsSync(libraryDir),
+  }
+  const ready = Object.values(checks).every(Boolean)
+  res.status(ready ? 200 : 503).json({ ready, checks })
+})
+
+/** AV-002: provider identifier registry (read-only API for diagnostics). */
+app.get('/api/identifiers/lookup', wrap(async (req, res) => {
+  const mediaId = await identifiers.find(req.query.provider, req.query.id)
+  if (mediaId === null) {
+    res.status(404).json({ error: 'External identifier not found' })
+    return
+  }
+  res.json({ mediaId, ids: await identifiers.get(mediaId) })
+}))
+
+app.get('/api/identifiers/:mediaId', wrap(async (req, res) => {
+  const ids = await identifiers.get(req.params.mediaId)
+  res.json({ mediaId: Number(req.params.mediaId), ids: ids ?? {} })
+}))
 
 app.get(
   '/api/season',
@@ -1444,6 +1473,6 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     if (shuttingDownServer) return
     shuttingDownServer = true
-    void Promise.allSettled([downloads.shutdown(), store.flush(), listStore.flush()]).finally(() => process.exit(0))
+    void Promise.allSettled([downloads.shutdown(), store.flush(), listStore.flush(), identifiers.flush()]).finally(() => process.exit(0))
   })
 }

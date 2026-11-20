@@ -87,7 +87,8 @@ export default function Search() {
     [params, setParams, history],
   )
 
-  // Type-ahead: debounce 250 ms and cancel stale responses (AV-073).
+  // Type-ahead: debounce 250 ms, abort superseded requests, and guard against
+  // late responses that were already in flight when cleanup ran (AV-073).
   useEffect(() => {
     if (tab !== 'catalog' || !suggestOpen) return
     const draft = term.trim()
@@ -96,22 +97,26 @@ export default function Search() {
       return
     }
     const seq = ++requestSeq.current
+    const controller = new AbortController()
     setSuggestLoading(true)
     const handle = setTimeout(() => {
       api
-        .suggest(draft)
+        .suggest(draft, controller.signal)
         .then((res) => {
-          if (seq !== requestSeq.current) return
+          if (seq !== requestSeq.current || controller.signal.aborted) return
           setSuggestions(res.suggestions ?? [])
         })
         .catch(() => {
-          if (seq === requestSeq.current) setSuggestions([])
+          if (seq === requestSeq.current && !controller.signal.aborted) setSuggestions([])
         })
         .finally(() => {
           if (seq === requestSeq.current) setSuggestLoading(false)
         })
     }, 250)
-    return () => clearTimeout(handle)
+    return () => {
+      clearTimeout(handle)
+      controller.abort()
+    }
   }, [term, tab, suggestOpen, query])
 
   // Main result fetch.
@@ -122,17 +127,18 @@ export default function Search() {
       return
     }
     let alive = true
+    const controller = new AbortController()
     setLoading(true)
     setError(null)
     const job =
       tab === 'library'
-        ? api.searchLibrary(query).then((res) => {
+        ? api.searchLibrary(query, controller.signal).then((res) => {
             if (!alive) return
             setLibraryHits(res)
             setResults(null)
           })
         : api
-            .searchAdvanced(query, { page })
+            .searchAdvanced(query, { page }, controller.signal)
             .then((res) => {
               if (!alive) return
               setResults(res)
@@ -140,13 +146,15 @@ export default function Search() {
             })
     job
       .catch((err: unknown) => {
-        if (alive) setError(err instanceof Error ? err.message : 'Search failed')
+        if (!alive || controller.signal.aborted) return
+        setError(err instanceof Error ? err.message : 'Search failed')
       })
       .finally(() => {
         if (alive) setLoading(false)
       })
     return () => {
       alive = false
+      controller.abort()
     }
   }, [query, page, tab])
 

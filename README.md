@@ -110,7 +110,10 @@ optional environment variables:
 | `/api/artwork` | GET/DELETE | List all claimed artwork mappings or reset a slot/target |
 | `/api/artwork/focus` | PATCH | Adjust crop focal point (`top`, `center`, `bottom`) for a claimed slot |
 | `/api/artwork/:artId` | GET | Serve locally cached artwork by opaque `art_…` ID |
-| `/api/health` | GET | Server status |
+| `/api/identifiers/:mediaId` | GET | Provider IDs recorded for a canonical title (AV-002) |
+| `/api/identifiers/lookup?provider=&id=` | GET | Reverse lookup from a provider ID to a canonical title |
+| `/api/health` | GET | Server status (liveness) |
+| `/api/ready` | GET | Readiness: bookmark store is initialized and shared library exists (other stores initialize before startup) |
 
 ## Why not AniDB directly
 
@@ -143,7 +146,7 @@ src/pages/            Season, Browse, Airing, Search, Downloads, Downloaded, Boo
 ```
 
 `library/` (shared downloaded media) and `data/` (settings, bookmarks, provider
-matches, persistent download queue, library index) are created on first run and
+matches, external identifiers, persistent download queue, library index) are created on first run and
 excluded via `.gitignore`.
 
 ## Notes

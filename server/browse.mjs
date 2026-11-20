@@ -302,6 +302,8 @@ export function buildBrowseQuery(filters) {
       format
       season
       seasonYear
+      startDate { year month day }
+      endDate { year month day }
       averageScore
       popularity
       favourites
@@ -311,7 +313,7 @@ export function buildBrowseQuery(filters) {
       countryOfOrigin
       siteUrl
       nextAiringEpisode { episode airingAt }
-      studios(isMain: true) { nodes { name } }
+      studios(isMain: true) { nodes { id name isAnimationStudio siteUrl } }
       externalLinks { site url type }
     }
   }
