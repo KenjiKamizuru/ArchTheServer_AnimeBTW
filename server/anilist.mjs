@@ -41,6 +41,16 @@ const MEDIA_FIELDS = `
   nextAiringEpisode { episode airingAt }
   studios(isMain: true) { nodes { id name isAnimationStudio siteUrl } }
   externalLinks { site url type }
+  characters(page: 1, perPage: 10, sort: FAVOURITES_DESC) {
+    nodes {
+      name { full native }
+      role
+      voiceActors(page: 1, perPage: 5, sort: FAVOURITES_DESC) {
+        name { full }
+        language
+      }
+    }
+  }
 `
 
 const SEASON_SORTS = {
@@ -229,6 +239,15 @@ export function normalize(media) {
   const rawColor = typeof media.coverImage?.color === 'string' ? media.coverImage.color.trim() : ''
   const color = /^#[0-9a-fA-F]{3,8}$/.test(rawColor) ? rawColor : null
   const studioNodes = Array.isArray(media.studios?.nodes) ? media.studios.nodes : []
+  const characterNodes = Array.isArray(media.characters?.nodes) ? media.characters.nodes : []
+  const characters = characterNodes.map((c) => ({
+    name: c.name?.full ?? null,
+    native: c.name?.native ?? null,
+    role: c.role ?? null,
+    voiceActors: Array.isArray(c.voiceActors?.nodes)
+      ? c.voiceActors.nodes.map((v) => ({ name: v.name?.full ?? null, language: v.language ?? null }))
+      : [],
+  }))
 
   const externalIds = extractExternalIds(media)
   // Provider IDs are persisted separately from the canonical catalog record.
@@ -301,6 +320,7 @@ export function normalize(media) {
     studios: studioNodes
       .map((studio) => studio?.name)
       .filter((name) => typeof name === 'string' && name.length > 0),
+    characters,
     organizations: studioNodes.map((studio) => ({
       kind: 'studio',
       name: studio?.name,

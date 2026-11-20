@@ -968,3 +968,58 @@ test('createAnimeRecord accepts provider-supplied aliases array', () => {
   })
   assert.deepEqual(record.aliases, ['Shingeki no Kyojin', '進撃の巨人'])
 })
+
+/* ------------------------------ AV-059 ---------------------------------- */
+
+test('advanced search parses character field', () => {
+  const parsed = search.parseSearchQuery(
+    'character:tanaka character:nezuko char:inosuke',
+  )
+  assert.deepEqual(parsed.filters.character, ['tanaka', 'nezuko', 'inosuke'])
+  assert.equal(parsed.text, '')
+  assert.equal(search.hasStructuredFilters(parsed.filters), true)
+})
+
+test('local browse matching filters by character name', () => {
+  const media = {
+    genres: ['Fantasy'],
+    characters: [
+      { name: 'Tanjiro Kamado', native: '竈門炭治郎', role: 'MAIN' },
+      { name: 'Nezuko Kamado', native: '竈門禰豆子', role: 'MAIN' },
+    ],
+    averageScore: 82,
+    popularity: 1200,
+    seasonYear: 2023,
+  }
+  const base = browse.EMPTY_FILTERS
+  const withFilters = (patch) => ({ ...base, ...patch })
+  assert.equal(browse.matchMediaLocally(media, withFilters({ character: ['tanjiro kamado'] })).ok, true)
+  assert.equal(browse.matchMediaLocally(media, withFilters({ character: ['nezuko kamado'] })).ok, true)
+  assert.equal(browse.matchMediaLocally(media, withFilters({ character: ['inosuke'] })).ok, false)
+  assert.equal(browse.matchMediaLocally(media, withFilters({ character: ['竈門禰豆子'] })).ok, true)
+})
+
+test('anilist normalize extracts characters from media payload', () => {
+  const normalized = anilist.normalize({
+    id: 1,
+    title: { romaji: 'Kimetsu no Yaiba', english: 'Demon Slayer', native: '鬼滅の刃' },
+    characters: {
+      nodes: [
+        {
+          name: { full: 'Tanjiro Kamado', native: '竈門炭治郎' },
+          role: 'MAIN',
+          voiceActors: {
+            nodes: [{ name: { full: 'Natsuki Hanae' }, language: 'JAPANESE' }],
+          },
+        },
+      ],
+    },
+  })
+  assert.equal(normalized.characters.length, 1)
+  assert.equal(normalized.characters[0].name, 'Tanjiro Kamado')
+  assert.equal(normalized.characters[0].native, '竈門炭治郎')
+  assert.equal(normalized.characters[0].role, 'MAIN')
+  assert.equal(normalized.characters[0].voiceActors.length, 1)
+  assert.equal(normalized.characters[0].voiceActors[0].name, 'Natsuki Hanae')
+  assert.equal(normalized.characters[0].voiceActors[0].language, 'JAPANESE')
+})

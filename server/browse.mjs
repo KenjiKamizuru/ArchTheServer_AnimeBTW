@@ -133,6 +133,7 @@ export function parseBrowseFilters(raw = {}) {
     studio: toStringList(raw.studio, null),
     staff: toStringList(raw.staff, null),
     voiceActor: toStringList(raw.voiceActor, null),
+    character: toStringList(raw.character, null),
     tags: toStringList(raw.tags, null, MAX_TAGS),
     tagMode: ['and', 'or', 'not'].includes(String(raw.tagMode ?? '')) ? String(raw.tagMode) : 'and',
     years,
@@ -177,6 +178,7 @@ export function filtersToParams(filters) {
   put('studio', filters.studio)
   put('staff', filters.staff)
   put('voiceActor', filters.voiceActor)
+  put('character', filters.character)
   put('tags', filters.tags)
   put('tagMode', filters.tagMode === 'and' ? null : filters.tagMode)
   put('yearMin', filters.years?.min)
@@ -396,6 +398,17 @@ export function matchMediaLocally(media, filters) {
     const hit = filters.studio.filter((s) => studios.has(s))
     if (hit.length === 0) return { ok: false, reasons }
     reasons.push(`studio ${hit.join('/')}`)
+  }
+
+  // Character filter: media must feature at least one of the listed characters.
+  if (filters.character.length) {
+    const wanted = new Set(filters.character.map((c) => c.toLowerCase()))
+    const hit = (media.characters ?? []).filter((c) =>
+      wanted.has((c.name ?? '').toLowerCase()) ||
+      wanted.has((c.native ?? '').toLowerCase()),
+    )
+    if (hit.length === 0) return { ok: false, reasons }
+    reasons.push(`character ${hit.map((c) => c.name).join('/')}`)
   }
 
   // Spoiler tags must never drive discovery, so strip them before matching.

@@ -28,6 +28,8 @@ const FIELD_ALIASES = {
   voiceactor: 'voiceActor',
   va: 'voiceActor',
   voice: 'voiceActor',
+  character: 'character',
+  char: 'character',
   genre: 'genre',
   genres: 'genre',
   tag: 'tag',
@@ -62,6 +64,7 @@ export function parseSearchQuery(raw) {
     studio: [],
     staff: [],
     voiceActor: [],
+    character: [],
     genre: [],
     tag: [],
     year: null,
@@ -86,7 +89,7 @@ export function parseSearchQuery(raw) {
     }
     if (field === 'title') {
       free.push(value)
-    } else if (field === 'studio' || field === 'staff' || field === 'voiceActor' || field === 'genre' || field === 'tag') {
+    } else if (field === 'studio' || field === 'staff' || field === 'voiceActor' || field === 'character' || field === 'genre' || field === 'tag') {
       filters[field].push(value.toLowerCase().replace(/\s+/g, ' ').slice(0, 60))
     } else if (field === 'status') {
       const normal = value.toLowerCase()
@@ -147,6 +150,7 @@ export function hasStructuredFilters(filters) {
     filters.studio.length > 0 ||
     filters.staff.length > 0 ||
     filters.voiceActor.length > 0 ||
+    filters.character.length > 0 ||
     filters.genre.length > 0 ||
     filters.tag.length > 0 ||
     filters.status.length > 0 ||
