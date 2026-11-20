@@ -17,6 +17,74 @@ const file = path.join(process.env.ANIMEVAULT_DATA ? path.resolve(process.env.AN
 
 export const USER_ROLES = ['user', 'moderator', 'admin']
 
+// ── Admin account from environment (AV-101 admin bootstrap) ───────────────
+//
+// Set ANIMEVAULT_ADMIN_USERNAME and ANIMEVAULT_ADMIN_PASSWORD_HASH in .env
+// to bootstrap a super-admin account. The password hash is sha256(password)
+// and is compared on the /api/auth/login endpoint. This account bypasses
+// registration and is created automatically on startup.
+
+const ADMIN_USERNAME = String(process.env.ANIMEVAULT_ADMIN_USERNAME ?? '').trim()
+const ADMIN_PASSWORD_HASH = String(process.env.ANIMEVAULT_ADMIN_PASSWORD_HASH ?? '').trim()
+
+function isValidSha256(raw) {
+  return /^[0-9a-f]{64}$/.test(String(raw).toLowerCase())
+}
+
+/** Ensure the env-configured admin account exists in the store. */
+export async function ensureAdmin() {
+  if (!ADMIN_USERNAME || !ADMIN_PASSWORD_HASH) return
+  if (!isValidSha256(ADMIN_PASSWORD_HASH)) {
+    console.warn('[auth] ANIMEVAULT_ADMIN_PASSWORD_HASH is not a valid sha256 hex digest; admin account skipped')
+    return
+  }
+  let user = state.users.find((u) => u.username.toLowerCase() === ADMIN_USERNAME.toLowerCase())
+  if (!user) {
+    user = {
+      id: state.nextId++,
+      username: ADMIN_USERNAME,
+      email: null,
+      passwordHash: ADMIN_PASSWORD_HASH,
+      role: 'admin',
+      displayName: 'Administrator',
+      avatarUrl: null,
+      bio: '',
+      locale: null,
+      preferredSubtitleLanguage: null,
+      preferredAudioLanguage: null,
+      defaultPlaybackQuality: null,
+      contentRatingPreference: null,
+      theme: null,
+      privacy: 'private',
+      twoFactorEnabled: false,
+      pinSet: false,
+      isGuest: false,
+      loginNotifications: true,
+      emailVerified: true,
+      emailVerifiedAt: Date.now(),
+      recoveryCodesRemaining: 0,
+      totpSecret: null,
+      totpEnabled: false,
+      recoveryCodes: null,
+      passkeys: [],
+      featureFlags: {},
+      activityLog: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      lastLoginAt: null,
+    }
+    state.users.push(user)
+  } else {
+    // Keep role/password in sync with env on every restart.
+    user.role = 'admin'
+    user.passwordHash = ADMIN_PASSWORD_HASH
+    user.emailVerified = true
+    user.emailVerifiedAt = user.emailVerifiedAt ?? Date.now()
+    user.updatedAt = Date.now()
+  }
+  await persist()
+}
+
 const MIN_USERNAME_LEN = 3
 const MAX_USERNAME_LEN = 32
 const MAX_DISPLAY_NAME_LEN = 64
@@ -113,6 +181,8 @@ export async function init() {
   } catch {
     // First run: empty state.
   }
+  // Bootstrap the env-configured admin account after loading stored users.
+  await ensureAdmin()
 }
 
 async function persist() {
@@ -264,6 +334,23 @@ export async function authenticateUser(usernameOrEmail, password) {
   const input = String(usernameOrEmail ?? '').trim()
   const pw = String(password ?? '')
   if (!input || !pw) throw error('Username/email and password are required', 401)
+
+  // ── Admin account from .env (sha256 password comparison) ─────────────
+  if (ADMIN_USERNAME && input.toLowerCase() === ADMIN_USERNAME.toLowerCase()) {
+    if (!ADMIN_PASSWORD_HASH) throw error('Invalid credentials', 401)
+    const providedHash = sha256Hex(pw)
+    if (!timingSafeEqual(Buffer.from(providedHash, 'hex'), Buffer.from(ADMIN_PASSWORD_HASH, 'hex'))) {
+      throw error('Invalid credentials', 401)
+    }
+    const adminIdx = findUserIndexByUsername(ADMIN_USERNAME)
+    const adminUser = adminIdx !== -1 ? state.users[adminIdx] : null
+    if (!adminUser) throw error('Invalid credentials', 401)
+    adminUser.lastLoginAt = Date.now()
+    adminUser.updatedAt = Date.now()
+    addActivity(adminUser.id, 'login')
+    await persist()
+    return sanitizeUser(adminUser)
+  }
 
   let user = null
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input)) {
