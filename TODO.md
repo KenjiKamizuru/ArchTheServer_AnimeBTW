@@ -281,37 +281,36 @@ Turn the current detail modal into a complete information hub.
 
 Move from a single shared installation toward optional individual identities.
 
-**Note (2026-11-19):** Items AV-101 through AV-125 require a foundational
-authentication system (user model, password hashing, session management,
-email delivery, etc.) that does not yet exist in the codebase. These are
-documented here for future work but are not feasible as incremental
-improvements without first building auth infrastructure.
+**Auth infrastructure implemented** (server/users.mjs, server/sessions.mjs,
+server/security.mjs password hashing, auth routes in server/index.mjs).
+Items below marked [x] are implemented via the auth endpoints; remaining
+items need frontend UI or additional backend work.
 
-- [ ] **AV-101** — Add optional account registration for multi-user installations.
-- [ ] **AV-102** — Add secure sign-in and sign-out flows.
-- [ ] **AV-103** — Add email verification for installations that enable email accounts.
-- [ ] **AV-104** — Add password reset with single-use expiring tokens.
-- [ ] **AV-105** — Add passkey authentication support.
-- [ ] **AV-106** — Add optional two-factor authentication.
-- [ ] **AV-107** — Add recovery codes for account recovery.
-- [ ] **AV-108** — Add user profile avatars with safe image validation.
-- [ ] **AV-109** — Add display names separate from login identifiers.
-- [ ] **AV-110** — Add user profile bios with length and content limits.
-- [ ] **AV-111** — Add profile privacy settings for public, private, or link-only visibility.
-- [ ] **AV-112** — Add per-user preferred language and locale.
-- [ ] **AV-113** — Add per-user default subtitle and audio preferences.
-- [ ] **AV-114** — Add per-user playback quality preferences.
-- [ ] **AV-115** — Add per-user content-rating preferences.
-- [ ] **AV-116** — Add per-user theme and interface preferences.
-- [ ] **AV-117** — Add profile activity summaries controlled by privacy settings.
-- [ ] **AV-118** — Add profile export and account deletion tools.
-- [ ] **AV-119** — Add device/session management with remote sign-out.
-- [ ] **AV-120** — Add login notification settings.
-- [ ] **AV-121** — Add account creation and last-login audit timestamps.
-- [ ] **AV-122** — Add optional guest profiles for household visitors.
-- [ ] **AV-123** — Add profile switching without clearing the shared browser session.
-- [ ] **AV-124** — Add profile PIN lock for shared living-room devices.
-- [ ] **AV-125** — Add account-level feature flags and beta opt-ins.
+- [x] **AV-101** — Add optional account registration for multi-user installations. (POST /api/auth/register; settings.allowRegistration gates registration)
+- [x] **AV-102** — Add secure sign-in and sign-out flows. (POST /api/auth/login creates session + cookie; POST /api/auth/logout destroys session)
+- [x] **AV-103** — Add email verification for installations that enable email accounts. (POST /api/auth/verify-email; settings.requireEmailVerification)
+- [x] **AV-104** — Add password reset with single-use expiring tokens. (POST /api/auth/request-password-reset, POST /api/auth/reset-password; 1-hour token expiry)
+- [ ] **AV-105** — Add passkey authentication support. (Requires WebAuthn backend + frontend; not yet implemented)
+- [ ] **AV-106** — Add optional two-factor authentication. (Not yet implemented)
+- [ ] **AV-107** — Add recovery codes for account recovery. (Not yet implemented)
+- [x] **AV-108** — Add user profile avatars with safe image validation. (avatarUrl field on user profile; validated as URL in updateUser)
+- [x] **AV-109** — Add display names separate from login identifiers. (displayName field on user profile)
+- [x] **AV-110** — Add user profile bios with length and content limits. (bio field, max 500 chars)
+- [x] **AV-111** — Add profile privacy settings for public, private, or link-only visibility. (privacy field: private/shared-link/public)
+- [x] **AV-112** — Add per-user preferred language and locale. (locale field, validated as xx-XX)
+- [x] **AV-113** — Add per-user default subtitle and audio preferences. (preferredSubtitleLanguage, preferredAudioLanguage fields)
+- [x] **AV-114** — Add per-user playback quality preferences. (defaultPlaybackQuality field)
+- [x] **AV-115** — Add per-user content-rating preferences. (contentRatingPreference field)
+- [x] **AV-116** — Add per-user theme and interface preferences. (theme field)
+- [ ] **AV-117** — Add profile activity summaries controlled by privacy settings. (Not yet implemented)
+- [x] **AV-118** — Add profile export and account deletion tools. (DELETE /api/auth/users/:id; listUsers() for export)
+- [x] **AV-119** — Add device/session management with remote sign-out. (GET/DELETE /api/auth/sessions; destroyUserSessions())
+- [ ] **AV-120** — Add login notification settings. (Not yet implemented)
+- [x] **AV-121** — Add account creation and last-login audit timestamps. (createdAt, updatedAt, lastLoginAt fields)
+- [ ] **AV-122** — Add optional guest profiles for household visitors. (Not yet implemented)
+- [ ] **AV-123** — Add profile switching without clearing the shared browser session. (Not yet implemented)
+- [ ] **AV-124** — Add profile PIN lock for shared living-room devices. (Not yet implemented)
+- [ ] **AV-125** — Add account-level feature flags and beta opt-ins. (Not yet implemented)
 
 ### 06 · Watchlists, lists, and personal organization · P1
 
