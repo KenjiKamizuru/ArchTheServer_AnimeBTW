@@ -1370,7 +1370,7 @@ import { promisify } from 'node:util'
 const scryptAsync = promisify(scrypt)
 const SALT_LEN = 16
 const KEY_LEN = 64
-const SCRYPT_COST = Math.pow(2, 17) // N parameter for scrypt
+const SCRYPT_COST = Math.pow(2, 14) // N parameter for scrypt (reasonable for self-hosted deployments)
 
 /** Hash a plaintext password into `salt.hash` format suitable for storage. */
 export async function hashPassword(password) {

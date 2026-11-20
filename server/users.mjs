@@ -11,6 +11,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { atomicWriteFile, sanitizeErrorMessage, hashPassword, verifyPassword, generateToken, sha256Hex } from './security.mjs'
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import * as settings from './settings.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const file = path.join(process.env.ANIMEVAULT_DATA ? path.resolve(process.env.ANIMEVAULT_DATA) : path.join(root, 'data'), 'users.json')
@@ -63,6 +64,7 @@ export async function ensureAdmin() {
       emailVerified: true,
       emailVerifiedAt: Date.now(),
       recoveryCodesRemaining: 0,
+      status: 'active',
       totpSecret: null,
       totpEnabled: false,
       recoveryCodes: null,
@@ -221,6 +223,7 @@ function sanitizeUser(user, includeSensitive = false) {
     avatarUrl: rest.avatarUrl ?? null,
     bio: rest.bio ?? '',
     role: rest.role,
+    status: rest.status ?? 'active',
     locale: rest.locale ?? null,
     preferredSubtitleLanguage: rest.preferredSubtitleLanguage ?? null,
     preferredAudioLanguage: rest.preferredAudioLanguage ?? null,
@@ -316,6 +319,7 @@ export async function createUser({ username, email, password, role = 'user' }) {
     featureFlags: {},
     loginNotifications: true,
     activityLog: [],
+    status: settings.get().requireAdminApproval ? 'pending' : 'active',
     createdAt: Date.now(),
     updatedAt: Date.now(),
     lastLoginAt: null,
@@ -364,6 +368,14 @@ export async function authenticateUser(usernameOrEmail, password) {
 
   const ok = await verifyPassword(pw, user.passwordHash)
   if (!ok) throw error('Invalid credentials', 401)
+
+  // Reject accounts that are not yet active (pending admin approval, rejected, or suspended).
+  if (user.status !== 'active') {
+    if (user.status === 'pending') {
+      throw error('Account is pending admin approval. Please wait for an administrator to activate your account.', 403)
+    }
+    throw error(`Account is ${user.status}. Please contact an administrator.`, 403)
+  }
 
   user.lastLoginAt = Date.now()
   user.updatedAt = Date.now()
@@ -475,6 +487,38 @@ export async function changePassword(id, currentPassword, newPassword) {
   user.updatedAt = Date.now()
   await persist()
   return { ok: true }
+}
+
+/**
+ * Approve a pending user account (admin only). Sets status to 'active'.
+ */
+export async function approveUser(id, approvedById) {
+  const idx = findUserIndex(Number(id))
+  if (idx === -1) throw error('User not found', 404)
+  const user = state.users[idx]
+  if (user.status !== 'pending') throw error('User is not pending approval', 400)
+
+  user.status = 'active'
+  user.updatedAt = Date.now()
+  await persist()
+  addActivity(user.id, 'approved', { approvedBy: approvedById })
+  return sanitizeUser(user)
+}
+
+/**
+ * Reject a pending user account (admin only). Sets status to 'rejected'.
+ */
+export async function rejectUser(id, rejectedById) {
+  const idx = findUserIndex(Number(id))
+  if (idx === -1) throw error('User not found', 404)
+  const user = state.users[idx]
+  if (user.status !== 'pending') throw error('User is not pending approval', 400)
+
+  user.status = 'rejected'
+  user.updatedAt = Date.now()
+  await persist()
+  addActivity(user.id, 'rejected', { rejectedBy: rejectedById })
+  return sanitizeUser(user)
 }
 
 /**
@@ -810,6 +854,7 @@ export async function createGuest(displayName) {
     isGuest: true,
     featureFlags: {},
     activityLog: [],
+    status: 'active',
     createdAt: Date.now(),
     updatedAt: Date.now(),
     lastLoginAt: null,

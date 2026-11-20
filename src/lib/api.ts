@@ -739,6 +739,14 @@ export const api = {
     return send<{ ok: boolean }>(`/api/auth/users/${id}`, 'DELETE')
   },
 
+  authApproveUser(id: number) {
+    return send<{ user: User }>(`/api/auth/users/${id}/approve`, 'POST')
+  },
+
+  authRejectUser(id: number) {
+    return send<{ user: User }>(`/api/auth/users/${id}/reject`, 'POST')
+  },
+
   authSessions() {
     return get<{ sessions: { id: string; createdAt: number; lastUsedAt: number; expiresAt: number }[] }>(
       '/api/auth/sessions',

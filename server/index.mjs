@@ -1168,6 +1168,36 @@ app.delete(
     res.clearCookie('session-token', { path: '/' })
     res.json({ ok: true })
   }),
+),
+
+/** POST /api/auth/users/:id/approve — approve a pending user (admin only). */
+app.post(
+  '/api/auth/users/:id/approve',
+  limitMutations,
+  wrap(async (req, res) => {
+    const targetId = Number(req.params.id)
+    if (!req.user || req.user.role !== 'admin') {
+      res.status(403).json({ error: 'Admin access required' })
+      return
+    }
+    const updated = await users.approveUser(targetId, req.user.id)
+    res.json({ user: updated })
+  }),
+)
+
+/** POST /api/auth/users/:id/reject — reject a pending user (admin only). */
+app.post(
+  '/api/auth/users/:id/reject',
+  limitMutations,
+  wrap(async (req, res) => {
+    const targetId = Number(req.params.id)
+    if (!req.user || req.user.role !== 'admin') {
+      res.status(403).json({ error: 'Admin access required' })
+      return
+    }
+    const updated = await users.rejectUser(targetId, req.user.id)
+    res.json({ user: updated })
+  }),
 )
 
 /** GET /api/auth/sessions — list active sessions for the current user (AV-119). */

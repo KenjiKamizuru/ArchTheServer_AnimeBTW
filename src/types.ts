@@ -506,6 +506,7 @@ export interface User {
   avatarUrl: string | null
   bio: string
   role: string
+  status: string
   locale: string | null
   preferredSubtitleLanguage: string | null
   preferredAudioLanguage: string | null

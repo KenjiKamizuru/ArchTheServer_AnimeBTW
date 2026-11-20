@@ -36,6 +36,7 @@ const DEFAULTS = {
   allowedExternalHosts: [],
   allowRegistration: true,
   requireEmailVerification: false,
+  requireAdminApproval: true,
   sessionTimeoutMs: 30 * 24 * 60 * 60 * 1000,
   updatedAt: 0,
 }
@@ -111,6 +112,7 @@ export function get() {
     envExternalHostsConfigured: Boolean(String(process.env.ALLOWED_SOURCE_HOSTS ?? '').trim()),
     allowRegistration: state.allowRegistration,
     requireEmailVerification: state.requireEmailVerification,
+    requireAdminApproval: state.requireAdminApproval,
     sessionTimeoutMs: state.sessionTimeoutMs,
     updatedAt: state.updatedAt,
   }
@@ -188,6 +190,10 @@ export async function save(patch = {}) {
       throw Object.assign(new Error('Session timeout must be at least 60000 ms'), { status: 400 })
     }
     next.sessionTimeoutMs = Math.floor(raw)
+  }
+
+  if (patch.requireAdminApproval !== undefined) {
+    next.requireAdminApproval = Boolean(patch.requireAdminApproval)
   }
 
   const nextResolved = computeResolvedLibraryDir(next.libraryDir)
