@@ -830,3 +830,65 @@ test('browsePresets writePresets caps at MAX_PRESETS', () => {
 test('browsePresets MAX_PRESETS is a positive integer', () => {
   assert.ok(Number.isInteger(browsePresets.MAX_PRESETS) && browsePresets.MAX_PRESETS > 0)
 })
+
+/* ------------------------------ AV-055 ---------------------------------- */
+
+test('toRomaji converts hiragana to Hepburn romaji', () => {
+  assert.equal(search.toRomaji('あいうえお'), 'aiueo')
+  assert.equal(search.toRomaji('かきくけこ'), 'kakikukeko')
+  assert.equal(search.toRomaji('さしすせそ'), 'sashisuseso')
+  assert.equal(search.toRomaji('たちつてと'), 'tachitsuteto')
+  assert.equal(search.toRomaji('なんと'), 'nanto')
+})
+
+test('toRomaji converts katakana to Hepburn romaji', () => {
+  assert.equal(search.toRomaji('アイウエオ'), 'aiueo')
+  assert.equal(search.toRomaji('カキクケコ'), 'kakikukeko')
+  assert.equal(search.toRomaji('ナルト'), 'naruto')
+})
+
+test('toRomaji converts kana but leaves kanji unchanged', () => {
+  assert.equal(search.toRomaji('鬼滅の刃'), '鬼滅no刃')
+  assert.equal(search.toRomaji('日本語'), '日本語')
+})
+
+test('toRomaji handles digraphs and sokuon', () => {
+  assert.equal(search.toRomaji('きゃ'), 'kya')
+  assert.equal(search.toRomaji('しゅ'), 'shu')
+  assert.equal(search.toRomaji('ちょ'), 'cho')
+  assert.equal(search.toRomaji('きっと'), 'kitto')
+})
+
+test('normalizeForSearchRomaji normalizes and converts kana', () => {
+  assert.equal(search.normalizeForSearchRomaji('NARUTO'), 'naruto')
+  assert.equal(search.normalizeForSearchRomaji('ナルト'), 'naruto')
+  assert.equal(search.normalizeForSearchRomaji('Kimetsu no Yaiba'), 'kimetsu no yaiba')
+})
+
+test('rankTitles matches romaji query against kana title', () => {
+  const ranked = search.rankTitles(
+    [{ label: 'きめつのやいば' }],
+    'kimetsu',
+  )
+  assert.equal(ranked.length, 1)
+  assert.equal(ranked[0].label, 'きめつのやいば')
+  assert.equal(ranked[0].reason, 'romaji title match')
+})
+
+test('rankTitles matches romaji query against katakana title', () => {
+  const ranked = search.rankTitles(
+    [{ label: 'ナルト' }],
+    'naruto',
+  )
+  assert.equal(ranked.length, 1)
+  assert.equal(ranked[0].label, 'ナルト')
+  assert.equal(ranked[0].reason, 'romaji title match')
+})
+
+test('rankTitles does not falsely match unrelated titles via romaji', () => {
+  const ranked = search.rankTitles(
+    [{ label: 'One Piece' }, { label: 'ドラゴンボール' }],
+    'naruto',
+  )
+  assert.equal(ranked.length, 0)
+})

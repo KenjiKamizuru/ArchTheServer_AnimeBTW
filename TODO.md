@@ -225,7 +225,7 @@ Make search fast, forgiving, explainable, and useful across the entire library.
 - [x] **AV-052** — Add keyboard navigation for every search suggestion. (ArrowUp/ArrowDown/Enter suggestion navigation in src/pages/Search.tsx)
 - [x] **AV-053** — Support exact title, partial title, and alternate-title matching. (search.rankTitles exact/partial/alias paths; tests/core-verification.test.mjs)
 - [x] **AV-054** — Add fuzzy matching for misspellings and transposed characters. (search.similarity/editDistance transposition and typo cases; tests/core-verification.test.mjs)
-- [ ] **AV-055** — Add romanization-aware matching for Japanese titles.
+- [x] **AV-055** — Add romanization-aware matching for Japanese titles. (`server/search.mjs`: `toRomaji()` Hepburn conversion for hiragana/katakana with digraphs/sokuon, `normalizeForSearchRomaji()` combining normalization + romaji, `rankTitles()` matches romaji queries against kana titles with 'romaji title match' reason; `tests/core-verification.test.mjs`: toRomaji hiragana/katakana/kanji/digraphs, normalizeForSearchRomaji, rankTitles romaji matching — 489 pass / 0 fail; `npm run verify` clean)
 - [x] **AV-056** — Add native-script title search. (normalizeForSearch preserves CJK titles and folds accents; tests/core-verification.test.mjs)
 - [ ] **AV-057** — Add title alias indexing across all known metadata providers.
 - [ ] **AV-058** — Add search by studio, staff member, and voice actor. (partially verified: studio search via `studio:` works; staff/voice-actor search is still missing)

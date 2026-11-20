@@ -159,6 +159,107 @@ export function normalizeForSearch(value) {
     .trim()
 }
 
+/** Hepburn romaji map for hiragana and katakana. Kanji is left unchanged. */
+const ROMAJI_MAP = new Map([
+  // Hiragana
+  ['あ', 'a'], ['い', 'i'], ['う', 'u'], ['え', 'e'], ['お', 'o'],
+  ['か', 'ka'], ['き', 'ki'], ['く', 'ku'], ['け', 'ke'], ['こ', 'ko'],
+  ['さ', 'sa'], ['し', 'shi'], ['す', 'su'], ['せ', 'se'], ['そ', 'so'],
+  ['た', 'ta'], ['ち', 'chi'], ['つ', 'tsu'], ['て', 'te'], ['と', 'to'],
+  ['な', 'na'], ['に', 'ni'], ['ぬ', 'nu'], ['ね', 'ne'], ['の', 'no'],
+  ['は', 'ha'], ['ひ', 'hi'], ['ふ', 'fu'], ['へ', 'he'], ['ほ', 'ho'],
+  ['ま', 'ma'], ['み', 'mi'], ['む', 'mu'], ['め', 'me'], ['も', 'mo'],
+  ['や', 'ya'], ['ゆ', 'yu'], ['よ', 'yo'],
+  ['ら', 'ra'], ['り', 'ri'], ['る', 'ru'], ['れ', 're'], ['ろ', 'ro'],
+  ['わ', 'wa'], ['を', 'o'], ['ん', 'n'],
+  ['が', 'ga'], ['ぎ', 'gi'], ['ぐ', 'gu'], ['げ', 'ge'], ['ご', 'go'],
+  ['ざ', 'za'], ['じ', 'ji'], ['ず', 'zu'], ['ぜ', 'ze'], ['ぞ', 'zo'],
+  ['だ', 'da'], ['ぢ', 'ji'], ['づ', 'zu'], ['で', 'de'], ['ど', 'do'],
+  ['ば', 'ba'], ['び', 'bi'], ['ぶ', 'bu'], ['べ', 'be'], ['ぼ', 'bo'],
+  ['ぱ', 'pa'], ['ぴ', 'pi'], ['ぷ', 'pu'], ['ぺ', 'pe'], ['ぽ', 'po'],
+  // Katakana
+  ['ア', 'a'], ['イ', 'i'], ['ウ', 'u'], ['エ', 'e'], ['オ', 'o'],
+  ['カ', 'ka'], ['キ', 'ki'], ['ク', 'ku'], ['ケ', 'ke'], ['コ', 'ko'],
+  ['サ', 'sa'], ['シ', 'shi'], ['ス', 'su'], ['セ', 'se'], ['ソ', 'so'],
+  ['タ', 'ta'], ['チ', 'chi'], ['ツ', 'tsu'], ['テ', 'te'], ['ト', 'to'],
+  ['ナ', 'na'], ['ニ', 'ni'], ['ヌ', 'nu'], ['ネ', 'ne'], ['ノ', 'no'],
+  ['ハ', 'ha'], ['ヒ', 'hi'], ['フ', 'fu'], ['ヘ', 'he'], ['ホ', 'ho'],
+  ['マ', 'ma'], ['ミ', 'mi'], ['ム', 'mu'], ['メ', 'me'], ['モ', 'mo'],
+  ['ヤ', 'ya'], ['ユ', 'yu'], ['ヨ', 'yo'],
+  ['ラ', 'ra'], ['リ', 'ri'], ['ル', 'ru'], ['レ', 're'], ['ロ', 'ro'],
+  ['ワ', 'wa'], ['ヲ', 'o'], ['ン', 'n'],
+  ['ガ', 'ga'], ['ギ', 'gi'], ['グ', 'gu'], ['ゲ', 'ge'], ['ゴ', 'go'],
+  ['ザ', 'za'], ['ジ', 'ji'], ['ズ', 'zu'], ['ゼ', 'ze'], ['ゾ', 'zo'],
+  ['ダ', 'da'], ['ヂ', 'ji'], ['ヅ', 'zu'], ['デ', 'de'], ['ド', 'do'],
+  ['バ', 'ba'], ['ビ', 'bi'], ['ブ', 'bu'], ['ベ', 'be'], ['ボ', 'bo'],
+  ['パ', 'pa'], ['ピ', 'pi'], ['プ', 'pu'], ['ペ', 'pe'], ['ポ', 'po'],
+])
+
+/**
+ * Converts Japanese hiragana and katakana to Hepburn romaji. Kanji and
+ * non-Japanese characters are passed through unchanged. Small kana (ゃ, ゅ, ょ,
+ * っ, ャ, ュ, ョ, ッ) combine with the preceding character to form digraphs.
+ */
+export function toRomaji(text) {
+  const s = String(text ?? '')
+  const out = []
+  let i = 0
+  while (i < s.length) {
+    const ch = s[i]
+    const next = s[i + 1]
+    // Digraphs: small kana after i-column consonants.
+    if ((next === 'ゃ' || next === 'ャ') && 'きぎしじちにひびぴみり'.includes(ch)) {
+      const base = ROMAJI_MAP.get(ch)
+      if (base === 'shi') out.push('sha')
+      else if (base === 'chi') out.push('cha')
+      else if (base === 'ji') out.push('ja')
+      else out.push(base.replace(/i$/, '') + 'ya')
+      i += 2
+      continue
+    }
+    if ((next === 'ゅ' || next === 'ュ') && 'きぎしじちにひびぴみり'.includes(ch)) {
+      const base = ROMAJI_MAP.get(ch)
+      if (base === 'shi') out.push('shu')
+      else if (base === 'chi') out.push('chu')
+      else if (base === 'ji') out.push('ju')
+      else out.push(base.replace(/i$/, '') + 'yu')
+      i += 2
+      continue
+    }
+    if ((next === 'ょ' || next === 'ョ') && 'きぎしじちにひびぴみり'.includes(ch)) {
+      const base = ROMAJI_MAP.get(ch)
+      if (base === 'shi') out.push('sho')
+      else if (base === 'chi') out.push('cho')
+      else if (base === 'ji') out.push('jo')
+      else out.push(base.replace(/i$/, '') + 'yo')
+      i += 2
+      continue
+    }
+    // Sokuon (っ/ッ) geminates the next consonant.
+    if ((ch === 'っ' || ch === 'ッ') && next && ROMAJI_MAP.has(next)) {
+      const base = ROMAJI_MAP.get(next)
+      out.push(base.charAt(0) + base)
+      i += 2
+      continue
+    }
+    if (ROMAJI_MAP.has(ch)) {
+      out.push(ROMAJI_MAP.get(ch))
+    } else {
+      out.push(ch)
+    }
+    i += 1
+  }
+  return out.join('')
+}
+
+/**
+ * Normalizes a string and converts Japanese kana to romaji, so a romaji query
+ * can match Japanese titles and vice versa.
+ */
+export function normalizeForSearchRomaji(value) {
+  return toRomaji(normalizeForSearch(value))
+}
+
 function bigrams(value) {
   const s = value.replace(/\s+/g, '')
   const grams = new Map()
@@ -232,13 +333,15 @@ export function typoTolerance(query) {
  */
 export function rankTitles(titles, query, { limit = 12, minScore = 0.28 } = {}) {
   const needle = normalizeForSearch(query)
-  if (!needle) return []
+  const needleRomaji = normalizeForSearchRomaji(query)
+  if (!needle && !needleRomaji) return []
   const tolerance = typoTolerance(query)
   const out = []
   for (const title of titles) {
     if (!title || typeof title.label !== 'string') continue
     const haystack = normalizeForSearch(title.label)
-    if (!haystack) continue
+    const haystackRomaji = normalizeForSearchRomaji(title.label)
+    if (!haystack && !haystackRomaji) continue
     let score = 0
     let reason = ''
     if (haystack === needle) {
@@ -253,6 +356,9 @@ export function rankTitles(titles, query, { limit = 12, minScore = 0.28 } = {}) 
     } else if (haystack.includes(needle)) {
       score = 0.74
       reason = 'title contains your search'
+    } else if (needleRomaji && haystackRomaji.includes(needleRomaji)) {
+      score = 0.72
+      reason = 'romaji title match'
     } else {
       const dice = similarity(needle, haystack)
       const dist = editDistance(needle, haystack)
