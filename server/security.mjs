@@ -1362,3 +1362,47 @@ export async function inspectUploadedVideoFile(filePath, ext = '') {
 
   return { valid: true, container: detected, fastStart: true, size: stat.size, error: null }
 }
+
+/** Password hashing using Node's built-in scrypt (no external dependency). */
+import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto'
+import { promisify } from 'node:util'
+
+const scryptAsync = promisify(scrypt)
+const SALT_LEN = 16
+const KEY_LEN = 64
+const SCRYPT_COST = Math.pow(2, 17) // N parameter for scrypt
+
+/** Hash a plaintext password into `salt.hash` format suitable for storage. */
+export async function hashPassword(password) {
+  if (typeof password !== 'string' || password.length < 8) {
+    throw Object.assign(new Error('Password must be at least 8 characters'), { status: 400 })
+  }
+  const salt = randomBytes(SALT_LEN).toString('hex')
+  const derived = await scryptAsync(password, salt, KEY_LEN, { N: SCRYPT_COST, r: 8, p: 1 })
+  return `${salt}.${derived.toString('hex')}`
+}
+
+/** Verify a plaintext password against a stored `salt.hash` value. Returns boolean. */
+export async function verifyPassword(password, stored) {
+  if (typeof password !== 'string' || typeof stored !== 'string') return false
+  const parts = stored.split('.')
+  if (parts.length !== 2) return false
+  const [salt, hash] = parts
+  if (!salt || !hash) return false
+  try {
+    const derived = await scryptAsync(password, salt, KEY_LEN, { N: SCRYPT_COST, r: 8, p: 1 })
+    return timingSafeEqual(Buffer.from(hash, 'hex'), derived)
+  } catch {
+    return false
+  }
+}
+
+/** Generate a cryptographically random URL-safe token. */
+export function generateToken(length = 32) {
+  return randomBytes(length).toString('base64url')
+}
+
+/** SHA-256 hex digest of a string (for email-verification / reset-token storage). */
+export function sha256Hex(input) {
+  return createHash('sha256').update(String(input)).digest('hex')
+}

@@ -21,7 +21,9 @@ import * as playback from './playback.mjs'
 import * as library from './library.mjs'
 import * as downloads from './downloads.mjs'
 import * as imdb from './imdb.mjs'
-import { sanitizeErrorMessage, validateRemoteUrl, verifyRegularLibraryFile } from './security.mjs'
+import * as users from './users.mjs'
+import * as sessions from './sessions.mjs'
+import { sanitizeErrorMessage, validateRemoteUrl, verifyRegularLibraryFile, hashPassword, verifyPassword, generateToken, sha256Hex } from './security.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const requestedPort = Number(process.env.PORT)
@@ -52,7 +54,7 @@ const APP_CSP = [
   "form-action 'self'",
 ].join('; ')
 
-await Promise.all([store.init(), settings.init(), resolver.init(), imdb.init(), kv.init(), listStore.init()])
+await Promise.all([store.init(), settings.init(), resolver.init(), imdb.init(), kv.init(), listStore.init(), users.init(), sessions.init()])
 await library.init()
 await downloads.init()
 
@@ -135,6 +137,50 @@ app.use('/api', (req, res, next) => {
     }
   }
   next()
+})
+
+// Session-based authentication middleware. Public auth routes (/api/auth/*)
+// are exempt; all other API routes require either a valid API token (when
+// ANIMEVAULT_API_TOKEN is set) or a valid session token via
+// Authorization: Bearer <token> or the session-token cookie.
+const PUBLIC_AUTH_ROUTES = new Set(['/api/auth/register', '/api/auth/login'])
+app.use('/api', (req, res, next) => {
+  if (PUBLIC_AUTH_ROUTES.has(req.path)) return next()
+  // API token auth (ANIMEVAULT_API_TOKEN) takes precedence over sessions.
+  if (API_TOKEN) {
+    const authHeader = String(req.headers.authorization ?? '')
+    const bearer = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : ''
+    const headerToken = String(req.headers['x-api-token'] ?? '').trim()
+    const candidate = bearer || headerToken
+    if (candidate && timingSafeTokenMatch(candidate, API_TOKEN)) {
+      req.apiTokenAuth = true
+      return next()
+    }
+  }
+  const authHeader = String(req.headers.authorization ?? '')
+  const bearer = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : ''
+  const cookieMatch = String(req.headers.cookie ?? '').match(/(?:^|;\s*)session-token=([^;]+)/)
+  const cookieToken = cookieMatch ? cookieMatch[1] : ''
+  const token = bearer || cookieToken
+  if (!token) {
+    res.status(401).json({ error: 'Authentication required' })
+    return
+  }
+  sessions.getSession(token).then((session) => {
+    if (!session) {
+      res.status(401).json({ error: 'Invalid or expired session' })
+      return
+    }
+    const user = users.getUser(session.userId)
+    if (!user) {
+      res.status(401).json({ error: 'User not found' })
+      return
+    }
+    req.user = user
+    next()
+  }).catch((err) => {
+    res.status(500).json({ error: sanitizeErrorMessage(err) })
+  })
 })
 
 /** Lightweight bounded in-memory sliding-window rate limiter per client IP. */
@@ -708,6 +754,202 @@ app.put(
     library.invalidateCache()
     downloads.schedulePump()
     res.json(next)
+  }),
+)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Authentication routes (AV-101 through AV-125)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/** POST /api/auth/register — create a new account (AV-101). */
+app.post(
+  '/api/auth/register',
+  limitMutations,
+  wrap(async (req, res) => {
+    const config = settings.get()
+    if (!config.allowRegistration) {
+      res.status(403).json({ error: 'Registration is disabled on this installation' })
+      return
+    }
+    const { username, email, password } = req.body ?? {}
+    const user = await users.createUser({ username, email, password })
+    const requiresVerification = config.requireEmailVerification && user.email
+    res.status(201).json({
+      user,
+      requiresEmailVerification: requiresVerification,
+      message: requiresVerification
+        ? 'Account created. Please verify your email before signing in.'
+        : 'Account created. You can now sign in.',
+    })
+  }),
+)
+
+/** POST /api/auth/login — sign in and create a session (AV-102). */
+app.post(
+  '/api/auth/login',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { username, password } = req.body ?? {}
+    const user = await users.authenticateUser(username, password)
+    const config = settings.get()
+    const session = await sessions.createSession(user.id, config.sessionTimeoutMs)
+    res.cookie('session-token', session.token, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: isProd,
+      maxAge: config.sessionTimeoutMs,
+      path: '/',
+    })
+    res.json({ user, session })
+  }),
+)
+
+/** POST /api/auth/logout — destroy the current session (AV-102). */
+app.post(
+  '/api/auth/logout',
+  limitMutations,
+  wrap(async (req, res) => {
+    const authHeader = String(req.headers.authorization ?? '')
+    const bearer = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : ''
+    const cookieMatch = String(req.headers.cookie ?? '').match(/(?:^|;\s*)session-token=([^;]+)/)
+    const cookieToken = cookieMatch ? cookieMatch[1] : ''
+    const token = bearer || cookieToken
+    if (token) await sessions.destroySession(token)
+    res.clearCookie('session-token', { path: '/' })
+    res.json({ ok: true })
+  }),
+)
+
+/** GET /api/auth/me — return the current authenticated user. */
+app.get(
+  '/api/auth/me',
+  wrap(async (req, res) => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Authentication required' })
+      return
+    }
+    res.json({ user: req.user })
+  }),
+)
+
+/** POST /api/auth/change-password — change the current user's password. */
+app.post(
+  '/api/auth/change-password',
+  limitMutations,
+  wrap(async (req, res) => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Authentication required' })
+      return
+    }
+    const { currentPassword, newPassword } = req.body ?? {}
+    await users.changePassword(req.user.id, currentPassword, newPassword)
+    await sessions.destroyUserSessions(req.user.id)
+    res.json({ ok: true, message: 'Password changed. Please sign in again.' })
+  }),
+)
+
+/** POST /api/auth/request-password-reset — generate a password reset token (AV-104). */
+app.post(
+  '/api/auth/request-password-reset',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { email } = req.body ?? {}
+    const result = await users.requestPasswordReset(email)
+    // In production, deliver result.token via email. Here we return it so
+    // installations can wire up their own email transport.
+    res.json(result)
+  }),
+)
+
+/** POST /api/auth/reset-password — reset password using a reset token (AV-104). */
+app.post(
+  '/api/auth/reset-password',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { token, newPassword } = req.body ?? {}
+    await users.resetPassword(token, newPassword)
+    res.json({ ok: true })
+  }),
+)
+
+/** POST /api/auth/verify-email — verify email using a verification token (AV-103). */
+app.post(
+  '/api/auth/verify-email',
+  limitMutations,
+  wrap(async (req, res) => {
+    const { token } = req.body ?? {}
+    await users.verifyEmail(token)
+    res.json({ ok: true })
+  }),
+)
+
+/** GET /api/auth/users — list all users (admin only). */
+app.get(
+  '/api/auth/users',
+  wrap(async (req, res) => {
+    if (!req.user || req.user.role !== 'admin') {
+      res.status(403).json({ error: 'Admin access required' })
+      return
+    }
+    res.json({ users: users.listUsers() })
+  }),
+)
+
+/** PUT /api/auth/users/:id — update a user profile (self or admin). */
+app.put(
+  '/api/auth/users/:id',
+  limitMutations,
+  wrap(async (req, res) => {
+    const targetId = Number(req.params.id)
+    if (!req.user || (req.user.id !== targetId && req.user.role !== 'admin')) {
+      res.status(403).json({ error: 'Forbidden' })
+      return
+    }
+    const updated = await users.updateUser(targetId, req.body ?? {})
+    res.json({ user: updated })
+  }),
+)
+
+/** DELETE /api/auth/users/:id — delete a user account (self or admin). */
+app.delete(
+  '/api/auth/users/:id',
+  limitMutations,
+  wrap(async (req, res) => {
+    const targetId = Number(req.params.id)
+    if (!req.user || (req.user.id !== targetId && req.user.role !== 'admin')) {
+      res.status(403).json({ error: 'Forbidden' })
+      return
+    }
+    await users.deleteUser(targetId)
+    res.clearCookie('session-token', { path: '/' })
+    res.json({ ok: true })
+  }),
+)
+
+/** GET /api/auth/sessions — list active sessions for the current user (AV-119). */
+app.get(
+  '/api/auth/sessions',
+  wrap(async (req, res) => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Authentication required' })
+      return
+    }
+    const userSessions = await sessions.listUserSessions(req.user.id)
+    res.json({ sessions: userSessions })
+  }),
+)
+
+/** DELETE /api/auth/sessions/:token — destroy a specific session (AV-119). */
+app.delete(
+  '/api/auth/sessions/:token',
+  limitMutations,
+  wrap(async (req, res) => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Authentication required' })
+      return
+    }
+    await sessions.destroySession(req.params.token)
+    res.json({ ok: true })
   }),
 )
 
@@ -1456,6 +1698,6 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     if (shuttingDownServer) return
     shuttingDownServer = true
-    void Promise.allSettled([downloads.shutdown(), store.flush(), listStore.flush()]).finally(() => process.exit(0))
+    void Promise.allSettled([downloads.shutdown(), store.flush(), listStore.flush(), users.flush(), sessions.flush()]).finally(() => process.exit(0))
   })
 }

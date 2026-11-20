@@ -34,6 +34,9 @@ const DEFAULTS = {
   maxConcurrentDownloads: defaultConcurrency(),
   preferLocalPlayback: true,
   allowedExternalHosts: [],
+  allowRegistration: true,
+  requireEmailVerification: false,
+  sessionTimeoutMs: 30 * 24 * 60 * 60 * 1000,
   updatedAt: 0,
 }
 
@@ -106,6 +109,9 @@ export function get() {
     preferLocalPlayback: state.preferLocalPlayback,
     allowedExternalHosts: [...state.allowedExternalHosts],
     envExternalHostsConfigured: Boolean(String(process.env.ALLOWED_SOURCE_HOSTS ?? '').trim()),
+    allowRegistration: state.allowRegistration,
+    requireEmailVerification: state.requireEmailVerification,
+    sessionTimeoutMs: state.sessionTimeoutMs,
     updatedAt: state.updatedAt,
   }
 }
@@ -166,6 +172,22 @@ export async function save(patch = {}) {
 
   if (patch.allowedExternalHosts !== undefined) {
     next.allowedExternalHosts = normalizeHostPatternList(patch.allowedExternalHosts)
+  }
+
+  if (patch.allowRegistration !== undefined) {
+    next.allowRegistration = Boolean(patch.allowRegistration)
+  }
+
+  if (patch.requireEmailVerification !== undefined) {
+    next.requireEmailVerification = Boolean(patch.requireEmailVerification)
+  }
+
+  if (patch.sessionTimeoutMs !== undefined) {
+    const raw = Number(patch.sessionTimeoutMs)
+    if (!Number.isFinite(raw) || raw < 60_000) {
+      throw Object.assign(new Error('Session timeout must be at least 60000 ms'), { status: 400 })
+    }
+    next.sessionTimeoutMs = Math.floor(raw)
   }
 
   const nextResolved = computeResolvedLibraryDir(next.libraryDir)
