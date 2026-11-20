@@ -281,6 +281,12 @@ Turn the current detail modal into a complete information hub.
 
 Move from a single shared installation toward optional individual identities.
 
+**Note (2026-11-19):** Items AV-101 through AV-125 require a foundational
+authentication system (user model, password hashing, session management,
+email delivery, etc.) that does not yet exist in the codebase. These are
+documented here for future work but are not feasible as incremental
+improvements without first building auth infrastructure.
+
 - [ ] **AV-101** — Add optional account registration for multi-user installations.
 - [ ] **AV-102** — Add secure sign-in and sign-out flows.
 - [ ] **AV-103** — Add email verification for installations that enable email accounts.
