@@ -32,6 +32,8 @@ export const StudioPage = lazyWithPrefetch(() => import('../pages/Studios').then
 export const IndexPage = lazyWithPrefetch(() => import('../pages/IndexPage'))
 export const DiscoverPage = lazyWithPrefetch(() => import('../pages/Discover'))
 export const AnimeDetailPage = lazyWithPrefetch(() => import('../pages/AnimeDetail'))
+export const LoginPage = lazyWithPrefetch(() => import('../pages/Login'))
+export const RegisterPage = lazyWithPrefetch(() => import('../pages/Register'))
 
 const PREFETCHERS: Record<string, (() => Promise<unknown>)[]> = {
   '/': [HomePage.prefetch],
@@ -46,6 +48,8 @@ const PREFETCHERS: Record<string, (() => Promise<unknown>)[]> = {
   '/index': [IndexPage.prefetch],
   '/discover': [DiscoverPage.prefetch],
   '/anime': [AnimeDetailPage.prefetch],
+  '/login': [LoginPage.prefetch],
+  '/register': [RegisterPage.prefetch],
 }
 
 const prefetched = new Set<string>()

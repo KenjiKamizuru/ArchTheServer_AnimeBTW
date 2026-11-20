@@ -495,3 +495,86 @@ export interface ImdbSearchItem {
   stars: string | null
   previewUrl: string | null
 }
+
+// ── Authentication types (AV-101 through AV-125) ────────────────────────
+
+export interface User {
+  id: number
+  username: string
+  displayName: string | null
+  email: string | null
+  avatarUrl: string | null
+  bio: string
+  role: string
+  locale: string | null
+  preferredSubtitleLanguage: string | null
+  preferredAudioLanguage: string | null
+  defaultPlaybackQuality: string | null
+  contentRatingPreference: string | null
+  theme: string | null
+  privacy: string
+  twoFactorEnabled: boolean
+  pinSet: boolean
+  isGuest: boolean
+  loginNotifications: boolean
+  emailVerified: boolean
+  emailVerifiedAt: number | null
+  recoveryCodesRemaining: number
+  featureFlags: Record<string, unknown>
+  createdAt: number
+  updatedAt: number
+  lastLoginAt: number | null
+}
+
+export interface AuthSession {
+  token: string
+  expiresAt: number
+}
+
+export interface RegisterPayload {
+  username: string
+  email?: string
+  password: string
+}
+
+export interface LoginPayload {
+  username: string
+  password: string
+}
+
+export interface AuthResponse {
+  user: User
+  session?: AuthSession
+  message?: string
+  requiresEmailVerification?: boolean
+}
+
+export interface ChangePasswordPayload {
+  currentPassword: string
+  newPassword: string
+}
+
+export interface ResetPasswordPayload {
+  token: string
+  newPassword: string
+}
+
+export interface RequestPasswordResetPayload {
+  email: string
+}
+
+export interface VerifyEmailPayload {
+  token: string
+}
+
+export interface SetupTOTPResponse {
+  secret: string
+  recoveryCodes: string[]
+}
+
+export interface Passkey {
+  credentialId: string
+  label: string
+  createdAt: number
+  counter: number
+}

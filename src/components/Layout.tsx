@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { prefetchProps } from '../lib/routePrefetch'
 import { api, type SearchSuggestion } from '../lib/api'
+import { useAuth } from '../lib/auth'
 import {
   Bookmark,
   Building2,
@@ -12,10 +13,12 @@ import {
   ImagePlus,
   LayoutGrid,
   LibraryBig,
+  LogOut,
   Play,
   Search,
   Settings2,
   Sparkles,
+  User,
 } from 'lucide-react'
 import { artworkForTarget, focusObjectClass, useArtwork } from '../lib/artwork'
 import { useDownloads, useLibrary } from '../lib/downloads'
@@ -68,6 +71,7 @@ function Brand() {
 export default function Layout() {
   const navigate = useNavigate()
   const location = useLocation()
+  const { user, logout, loading: authLoading } = useAuth()
   const [term, setTerm] = useState('')
   const [hints, setHints] = useState<SearchSuggestion[]>([])
   const [hintIndex, setHintIndex] = useState(-1)
@@ -224,17 +228,47 @@ export default function Layout() {
         </nav>
 
         <div className="mt-auto space-y-2">
-          <NavLink
-            to="/settings"
-            className={({ isActive }) =>
-              `flex items-center gap-2 rounded-lg px-3 py-2 text-xs transition ${
-                isActive ? 'bg-white/5 text-accent' : 'text-white/45 hover:bg-white/5 hover:text-white'
-              }`
-            }
-          >
-            <Settings2 size={15} />
-            Settings
-          </NavLink>
+          {authLoading ? null : (
+            <>
+              <NavLink
+                to="/settings"
+                className={({ isActive }) =>
+                  `flex items-center gap-2 rounded-lg px-3 py-2 text-xs transition ${
+                    isActive ? 'bg-white/5 text-accent' : 'text-white/45 hover:bg-white/5 hover:text-white'
+                  }`
+                }
+              >
+                <Settings2 size={15} />
+                Settings
+              </NavLink>
+              {user ? (
+                <div className="flex items-center gap-2 rounded-lg bg-white/5 px-3 py-2 ring-1 ring-white/10">
+                  <div className="h-6 w-6 rounded-full bg-accent flex-shrink-0">
+                    <User size={14} className="text-black" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-white truncate">{user.username}</p>
+                    <p className="text-[10px] text-white/50 truncate">{user.email ?? 'No email'}</p>
+                  </div>
+                  <button
+                    onClick={logout}
+                    className="rounded-md p-1.5 text-white/50 hover:bg-white/10 hover:text-white transition"
+                    aria-label="Sign out"
+                  >
+                    <LogOut size={12} />
+                  </button>
+                </div>
+              ) : (
+                <Link
+                  to="/login"
+                  className="flex items-center gap-2 rounded-lg bg-accent px-3 py-2 text-xs font-medium text-black shadow-lg shadow-accent/30 transition hover:bg-accent/90"
+                >
+                  <User size={14} />
+                  Sign in
+                </Link>
+              )}
+            </>
+          )}
           <div className="rounded-xl bg-ink-850 p-3 ring-1 ring-white/5">
             <p className="text-[11px] leading-relaxed text-white/40">
               Downloaded episodes play directly from the{' '}
@@ -314,6 +348,23 @@ export default function Layout() {
             >
               <Settings2 size={17} />
             </NavLink>
+
+            {authLoading ? null : user ? (
+              <button
+                onClick={logout}
+                className="shrink-0 rounded-lg bg-ink-850 p-2 text-white/60 ring-1 ring-white/10 transition hover:text-white hover:bg-white/5"
+                aria-label="Sign out"
+              >
+                <LogOut size={17} />
+              </button>
+            ) : (
+              <Link
+                to="/login"
+                className="shrink-0 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-black shadow-lg shadow-accent/30 transition hover:bg-accent/90"
+              >
+                Sign in
+              </Link>
+            )}
           </div>
         </header>
 

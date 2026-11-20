@@ -5,6 +5,7 @@ import Layout from './components/Layout'
 import { DetailProvider } from './components/MediaModal'
 import { PlayerProvider } from './components/Player'
 import { ToastProvider } from './components/Toasts'
+import { AuthProvider, useAuth } from './lib/auth'
 import {
   AnimeDetailPage,
   BookmarksPage,
@@ -14,6 +15,8 @@ import {
   DownloadsPage,
   HomePage,
   IndexPage,
+  LoginPage,
+  RegisterPage,
   SchedulePage,
   SearchPage,
   SettingsPage,
@@ -43,26 +46,51 @@ export default function App() {
     <ToastProvider>
       <PlayerProvider>
         <DetailProvider>
-          <Routes>
-            <Route element={<Layout />}>
-              <Route index element={<LazyPage><HomePage /></LazyPage>} />
-              <Route path="browse" element={<LazyPage><BrowsePage /></LazyPage>} />
-              <Route path="anime/:id" element={<LazyPage><AnimeDetailPage /></LazyPage>} />
-              <Route path="discover" element={<LazyPage><DiscoverPage /></LazyPage>} />
-              <Route path="schedule" element={<LazyPage><SchedulePage /></LazyPage>} />
-              <Route path="studios" element={<LazyPage><StudiosPage /></LazyPage>} />
-              <Route path="studios/:id" element={<LazyPage><StudioPage /></LazyPage>} />
-              <Route path="index" element={<LazyPage><IndexPage /></LazyPage>} />
-              <Route path="search" element={<LazyPage><SearchPage /></LazyPage>} />
-              <Route path="downloads" element={<LazyPage><DownloadsPage /></LazyPage>} />
-              <Route path="downloaded" element={<LazyPage><DownloadedPage /></LazyPage>} />
-              <Route path="bookmarks" element={<LazyPage><BookmarksPage /></LazyPage>} />
-              <Route path="settings" element={<LazyPage><SettingsPage /></LazyPage>} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Route>
-          </Routes>
+          <AuthProvider>
+            <Routes>
+              <Route path="/login" element={<LazyPage><LoginPage /></LazyPage>} />
+              <Route path="/register" element={<LazyPage><RegisterPage /></LazyPage>} />
+              <Route
+                element={
+                  <RequireAuth>
+                    <Layout />
+                  </RequireAuth>
+                }
+              >
+                <Route index element={<LazyPage><HomePage /></LazyPage>} />
+                <Route path="browse" element={<LazyPage><BrowsePage /></LazyPage>} />
+                <Route path="anime/:id" element={<LazyPage><AnimeDetailPage /></LazyPage>} />
+                <Route path="discover" element={<LazyPage><DiscoverPage /></LazyPage>} />
+                <Route path="schedule" element={<LazyPage><SchedulePage /></LazyPage>} />
+                <Route path="studios" element={<LazyPage><StudiosPage /></LazyPage>} />
+                <Route path="studios/:id" element={<LazyPage><StudioPage /></LazyPage>} />
+                <Route path="index" element={<LazyPage><IndexPage /></LazyPage>} />
+                <Route path="search" element={<LazyPage><SearchPage /></LazyPage>} />
+                <Route path="downloads" element={<LazyPage><DownloadsPage /></LazyPage>} />
+                <Route path="downloaded" element={<LazyPage><DownloadedPage /></LazyPage>} />
+                <Route path="bookmarks" element={<LazyPage><BookmarksPage /></LazyPage>} />
+                <Route path="settings" element={<LazyPage><SettingsPage /></LazyPage>} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Route>
+            </Routes>
+          </AuthProvider>
         </DetailProvider>
       </PlayerProvider>
     </ToastProvider>
   )
+}
+
+function RequireAuth({ children }: { children: ReactNode }) {
+  const { user, loading } = useAuth()
+  if (loading) {
+    return (
+      <div className="grid min-h-64 place-items-center text-sm text-white/40">
+        Loading…
+      </div>
+    )
+  }
+  if (!user) {
+    return <Navigate to="/login" replace />
+  }
+  return <>{children}</>
 }

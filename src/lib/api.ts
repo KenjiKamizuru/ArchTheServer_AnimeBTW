@@ -4,10 +4,13 @@ import type {
   ArtworkSlot,
   ArtworkSnapshot,
   ArtworkTargetType,
+  AuthResponse,
+  AuthSession,
   Bookmark,
   BulkDownloadAction,
   BulkEnqueuePayload,
   BulkEnqueueResult,
+  ChangePasswordPayload,
   ClaimedArtworkRecord,
   DownloadJob,
   DownloadsSnapshot,
@@ -17,14 +20,22 @@ import type {
   ImdbTitleResult,
   LibraryItem,
   LibraryResponse,
+  LoginPayload,
   Media,
   MediaDetail,
+  Passkey,
   ProviderEpisodesResult,
   ProviderMatch,
   ProviderSearchResult,
+  RegisterPayload,
+  RequestPasswordResetPayload,
+  ResetPasswordPayload,
   ResolverStatus,
+  SetupTOTPResponse,
   UploadSessionInfo,
   UploadSessionSpec,
+  User,
+  VerifyEmailPayload,
   WatchResult,
   AnimeNote,
 } from '../types'
@@ -680,5 +691,122 @@ export const api = {
       'DELETE',
       payload,
     )
+  },
+
+  // ── Authentication (AV-101 through AV-125) ─────────────────────────────
+
+  authRegister(payload: RegisterPayload) {
+    return send<AuthResponse>('/api/auth/register', 'POST', payload)
+  },
+
+  authLogin(payload: LoginPayload) {
+    return send<AuthResponse>('/api/auth/login', 'POST', payload)
+  },
+
+  authLogout() {
+    return send<{ ok: boolean }>('/api/auth/logout', 'POST')
+  },
+
+  authMe() {
+    return get<User>('/api/auth/me', false)
+  },
+
+  authChangePassword(payload: ChangePasswordPayload) {
+    return send<{ ok: boolean; message: string }>('/api/auth/change-password', 'POST', payload)
+  },
+
+  authRequestPasswordReset(payload: RequestPasswordResetPayload) {
+    return send<{ token: string }>('/api/auth/request-password-reset', 'POST', payload)
+  },
+
+  authResetPassword(payload: ResetPasswordPayload) {
+    return send<{ ok: boolean }>('/api/auth/reset-password', 'POST', payload)
+  },
+
+  authVerifyEmail(payload: VerifyEmailPayload) {
+    return send<{ ok: boolean }>('/api/auth/verify-email', 'POST', payload)
+  },
+
+  authUsers() {
+    return get<{ users: User[] }>('/api/auth/users', false)
+  },
+
+  authUpdateUser(id: number, patch: Partial<User>) {
+    return send<{ user: User }>(`/api/auth/users/${id}`, 'PUT', patch)
+  },
+
+  authDeleteUser(id: number) {
+    return send<{ ok: boolean }>(`/api/auth/users/${id}`, 'DELETE')
+  },
+
+  authSessions() {
+    return get<{ sessions: { id: string; createdAt: number; lastUsedAt: number; expiresAt: number }[] }>(
+      '/api/auth/sessions',
+      false,
+    )
+  },
+
+  authDestroySession(token: string) {
+    return send<{ ok: boolean }>(`/api/auth/sessions/${encodeURIComponent(token)}`, 'DELETE')
+  },
+
+  authSetupTOTP() {
+    return send<SetupTOTPResponse>('/api/auth/totp/setup', 'POST')
+  },
+
+  authEnableTOTP(token: string) {
+    return send<{ ok: boolean }>('/api/auth/totp/enable', 'POST', { token })
+  },
+
+  authDisableTOTP(password: string) {
+    return send<{ ok: boolean }>('/api/auth/totp/disable', 'POST', { password })
+  },
+
+  authVerifyTOTP(token: string) {
+    return send<{ ok: boolean; recoveryCodeUsed: boolean }>('/api/auth/totp/verify', 'POST', { token })
+  },
+
+  authAddPasskey(credentialId: string, publicKey: string, counter?: number, label?: string) {
+    return send<{ ok: true }>('/api/auth/passkeys/add', 'POST', { credentialId, publicKey, counter, label })
+  },
+
+  authRemovePasskey(credentialId: string) {
+    return send<{ ok: boolean }>(`/api/auth/passkeys/${encodeURIComponent(credentialId)}`, 'DELETE')
+  },
+
+  authListPasskeys() {
+    return get<{ passkeys: Passkey[] }>('/api/auth/passkeys', false)
+  },
+
+  authActivity(limit = 50) {
+    return get<{ activity: { action: string; at: number }[] }>(`/api/auth/activity?limit=${limit}`, false)
+  },
+
+  authSetPin(password: string, pin: string) {
+    return send<{ ok: boolean }>('/api/auth/pin', 'POST', { password, pin })
+  },
+
+  authVerifyPin(pin: string) {
+    return send<{ ok: boolean }>('/api/auth/pin/verify', 'POST', { pin })
+  },
+
+  authRemovePin(password: string) {
+    return send<{ ok: boolean }>('/api/auth/pin', 'DELETE', { password })
+  },
+
+  authCreateGuest(displayName?: string) {
+    return send<{ user: User }>('/api/auth/guests', 'POST', { displayName })
+  },
+
+  authSwitchProfile(targetUserId: number) {
+    return send<{ user: User }>('/api/auth/switch-profile', 'POST', { targetUserId })
+  },
+
+  authGetFeatureFlags() {
+    return get<{ featureFlags: Record<string, unknown> }>('/api/auth/feature-flags', false)
+  },
+
+  authSetFeatureFlags(flags: Record<string, unknown>) {
+    return send<{ featureFlags: Record<string, unknown> }>('/api/auth/feature-flags', 'PUT', flags)
   },
 }
