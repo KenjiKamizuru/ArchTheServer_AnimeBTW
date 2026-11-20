@@ -440,6 +440,10 @@ export const api = {
     return get<{ id: number; name: string; nativeName: string | null; image: string | null; siteUrl: string | null; description: string | null; gender: string | null; dateOfBirth: { year: number | null; month: number | null; day: number | null } | null; age: number | null; bloodType: string | null; isFavourite: boolean; media: { role: string; id: number; title: { romaji: string | null; english: string | null; native: string | null }; format: string | null; status: string | null; seasonYear: number | null; season: string | null; cover: string | null }[]; voiceActors: { id: number; name: string; nativeName: string | null; image: string | null; language: string | null; siteUrl: string | null }[] }>(`/api/character/${id}`, false)
   },
 
+  staff(id: number) {
+    return get<{ id: number; name: string; nativeName: string | null; image: string | null; siteUrl: string | null; description: string | null; gender: string | null; dateOfBirth: { year: number | null; month: number | null; day: number | null } | null; age: number | null; bloodType: string | null; isFavourite: boolean; primaryOccupations: string[]; language: string | null; media: { role: string; id: number; title: { romaji: string | null; english: string | null; native: string | null }; format: string | null; status: string | null; seasonYear: number | null; season: string | null; cover: string | null }[] }>(`/api/staff/${id}`, false)
+  },
+
   animeNotes(id: number) {
     return get<AnimeNote>(`/api/anime/${id}/notes`, false)
   },

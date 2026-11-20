@@ -9,6 +9,7 @@ import {
   AnimeDetailPage,
   BookmarksPage,
   CharacterDetailPage,
+  StaffDetailPage,
   BrowsePage,
   DiscoverPage,
   DownloadedPage,
@@ -52,6 +53,7 @@ export default function App() {
               <Route path="browse" element={<LazyPage><BrowsePage /></LazyPage>} />
               <Route path="anime/:id" element={<LazyPage><AnimeDetailPage /></LazyPage>} />
               <Route path="character/:id" element={<LazyPage><CharacterDetailPage /></LazyPage>} />
+              <Route path="staff/:id" element={<LazyPage><StaffDetailPage /></LazyPage>} />
               <Route path="discover" element={<LazyPage><DiscoverPage /></LazyPage>} />
               <Route path="compare" element={<LazyPage><SeasonComparePage /></LazyPage>} />
               <Route path="calendar" element={<LazyPage><SeasonCalendarPage /></LazyPage>} />

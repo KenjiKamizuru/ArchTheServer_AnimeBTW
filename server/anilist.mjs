@@ -81,6 +81,8 @@ const MEDIA_FIELDS = `
       node {
         id
         name { full native }
+        image { large }
+        siteUrl
         primaryOccupations
       }
     }
@@ -383,7 +385,9 @@ export function normalize(media) {
       role: edge?.role ?? null,
       id: edge?.node?.id ?? null,
       name: edge?.node?.name?.full ?? null,
-      native: edge?.node?.name?.native ?? null,
+      nativeName: edge?.node?.name?.native ?? null,
+      image: edge?.node?.image?.large ?? null,
+      siteUrl: edge?.node?.siteUrl ?? null,
       primaryOccupations: edge?.node?.primaryOccupations ?? [],
     })),
     organizations: studioNodes.map((studio) => ({
@@ -1403,6 +1407,82 @@ export async function getCharacter(id) {
           image: v.image?.large ?? null,
           language: v.language ?? null,
           siteUrl: v.siteUrl ?? null,
+        }))
+      : [],
+  }
+}
+
+/** Staff detail query — used for staff detail pages (AV-086). */
+export const STAFF_QUERY = `query ($id: Int) {
+  Staff(id: $id) {
+    id
+    name { full native }
+    image { large medium }
+    siteUrl
+    description
+    gender
+    dateOfBirth { year month day }
+    age
+    bloodType
+    isFavourite
+    primaryOccupations
+    languageV2
+    staffMedia {
+      edges {
+        role
+        node {
+          id
+          title { romaji english native }
+          format
+          status
+          seasonYear
+          season
+          coverImage { large }
+        }
+      }
+    }
+  }
+`
+
+/**
+ * Fetches a single staff member by AniList ID, normalizing the payload into
+ * the client-side StaffEntry shape. Returns null when the staff member does
+ * not exist.
+ */
+export async function getStaff(id) {
+  const numeric = Number(id)
+  if (!Number.isInteger(numeric) || numeric <= 0) {
+    throw Object.assign(new Error('Invalid staff id'), { status: 400 })
+  }
+  const data = await gql(STAFF_QUERY, { id: numeric })
+  const raw = data.Staff ?? null
+  if (!raw) return null
+  return {
+    id: raw.id ?? null,
+    name: raw.name?.full ?? null,
+    nativeName: raw.name?.native ?? null,
+    image: raw.image?.large ?? null,
+    siteUrl: raw.siteUrl ?? null,
+    description: raw.description ?? null,
+    gender: raw.gender ?? null,
+    dateOfBirth: raw.dateOfBirth ?? null,
+    age: raw.age ?? null,
+    bloodType: raw.bloodType ?? null,
+    isFavourite: Boolean(raw.isFavourite),
+    primaryOccupations: Array.isArray(raw.primaryOccupations)
+      ? raw.primaryOccupations
+      : [],
+    language: raw.languageV2 ?? null,
+    media: Array.isArray(raw.staffMedia?.edges)
+      ? raw.staffMedia.edges.map((e) => ({
+          role: e.role ?? null,
+          id: e.node?.id ?? null,
+          title: e.node?.title ?? null,
+          format: e.node?.format ?? null,
+          status: e.node?.status ?? null,
+          seasonYear: e.node?.seasonYear ?? null,
+          season: e.node?.season ?? null,
+          cover: e.node?.coverImage?.large ?? null,
         }))
       : [],
   }

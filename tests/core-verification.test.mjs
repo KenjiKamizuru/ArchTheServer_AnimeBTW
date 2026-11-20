@@ -1348,6 +1348,8 @@ test('normalize extracts staff from media payload', () => {
           node: {
             id: 42,
             name: { full: 'Director X', native: 'ディレクターX' },
+            image: { large: 'https://example.com/director.jpg' },
+            siteUrl: 'https://anilist.co/staff/42',
             primaryOccupations: ['DIRECTOR'],
           },
         },
@@ -1356,6 +1358,8 @@ test('normalize extracts staff from media payload', () => {
           node: {
             id: 43,
             name: { full: 'Writer Y', native: 'ライターY' },
+            image: { large: 'https://example.com/writer.jpg' },
+            siteUrl: 'https://anilist.co/staff/43',
             primaryOccupations: ['WRITER'],
           },
         },
@@ -1363,10 +1367,14 @@ test('normalize extracts staff from media payload', () => {
     },
   })
   assert.equal(normalized.staff.length, 2)
+  assert.equal(normalized.staff[0].id, 42)
   assert.equal(normalized.staff[0].name, 'Director X')
-  assert.equal(normalized.staff[0].native, 'ディレクターX')
+  assert.equal(normalized.staff[0].nativeName, 'ディレクターX')
+  assert.equal(normalized.staff[0].image, 'https://example.com/director.jpg')
+  assert.equal(normalized.staff[0].siteUrl, 'https://anilist.co/staff/42')
   assert.equal(normalized.staff[0].role, 'Director')
   assert.deepEqual(normalized.staff[0].primaryOccupations, ['DIRECTOR'])
+  assert.equal(normalized.staff[1].id, 43)
   assert.equal(normalized.staff[1].name, 'Writer Y')
 })
 
@@ -1764,4 +1772,24 @@ test('getCharacter rejects invalid ids', async () => {
   await assert.rejects(() => anilist.getCharacter(0), /Invalid character id/)
   await assert.rejects(() => anilist.getCharacter(-1), /Invalid character id/)
   await assert.rejects(() => anilist.getCharacter('abc'), /Invalid character id/)
+})
+
+/* ------------------------------ AV-086 ---------------------------------- */
+
+test('Staff detail query includes expected fields', () => {
+  const STAFF_QUERY = anilist.STAFF_QUERY
+  assert.ok(typeof STAFF_QUERY === 'string')
+  assert.ok(STAFF_QUERY.includes('id'), 'staff query should request id')
+  assert.ok(STAFF_QUERY.includes('name { full native }'), 'staff query should request name')
+  assert.ok(STAFF_QUERY.includes('image { large'), 'staff query should request image')
+  assert.ok(STAFF_QUERY.includes('siteUrl'), 'staff query should request siteUrl')
+  assert.ok(STAFF_QUERY.includes('description'), 'staff query should request description')
+  assert.ok(STAFF_QUERY.includes('primaryOccupations'), 'staff query should request occupations')
+  assert.ok(STAFF_QUERY.includes('staffMedia'), 'staff query should request staff media')
+})
+
+test('getStaff rejects invalid ids', async () => {
+  await assert.rejects(() => anilist.getStaff(0), /Invalid staff id/)
+  await assert.rejects(() => anilist.getStaff(-1), /Invalid staff id/)
+  await assert.rejects(() => anilist.getStaff('abc'), /Invalid staff id/)
 })

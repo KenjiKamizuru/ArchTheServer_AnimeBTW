@@ -867,7 +867,9 @@ export default function AnimeDetailPage() {
                       </span>
                     )}
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[11px] text-white/80">{member.name}</span>
+                      <Link to={`/staff/${member.id}`} className="block truncate text-[11px] text-white/80 transition hover:text-accent">
+                        {member.name}
+                      </Link>
                       <span className="block truncate text-[10px] text-white/30">{member.role ?? member.occupations.join(', ')}</span>
                     </span>
                   </li>

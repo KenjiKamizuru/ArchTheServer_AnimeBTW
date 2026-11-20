@@ -789,6 +789,19 @@ app.get(
   }),
 )
 
+// Staff detail page data (AV-086).
+app.get(
+  '/api/staff/:id',
+  wrap(async (req, res) => {
+    const staff = await anilist.getStaff(req.params.id)
+    if (!staff) {
+      res.status(404).json({ error: 'Staff not found' })
+      return
+    }
+    res.json(staff)
+  }),
+)
+
 // Metadata correction suggestions (AV-096), queued for review.
 app.post(
   '/api/anime/:id/report',
