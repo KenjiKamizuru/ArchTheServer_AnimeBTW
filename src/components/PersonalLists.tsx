@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { GripVertical } from 'lucide-react'
 import type { Media } from '../types'
 
-type ListSummary = { id: string; name: string; count: number; description?: string }
+type ListSummary = { id: string; name: string; count: number; description?: string; cover: string | null }
 type Entry = { mediaId: number; media: Media; status: string | null; note: string; priority: number | null; rating: number | null; position: number | null }
 type Overview = { statuses: ListSummary[]; lists: ListSummary[] }
 type List = ListSummary & { entries: Entry[]; custom: boolean }
@@ -46,6 +46,7 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
   const [pick, setPick] = useState<Entry | null>(null)
   const [dragSourceIndex, setDragSourceIndex] = useState<number | null>(null)
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
+  const [coverSelection, setCoverSelection] = useState<string | null>(null)
   useEffect(() => {
     let cancelled = false
     setList(null)
@@ -150,9 +151,62 @@ export default function PersonalLists({ bookmarks }: { bookmarks: Media[] }) {
         }} />
       </div>
       {list && <div className="mt-5">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="font-medium text-white">{list.name}</h3>
+        {/* List cover (AV-129) */}
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+          <div className="flex items-center gap-3">
+            {list.cover ? (
+              <img src={list.cover} alt={`${list.name} cover`} className="h-24 w-32 rounded-lg object-cover ring-1 ring-white/10" />
+            ) : (
+              <div className="h-24 w-32 rounded-lg bg-ink-850 flex items-center justify-center text-white/20">
+                <span className="text-[10px]">No cover</span>
+              </div>
+            )}
+            <div className="flex flex-col gap-1">
+              <h3 className="font-medium text-white">{list.name}</h3>
+              {list.description && <p className="text-[11px] text-white/50">{list.description}</p>}
+            </div>
+          </div>
           <div className="flex flex-wrap gap-2">
+            {list.custom && list.entries.length > 0 && (
+              <>
+                <label className="text-[10px] text-white/50">Cover:</label>
+                <select id="list-cover" className={input} value={coverSelection ?? list.cover ?? ''} onChange={(event) => {
+                  setCoverSelection(event.target.value || null)
+                }}>
+                  <option value="">Use first entry's cover</option>
+                  {list.entries.map((entry) => entry.media.cover ? (
+                    <option key={entry.mediaId} value={entry.media.cover}>
+                      {entry.media.title} cover
+                    </option>
+                  ) : null)}
+                </select>
+                <button type="button" className="rounded-lg bg-white/10 px-3 py-1 text-xs text-white hover:bg-white/20 disabled:opacity-50" disabled={busy || !coverSelection} onClick={async () => {
+                  setBusy(true)
+                  try {
+                    await request(`/api/lists/${encodeURIComponent(active)}/cover`, 'PUT', { cover: coverSelection })
+                    setRevision((value) => value + 1)
+                    setMessage('Cover updated')
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : 'Could not update cover')
+                  } finally {
+                    setBusy(false)
+                    setCoverSelection(null)
+                  }
+                }}>Set</button>
+                <button type="button" className="rounded-lg bg-white/10 px-3 py-1 text-xs text-white hover:bg-white/20 disabled={busy || !list.cover}" onClick={async () => {
+                  setBusy(true)
+                  try {
+                    await request(`/api/lists/${encodeURIComponent(active)}/cover`, 'PUT', { cover: null })
+                    setRevision((value) => value + 1)
+                    setMessage('Cover cleared')
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : 'Could not clear cover')
+                  } finally {
+                    setBusy(false)
+                  }
+                }}>Clear</button>
+              </>
+            )}
             <button type="button" className={button} disabled={busy || list.count === 0} onClick={() => {
               setBusy(true); setError('')
               void request<{ pick: Entry | null }>(`/api/lists/${encodeURIComponent(active)}/random`)

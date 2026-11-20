@@ -893,6 +893,11 @@ app.put('/api/lists/:id/order', limitMutations, wrap(async (req, res) => {
   markCatalogIndexDirty()
   res.json(result)
 }))
+app.put('/api/lists/:id/cover', limitMutations, wrap(async (req, res) => {
+  const result = await listStore.setCover(req.params.id, req.body?.cover)
+  markCatalogIndexDirty()
+  res.json(result)
+}))
 app.delete('/api/lists/:id/entries/:mediaId', limitMutations, wrap(async (req, res) => {
   const result = await listStore.remove(req.params.id, req.params.mediaId)
   markCatalogIndexDirty()

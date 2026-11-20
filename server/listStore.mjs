@@ -3,7 +3,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { atomicWriteFile } from './security.mjs'
+import { atomicWriteFile, sanitizeCoverUrl } from './security.mjs'
 import { sanitizeBookmarkMedia } from './store.mjs'
 import { parseListImport } from './listImport.mjs'
 
@@ -24,7 +24,7 @@ export async function init() {
     if (parsed.lists.length > MAX_LISTS || parsed.entries.length > MAX_ITEMS) throw new Error('List data exceeds limits')
     const ids = new Set()
     for (const list of parsed.lists) {
-      if (typeof list?.id !== 'string' || !/^l_[0-9a-f]{24}$/.test(list.id) || ids.has(list.id) || typeof list.name !== 'string' || !list.name.trim() || list.name.length > 80 || typeof list.description !== 'string' || list.description.length > 500) throw new Error('Invalid list metadata')
+      if (typeof list?.id !== 'string' || !/^l_[0-9a-f]{24}$/.test(list.id) || ids.has(list.id) || typeof list.name !== 'string' || !list.name.trim() || list.name.length > 80 || typeof list.description !== 'string' || list.description.length > 500 || (list.cover !== undefined && list.cover !== null && typeof list.cover !== 'string')) throw new Error('Invalid list metadata')
       ids.add(list.id)
     }
     const mediaIds = new Set()
@@ -87,9 +87,10 @@ export function summary() {
 export async function createList(body = {}) {
   const name = typeof body?.name === 'string' ? body.name.trim() : ''
   const description = typeof body?.description === 'string' ? body.description.trim() : ''
+  const cover = typeof body?.cover === 'string' ? sanitizeCoverUrl(body.cover) : null
   if (!name || name.length > 80 || description.length > 500) throw error('Name must be 1–80 characters and description at most 500 characters')
   if (state.lists.length >= MAX_LISTS) throw error('List limit reached', 429)
-  const list = { id: `l_${crypto.randomBytes(12).toString('hex')}`, name, description, createdAt: Date.now() }
+  const list = { id: `l_${crypto.randomBytes(12).toString('hex')}`, name, description, cover, createdAt: Date.now() }
   state.lists.push(list)
   await persist()
   return list
@@ -199,6 +200,20 @@ export async function setOrder(id, mediaIds) {
   }
   await persist()
   return { ordered: entries.length }
+}
+
+/**
+ * Sets the cover artwork URL for a custom list. Built-in lists cannot have a cover.
+ * Returns the sanitized cover URL (or null if cleared).
+ */
+export async function setCover(id, coverUrl) {
+  const list = info(id)
+  if (!list.custom) throw error('Built-in lists cannot have a cover', 400)
+  const sanitized = coverUrl == null ? null : sanitizeCoverUrl(coverUrl)
+  if (coverUrl !== null && coverUrl !== undefined && sanitized === null) throw error('Invalid cover URL', 400)
+  list.cover = sanitized
+  await persist()
+  return { cover: list.cover }
 }
 // Import into a new custom list. Existing titles keep their metadata and status;
 // imported notes/ratings belong only to the newly-created list.
