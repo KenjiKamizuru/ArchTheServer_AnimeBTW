@@ -652,3 +652,59 @@ test('AniList adapter extracts provider ids without leaking them into catalog re
   assert.equal(Object.hasOwn(record, 'externalIds'), false)
   assert.equal(catalog.createAnimeRecord({ id: 42 }).externalIds, undefined)
 })
+
+/* ------------------------------ AV-042 ---------------------------------- */
+
+test('seasonSummary aggregates scores, formats and genres', () => {
+  const summary = anilist.seasonSummary({
+    season: 'WINTER',
+    year: 2023,
+    total: 120,
+    media: [
+      { id: 1, title: 'A', score: 80, format: 'TV', genres: ['Action', 'Drama'] },
+      { id: 2, title: 'B', score: 60, format: 'TV', genres: ['Action'] },
+      { id: 3, title: 'C', score: null, format: 'MOVIE', genres: ['Drama'] },
+    ],
+  })
+  assert.equal(summary.season, 'WINTER')
+  assert.equal(summary.year, 2023)
+  assert.equal(summary.label, 'WINTER 2023')
+  assert.equal(summary.count, 120)
+  assert.equal(summary.returned, 3)
+  assert.equal(summary.averageScore, 70) // (80 + 60) / 2
+  assert.deepEqual(summary.topFormats, [['TV', 2], ['MOVIE', 1]])
+  assert.deepEqual(summary.topGenres, [['Action', 2], ['Drama', 2]])
+  assert.equal(summary.topTitles.length, 3)
+  assert.equal(summary.topTitles[0].id, 1)
+  assert.equal(summary.topTitles[0].score, 80)
+})
+
+test('seasonSummary handles empty media with no scores', () => {
+  const summary = anilist.seasonSummary({
+    season: 'SPRING',
+    year: 2024,
+    total: 0,
+    media: [],
+  })
+  assert.equal(summary.averageScore, null)
+  assert.deepEqual(summary.topFormats, [])
+  assert.deepEqual(summary.topGenres, [])
+  assert.deepEqual(summary.topTitles, [])
+})
+
+test('compareSeasons requires at least two seasons', async () => {
+  await assert.rejects(
+    anilist.compareSeasons([{ season: 'WINTER', year: 2023 }]),
+    (err) => err.message === 'Season comparison requires at least two seasons' && err.status === 400
+  )
+})
+
+test('compareSeasons requires at least two distinct seasons (dedup)', async () => {
+  await assert.rejects(
+    anilist.compareSeasons([
+      { season: 'WINTER', year: 2023 },
+      { season: 'WINTER', year: 2023 },
+    ]),
+    (err) => err.message === 'Season comparison requires at least two distinct seasons' && err.status === 400
+  )
+})

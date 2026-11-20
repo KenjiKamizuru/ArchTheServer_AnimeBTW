@@ -340,6 +340,21 @@ app.get(
   }),
 )
 
+// AV-042: seasonal comparison view — compare two or more seasons side by side.
+app.get(
+  '/api/seasons/compare',
+  wrap(async (req, res) => {
+    const seasons = []
+    const rawSeasons = Array.isArray(req.query.season) ? req.query.season : [req.query.season]
+    const rawYears = Array.isArray(req.query.year) ? req.query.year : [req.query.year]
+    for (let i = 0; i < rawSeasons.length; i += 1) {
+      seasons.push({ season: rawSeasons[i], year: rawYears[i] })
+    }
+    const comparison = await anilist.compareSeasons(seasons)
+    res.json(comparison)
+  }),
+)
+
 // Rich browse: server-side filtering that AniList cannot express is applied
 // locally, and the response carries shareable params for the current filters.
 app.get(

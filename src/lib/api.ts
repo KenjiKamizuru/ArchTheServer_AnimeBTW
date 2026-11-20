@@ -204,6 +204,26 @@ export interface SeasonResponse {
   media: Media[]
 }
 
+export interface SeasonComparison {
+  season: string
+  year: number
+  label: string
+  count: number
+  returned: number
+  averageScore: number | null
+  topFormats: [string, number][]
+  topGenres: [string, number][]
+  topTitles: { id: number; title: string; score: number | null; format: string | null }[]
+  media: Media[]
+}
+
+export interface SeasonComparisonResponse {
+  seasons: SeasonComparison[]
+  compared: number
+  sharedTitleIds: number[]
+  sharedCount: number
+}
+
 interface CacheEntry {
   at: number
   data: unknown
@@ -246,6 +266,16 @@ export const api = {
     if (params.page && params.page > 1) qs.set('page', String(params.page))
     const query = qs.toString()
     return get<SeasonResponse>(`/api/season${query ? `?${query}` : ''}`)
+  },
+
+  compareSeasons(seasons: Array<{ season?: string; year?: number }>) {
+    const qs = new URLSearchParams()
+    for (const { season, year } of seasons) {
+      if (season) qs.append('season', season)
+      if (year) qs.append('year', String(year))
+    }
+    const query = qs.toString()
+    return get<SeasonComparisonResponse>(`/api/seasons/compare${query ? `?${query}` : ''}`)
   },
 
   browse(filters: Record<string, string | number | boolean | undefined | null>) {

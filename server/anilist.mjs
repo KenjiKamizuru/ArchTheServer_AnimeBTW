@@ -364,6 +364,89 @@ export async function getSeason({ season, year, sort = 'popular', page = 1, perP
   })
 }
 
+/**
+ * Compares two or more seasons side by side. Fetches each season's media,
+ * normalizes them, and returns per-season summaries plus a combined view so a
+ * comparison UI can render them together. Requires at least two distinct
+ * (season, year) pairs; duplicate pairs are deduplicated.
+ */
+/**
+ * Pure per-season summary built from already-fetched media. Extracted so it can
+ * be tested without the network.
+ */
+export function seasonSummary({ season, year, total, media }) {
+  const scores = media.map((m) => m.score).filter((s) => s !== null)
+  const avgScore =
+    scores.length > 0 ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10 : null
+  const formats = {}
+  for (const m of media) {
+    const f = m.format ?? 'UNKNOWN'
+    formats[f] = (formats[f] ?? 0) + 1
+  }
+  const genres = {}
+  for (const m of media) {
+    for (const g of m.genres ?? []) {
+      genres[g] = (genres[g] ?? 0) + 1
+    }
+  }
+  const topTitles = media
+    .slice()
+    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0) || (b.popularity ?? 0) - (a.popularity ?? 0))
+    .slice(0, 5)
+    .map((m) => ({ id: m.id, title: m.title, score: m.score, format: m.format }))
+  return {
+    season,
+    year,
+    label: `${season} ${year}`,
+    count: total,
+    returned: media.length,
+    averageScore: avgScore,
+    topFormats: Object.entries(formats).sort((a, b) => b[1] - a[1]).slice(0, 5),
+    topGenres: Object.entries(genres).sort((a, b) => b[1] - a[1]).slice(0, 8),
+    topTitles,
+    media,
+  }
+}
+
+export async function compareSeasons(seasons) {
+  const pairs = Array.isArray(seasons) ? seasons : []
+  if (pairs.length < 2) {
+    throw Object.assign(new Error('Season comparison requires at least two seasons'), { status: 400 })
+  }
+
+  // Deduplicate and validate each (season, year) pair.
+  const seen = new Set()
+  const valid = []
+  for (const pair of pairs) {
+    const { season, year } = resolveSeason(pair.season, pair.year)
+    const key = `${season}:${year}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    valid.push({ season, year })
+  }
+  if (valid.length < 2) {
+    throw Object.assign(new Error('Season comparison requires at least two distinct seasons'), { status: 400 })
+  }
+
+  const results = []
+  for (const { season, year } of valid) {
+    const data = await getSeason({ season, year, sort: 'popular', page: 1, perPage: 50 })
+    results.push(seasonSummary({ season, year, total: data.total, media: data.media ?? [] }))
+  }
+
+  // Cross-season stats.
+  const allMedia = results.flatMap((r) => r.media)
+  const sharedTitleIds = allMedia
+    .map((m) => m.id)
+    .filter((id, idx, arr) => arr.indexOf(id) !== arr.lastIndexOf(id))
+  return {
+    seasons: results,
+    compared: valid.length,
+    sharedTitleIds: [...new Set(sharedTitleIds)],
+    sharedCount: sharedTitleIds.length,
+  }
+}
+
 /** Shows still releasing, sorted by their next broadcast (soonest first). */
 /**
  * Executes a browse query built by `browse.mjs` and applies the filters AniList

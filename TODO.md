@@ -207,7 +207,7 @@ Expand the existing season browser into a complete catalog exploration experienc
 - [x] **AV-039** — Add a random anime discovery button with filter awareness. (Browse "Surprise me" calls filter-aware /api/discover/random)
 - [x] **AV-040** — Add a daily discovery spotlight with a rotating catalog pick. (Browse "Daily pick" calls /api/discover/spotlight; daily rotation verified by tests/core-verification.test.mjs)
 - [x] **AV-041** — Add hidden-gem collections based on low popularity and strong ratings. (Browse "Hidden gems" calls /api/discover/hidden-gems (low popularity, strong rating))
-- [ ] **AV-042** — Add seasonal comparison view for two or more seasons.
+- [x] **AV-042** — Add seasonal comparison view for two or more seasons. (`GET /api/seasons/compare` accepts repeated `season=` and `year=` query params; `server/anilist.mjs`: `compareSeasons()` with dedup, per-season summaries via pure `seasonSummary()`, shared-title detection; frontend `src/pages/SeasonCompare.tsx` with season/year pickers, per-season stats cards, shared-title grid; route `/compare`; `src/lib/api.ts`: `compareSeasons()` client; `tests/core-verification.test.mjs`: seasonSummary aggregation + compareSeasons validation — 473 pass / 0 fail; `npm run verify` clean)
 - [ ] **AV-043** — Add a calendar-style seasonal release overview.
 - [ ] **AV-044** — Add a studio-focused release explorer.
 - [x] **AV-045** — Add a franchise-focused browse mode. (Discover page /api/franchises + explore.buildFranchiseGroups; tests/core-verification.test.mjs)
