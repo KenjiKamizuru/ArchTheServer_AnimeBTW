@@ -5,6 +5,7 @@ import {
   cachedImmutable,
   cachedAiring,
   flush,
+  recentFailures,
   snapshot,
 } from '../server/metadataCache.mjs'
 
@@ -137,6 +138,76 @@ test('fresh hit is returned when the loader throws', async () => {
   await cachedImmutable('err:2', async () => 'good', { now: clock.now })
   const result = await cachedImmutable('err:2', async () => { throw new Error('boom') }, { now: clock.now })
   assert.equal(result, 'good')
+})
+
+// ── Failure recording (AV-022) ─────────────────────────────────────────
+// Failures are diagnosed without erasing last-known-good values, and the
+// failure log is bounded so it cannot grow without limit.
+
+test('no failure is recorded when the loader succeeds', async () => {
+  await flush()
+  const clock = fakeClock(1_000_000_000_000)
+  const before = recentFailures().length
+  await cachedImmutable('ok:1', async () => 'value', { now: clock.now })
+  assert.equal(recentFailures().length, before)
+})
+
+test('failure is recorded and last-known-good value is preserved', async () => {
+  await flush()
+  const clock = fakeClock(1_000_000_000_000)
+  const before = recentFailures().length
+  await cachedImmutable('fail:1', async () => 'good', { now: clock.now })
+  clock.advance(61 * 60 * 1000) // stale
+  const result = await cachedImmutable('fail:1', async () => { throw new Error('boom') }, { now: clock.now })
+  assert.equal(result, 'good') // stale hit returned, not the error
+  const after = recentFailures()
+  assert.equal(after.length, before + 1)
+  const entry = after[after.length - 1]
+  assert.equal(entry.key, 'fail:1')
+  assert.equal(entry.tier, 'immutable')
+  assert.equal(entry.error, 'boom')
+  assert.equal(entry.at, clock.now())
+})
+
+test('failure is recorded and error propagates when there is no cached hit', async () => {
+  await flush()
+  const clock = fakeClock(1_000_000_000_000)
+  const before = recentFailures().length
+  await assert.rejects(
+    cachedImmutable('fail:2', async () => { throw new Error('kaboom') }, { now: clock.now }),
+    /kaboom/
+  )
+  const after = recentFailures()
+  assert.equal(after.length, before + 1)
+  assert.equal(after[after.length - 1].tier, 'immutable')
+  assert.equal(after[after.length - 1].error, 'kaboom')
+})
+
+test('airing failures are tagged with the airing tier', async () => {
+  await flush()
+  const clock = fakeClock(1_000_000_000_000)
+  const before = recentFailures().length
+  await assert.rejects(
+    cachedAiring('fail:air', async () => { throw new Error('air-boom') }, { now: clock.now }),
+    /air-boom/
+  )
+  const after = recentFailures()
+  assert.equal(after.length, before + 1)
+  assert.equal(after[after.length - 1].tier, 'airing')
+  assert.equal(after[after.length - 1].error, 'air-boom')
+})
+
+test('failure log is bounded and does not grow without limit', async () => {
+  const clock = fakeClock(1_000_000_000_000)
+  // MAX_FAILURES is 100; throw well over that and confirm the cap holds.
+  for (let i = 0; i < 150; i += 1) {
+    try {
+      await cachedImmutable(`bounded:${i}`, async () => { throw new Error(`err-${i}`) }, { now: clock.now })
+    } catch {
+      // expected
+    }
+  }
+  assert.equal(recentFailures().length, 100)
 })
 
 // ── flush / snapshot ──────────────────────────────────────────────────
