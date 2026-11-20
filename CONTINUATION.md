@@ -1,37 +1,35 @@
 # Continuation note — 2026-11-19
 
-**Status:** branch `arena/c8881487-archtheserver-animebtw`; work remains
-uncommitted. AV-008 through AV-015 are complete. Latest `npm run verify` passes
-364 tests across 14 files, typecheck and production build clean. TODO.md records
-83/800 checked, with 11 partial items still open. Live provider responses,
-ffmpeg, browser E2E, and real upload/download I/O remain unavailable.
+**Status:** branch `arena/c8881487-archtheserver-animebtw`; working tree clean
+except two new untracked files (not yet committed). AV-008 through AV-016 are
+complete. Latest `npm run verify`: 381 tests across 14 files, typecheck and
+production build clean. TODO.md records 84/800 checked, with 11 partial items
+still open. Live provider responses, ffmpeg, browser E2E, and real
+upload/download I/O remain unavailable.
 
-**Completed this turn: AV-015 — metadata schema versioning and migration support.**
+**Completed this turn: AV-016 — detect and merge duplicate anime records safely.**
 
-`server/catalog.mjs`:
-- Added `export const METADATA_SCHEMA_VERSION = 1`.
-- `createAnimeRecord` stamps `metadataSchemaVersion: METADATA_SCHEMA_VERSION` on every record.
-- New exported `migrateMetadataSchema(record)`: records at/above the current version are copied unchanged; missing/null/garbage versions are migrated. Migration adds a complete `fieldMetadata` entry for every `CATALOG_METADATA_FIELDS` field, infers missing `valueState`s from canonical values (via `normalizeFieldValueState`), backfills missing observation `valueState`s (via `backfillObservationValueState`), recomputes `conflict` when absent, bumps `metadataSchemaVersion`, and never mutates the input.
+New `server/duplicateDetection.mjs`:
+- `normalizeTitle`, `titleTokens`, `titleSimilarity`, `bestTitleSimilarity`: NFKC/case/whitespace/punctuation folding plus Jaccard token similarity across all title variants (title/romaji/english/native).
+- `findDuplicates(target, candidates, { externalIds, findId, threshold })`: flags a candidate as a duplicate when it shares an external identifier with the target (AniList/MAL/AniDB/IMDb via `server/identifiers.mjs` reverse lookup) or when best cross-variant title similarity meets `threshold` (default 0.8). Returns `{ id, similarity, reason }`; target never included.
+- `mergeRecords(primary, duplicate)`: produces a merged catalog record + `repoint: { [duplicate.id]: primary.id }`. Primary canonical values win; empty/unknown primary fields are filled from the duplicate; primary field-metadata provenance wins; observations merged and deduplicated by source+value. Inputs never mutated.
+- `mergeIdentifiers(primaryId, duplicateId)`: releases the duplicate's registry record first, then repoints its provider ids to the primary; best-effort, never throws.
+- The module never mutates stores directly — callers apply the repoint map to bookmark/list entries.
 
-`server/store.mjs`:
-- `sanitizeBookmarkMedia` now returns `migrateMetadataSchema(clean)`, so stored and imported bookmarks are upgraded to the current schema on load (covers store init, listStore init, and listImport).
+`tests/duplicateDetection.test.mjs`: covers normalization, similarity bounds, merging (incl. non-mutation, gap-fill, title-fallback/UNKNOWN handling, provenance, observation dedup), registry-backed detection, identifier repointing, and restart persistence. Sets `ANIMEVAULT_DATA` to a temp dir before importing server modules (mirrors identifiers.test.mjs).
 
-`src/types.ts`: `Media` gains `metadataSchemaVersion?: number`.
+**Honest gaps (not AV-016 scope, recorded for the next turn):**
+- The repoint map is not yet applied to `server/store.mjs` bookmarks or `server/listStore.mjs` entries — that's the store-integration follow-up.
+- `mergeIdentifiers` overwrites a primary's same-provider id with the duplicate's (e.g. primary anilist:60 + duplicate anilist:61 → anilist:61); callers should pick the primary whose identifiers they want to preserve.
 
-`tests/catalog.test.mjs`: added tests for version stamping on new records, idempotent copy of current records, schemaless upgrades, field/observation state backfilling, bad-version handling, and non-mutation. Also updated the canonical-fields assertion to exclude `metadataSchemaVersion`.
+**Next task:** AV-017 — Support manual corrections without overwriting source metadata (build on `fieldMetadata`: let a manual correction override display while retaining provider observations and the original source value).
 
-**Honest gaps (not AV-015 scope, recorded for the next turn):**
-- `migrateMetadataSchema` preserves an existing `conflict` flag when present rather than re-deriving it (full re-derivation would need the original selected source).
-- No UI surface consumes `metadataSchemaVersion` yet.
-
-**Next task:** AV-016 — Detect and merge duplicate anime records safely (candidate keys: normalized title, AniList/MAL/AniDB/IMDb identifiers in `server/identifiers.mjs`, plus a similarity threshold; merge strategy must keep bookmarks/lists intact).
-
-Earlier uncommitted work includes AV-002 through AV-015 and existing changes in
-`README.md`, `package.json`, `server/identifiers.mjs`, `server/index.mjs`,
-`server/browse.mjs`, `server/detail.mjs`, `src/lib/api.ts`,
-`src/pages/AnimeDetail.tsx`, `src/pages/Browse.tsx`, `src/pages/Search.tsx`,
-and related tests. AV-013/AV-014 changed `server/catalog.mjs`,
-`server/anilist.mjs`, `server/browse.mjs`, `server/detail.mjs`, `server/store.mjs`,
-`src/types.ts`, `tests/catalog.test.mjs`, `tests/anilist.test.mjs`,
-`tests/core-verification.test.mjs`, `tests/list-import.test.mjs`, `TODO.md`, and
-this handoff. `package-lock.json` is unchanged.
+Earlier committed work: AV-002 through AV-016. Related files touched across the series:
+`server/catalog.mjs`, `server/anilist.mjs`, `server/browse.mjs`, `server/detail.mjs`,
+`server/store.mjs`, `server/identifiers.mjs`, `server/duplicateDetection.mjs` (new),
+`src/types.ts`, `src/lib/api.ts`, `src/pages/AnimeDetail.tsx`, `src/pages/Browse.tsx`,
+`src/pages/Search.tsx`, `tests/catalog.test.mjs`, `tests/anilist.test.mjs`,
+`tests/core-verification.test.mjs`, `tests/list-import.test.mjs`,
+`tests/duplicateDetection.test.mjs` (new), `tests/identifiers.test.mjs`,
+`tests/metadata-provenance.test.mjs`, `TODO.md`, `CONTINUATION.md`, `README.md`,
+`package.json`. `package-lock.json` is unchanged. `data/` is gitignored.
