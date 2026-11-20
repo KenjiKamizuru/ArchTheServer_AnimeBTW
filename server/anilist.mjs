@@ -7,18 +7,17 @@
 
 import { readResponseTextLimited, sanitizeCoverUrl, sanitizePublicHttpUrl } from './security.mjs'
 import { parseBrowseFilters } from './browse.mjs'
-import { createAnimeRecord, computeCompletenessScore, recordRefreshStatus } from './catalog.mjs'
-import { rankTitles } from './search.mjs'
-import { remember } from './identifiers.mjs'
-import { rateLimiter } from './rateLimit.mjs'
-import { cachedImmutable, cachedAiring } from './metadataCache.mjs'
+import { createAnimeRecord } from './catalog.mjs'
 
 const ENDPOINT = 'https://graphql.anilist.co'
 const MAX_GQL_BYTES = 6 * 1024 * 1024
+const TTL = 10 * 60 * 1000
+const MAX_ENTRIES = 300
+
+const cache = new Map()
 
 const MEDIA_FIELDS = `
   id
-  idMal
   title { romaji english native }
   coverImage { extraLarge large color }
   bannerImage
@@ -29,8 +28,6 @@ const MEDIA_FIELDS = `
   format
   season
   seasonYear
-  startDate { year month day }
-  endDate { year month day }
   averageScore
   popularity
   favourites
@@ -40,53 +37,8 @@ const MEDIA_FIELDS = `
   countryOfOrigin
   siteUrl
   nextAiringEpisode { episode airingAt }
-  studios(isMain: true) { nodes { id name isAnimationStudio siteUrl } }
+  studios(isMain: true) { nodes { name } }
   externalLinks { site url type }
-  characters(page: 1, perPage: 10, sort: FAVOURITES_DESC) {
-    nodes {
-      id
-      name { full native }
-      image { large }
-      siteUrl
-      role
-      voiceActors(page: 1, perPage: 5, sort: FAVOURITES_DESC) {
-        id
-        name { full }
-        image { large }
-        language
-        siteUrl
-      }
-    }
-  }
-  relations {
-    edges {
-      relationType
-      node {
-        id
-        title { romaji english native }
-        format
-        status
-        seasonYear
-      }
-    }
-  }
-  streamingEpisodes(page: 1, perPage: 24) {
-    title
-    thumbnail
-    number
-  }
-  staff(page: 1, perPage: 10, sort: [RELEVANCE, ID]) {
-    edges {
-      role
-      node {
-        id
-        name { full native }
-        image { large }
-        siteUrl
-        primaryOccupations
-      }
-    }
-  }
 `
 
 const SEASON_SORTS = {
@@ -127,20 +79,6 @@ async function gql(query, variables) {
   let lastError = null
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      // Enforce the per-provider quota and backoff cooldown before calling
-      // upstream. A rate-limited provider is surfaced as a 503 so callers can
-      // distinguish it from a hard outage.
-      const proceed = rateLimiter.canProceed('anilist')
-      if (!proceed.ok) {
-        const error = new Error(
-          `AniList rate limit ${proceed.reason}; retry after ${Math.round(proceed.retryAfterMs / 1000)}s`,
-        )
-        error.status = 503
-        error.code = 'PROVIDER_RATE_LIMITED'
-        error.retryable = false
-        error.retryAfterMs = proceed.retryAfterMs
-        throw error
-      }
       const res = await fetch(ENDPOINT, {
         method: 'POST',
         headers: {
@@ -155,11 +93,8 @@ async function gql(query, variables) {
       })
       if (res.status === 429 || res.status >= 500) {
         await res.body?.cancel?.().catch(() => {})
-        // Apply exponential backoff and mark the provider as cooling down so
-        // subsequent callers back off too.
-        const backoffMs = rateLimiter.recordFailure('anilist', res.status)
         lastError = new Error(`AniList responded ${res.status}`)
-        await sleep(Math.max(backoffMs, 500 * (attempt + 1)))
+        await sleep(500 * (attempt + 1))
         continue
       }
       if (!res.ok) {
@@ -185,15 +120,9 @@ async function gql(query, variables) {
         error.retryable = false
         throw error
       }
-      rateLimiter.recordSuccess('anilist')
       return json.data
     } catch (err) {
       lastError = err
-      // Network-level failures (no HTTP status) are retryable: back off the
-      // provider so the next caller isn't immediately hammered again.
-      if (err?.status === undefined && err?.retryable !== false) {
-        rateLimiter.recordFailure('anilist', undefined)
-      }
       if (err?.retryable === false) break
       if (attempt < 2) await sleep(400 * (attempt + 1))
     }
@@ -208,6 +137,26 @@ async function gql(query, variables) {
   failure.code = 'UPSTREAM_UNAVAILABLE'
   failure.upstreamSafe = true
   throw failure
+}
+
+/** TTL + LRU cache so repeat views are instant and we stay far under rate limits. */
+async function cached(key, loader, { fresh = false } = {}) {
+  const hit = cache.get(key)
+  if (!fresh && hit && Date.now() - hit.at < TTL) {
+    cache.delete(key)
+    cache.set(key, hit)
+    return hit.value
+  }
+  try {
+    const value = await loader()
+    cache.set(key, { at: Date.now(), value })
+    if (cache.size > MAX_ENTRIES) cache.delete(cache.keys().next().value)
+    return value
+  } catch (err) {
+    // Stale data beats an error page.
+    if (hit) return hit.value
+    throw err
+  }
 }
 
 function plainText(value) {
@@ -231,31 +180,7 @@ function airedEpisodes(media) {
   return media.episodes ?? 0
 }
 
-/** Pulls the numeric AniDB id out of a direct AniDB link when present. */
-export function anidbIdFromUrl(raw) {
-  const match = String(raw ?? '').match(/anidb\.net\/(?:anime|adb\.anime)\/(\d+)/i)
-  return match ? match[1] : null
-}
-
-/** Provider identifiers extracted from an AniList payload (AV-002). */
-export function extractExternalIds(media) {
-  if (!media || !Number.isSafeInteger(media.id)) return {}
-  const links = Array.isArray(media.externalLinks) ? media.externalLinks : []
-  const directAnidb = links.find((l) => /anidb/i.test(l?.site ?? '') || /anidb\.net/i.test(l?.url ?? ''))?.url ?? null
-  const anidbId = anidbIdFromUrl(directAnidb)
-  return {
-    anilist: String(media.id),
-    ...(Number.isFinite(media.idMal) && media.idMal > 0 ? { mal: String(media.idMal) } : {}),
-    ...(anidbId ? { anidb: anidbId } : {}),
-  }
-}
-
-/**
- * Normalize a raw AniList Media node into a canonical catalog record.
- * Exported so admin diagnostics and the metadata inspector can transform a
- * provider response without re-fetching it.
- */
-export function normalize(media) {
+function normalize(media) {
   if (!media) return null
   const links = (media.externalLinks ?? [])
     .map((l) => {
@@ -274,78 +199,25 @@ export function normalize(media) {
   const anidb = directAnidb ?? `https://anidb.net/search/anime?adb.search=${encodeURIComponent(title)}`
   const rawColor = typeof media.coverImage?.color === 'string' ? media.coverImage.color.trim() : ''
   const color = /^#[0-9a-fA-F]{3,8}$/.test(rawColor) ? rawColor : null
-  const studioNodes = Array.isArray(media.studios?.nodes) ? media.studios.nodes : []
-  const characterNodes = Array.isArray(media.characters?.nodes) ? media.characters.nodes : []
-  const characters = characterNodes.map((c) => ({
-    id: c.id ?? null,
-    name: c.name?.full ?? null,
-    nativeName: c.name?.native ?? null,
-    image: c.image?.large ?? null,
-    siteUrl: c.siteUrl ?? null,
-    role: c.role ?? null,
-    voiceActors: Array.isArray(c.voiceActors?.nodes)
-      ? c.voiceActors.nodes.map((v) => ({
-          id: v.id ?? null,
-          name: v.name?.full ?? null,
-          image: v.image?.large ?? null,
-          language: v.language ?? null,
-          siteUrl: v.siteUrl ?? null,
-        }))
-      : [],
-  }))
-
-  const externalIds = extractExternalIds(media)
-  // Provider IDs are persisted separately from the canonical catalog record.
-  // Registration is non-fatal: malformed IDs must not break browsing (AV-002/022).
-  remember({ id: media.id, externalIds })
 
   return createAnimeRecord({
     id: media.id,
-    metadataSource: 'anilist',
-    lastRefreshedAt: new Date().toISOString(),
     title,
     romaji: media.title?.romaji ?? null,
     english: media.title?.english ?? null,
     native: media.title?.native ?? null,
     cover: sanitizeCoverUrl(media.coverImage?.extraLarge ?? media.coverImage?.large ?? null),
     banner: sanitizeCoverUrl(media.bannerImage ?? null),
-    artwork: [
-      {
-        source: 'anilist',
-        url: media.coverImage?.extraLarge ?? media.coverImage?.large ?? null,
-        kind: 'poster',
-        width: null,
-        height: null,
-        attribution: 'AniList',
-      },
-      ...(media.bannerImage
-        ? [
-            {
-              source: 'anilist',
-              url: media.bannerImage,
-              kind: 'banner',
-              width: null,
-              height: null,
-              attribution: 'AniList',
-            },
-          ]
-        : []),
-    ],
     color,
     description: plainText(media.description),
     episodes: media.episodes ?? null,
     airedEpisodes: airedEpisodes(media),
     duration: media.duration ?? null,
-    durationUnit: 'minutes',
     status: media.status ?? 'UNKNOWN',
     format: media.format ?? null,
     season: media.season ?? null,
     seasonYear: media.seasonYear ?? null,
-    startDate: media.startDate ?? null,
-    endDate: media.endDate ?? null,
-    // AniList's `averageScore` is already a percentage on a 0–100 scale.
     score: media.averageScore ?? null,
-    scoreScale: 100,
     popularity: media.popularity ?? 0,
     favourites: media.favourites ?? null,
     genres: media.genres ?? [],
@@ -362,42 +234,7 @@ export function normalize(media) {
     nextEpisode: media.nextAiringEpisode
       ? { episode: media.nextAiringEpisode.episode, airingAt: media.nextAiringEpisode.airingAt }
       : null,
-    studios: studioNodes
-      .map((studio) => studio?.name)
-      .filter((name) => typeof name === 'string' && name.length > 0),
-    characters,
-    relations: (media.relations?.edges ?? []).map((edge) => ({
-      relationType: edge?.relationType,
-      node: {
-        id: edge?.node?.id ?? null,
-        title: edge?.node?.title ?? null,
-        format: edge?.node?.format ?? null,
-        status: edge?.node?.status ?? null,
-        seasonYear: edge?.node?.seasonYear ?? null,
-      },
-    })),
-    streamingEpisodes: (media.streamingEpisodes ?? []).map((e) => ({
-      title: e?.title ?? null,
-      thumbnail: e?.thumbnail ?? null,
-      number: e?.number ?? null,
-    })),
-    staff: (media.staff?.edges ?? []).map((edge) => ({
-      role: edge?.role ?? null,
-      id: edge?.node?.id ?? null,
-      name: edge?.node?.name?.full ?? null,
-      nativeName: edge?.node?.name?.native ?? null,
-      image: edge?.node?.image?.large ?? null,
-      siteUrl: edge?.node?.siteUrl ?? null,
-      primaryOccupations: edge?.node?.primaryOccupations ?? [],
-    })),
-    organizations: studioNodes.map((studio) => ({
-      kind: 'studio',
-      name: studio?.name,
-      source: 'anilist',
-      providerId: studio?.id,
-      siteUrl: studio?.siteUrl,
-      isAnimationStudio: studio?.isAnimationStudio,
-    })),
+    studios: (media.studios?.nodes ?? []).map((n) => n.name).filter(Boolean),
     links: links.map((l) => ({ site: l.site, url: l.url })),
     streams,
     anidb,
@@ -432,7 +269,7 @@ export function resolveSort(sortParam) {
 export async function getSeason({ season, year, sort = 'popular', page = 1, perPage = 30 }) {
   const sortKey = resolveSort(sort)
   const key = `season:${season}:${year}:${sortKey}:${page}:${perPage}`
-  return cachedImmutable(key, async () => {
+  return cached(key, async () => {
     const data = await gql(
       `query ($page: Int, $perPage: Int, $season: MediaSeason, $year: Int, $sort: [MediaSort]) {
         Page(page: $page, perPage: $perPage) {
@@ -453,149 +290,6 @@ export async function getSeason({ season, year, sort = 'popular', page = 1, perP
   })
 }
 
-/**
- * Compares two or more seasons side by side. Fetches each season's media,
- * normalizes them, and returns per-season summaries plus a combined view so a
- * comparison UI can render them together. Requires at least two distinct
- * (season, year) pairs; duplicate pairs are deduplicated.
- */
-/**
- * Pure per-season summary built from already-fetched media. Extracted so it can
- * be tested without the network.
- */
-export function seasonSummary({ season, year, total, media }) {
-  const scores = media.map((m) => m.score).filter((s) => s !== null)
-  const avgScore =
-    scores.length > 0 ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10 : null
-  const formats = {}
-  for (const m of media) {
-    const f = m.format ?? 'UNKNOWN'
-    formats[f] = (formats[f] ?? 0) + 1
-  }
-  const genres = {}
-  for (const m of media) {
-    for (const g of m.genres ?? []) {
-      genres[g] = (genres[g] ?? 0) + 1
-    }
-  }
-  const topTitles = media
-    .slice()
-    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0) || (b.popularity ?? 0) - (a.popularity ?? 0))
-    .slice(0, 5)
-    .map((m) => ({ id: m.id, title: m.title, score: m.score, format: m.format }))
-  return {
-    season,
-    year,
-    label: `${season} ${year}`,
-    count: total,
-    returned: media.length,
-    averageScore: avgScore,
-    topFormats: Object.entries(formats).sort((a, b) => b[1] - a[1]).slice(0, 5),
-    topGenres: Object.entries(genres).sort((a, b) => b[1] - a[1]).slice(0, 8),
-    topTitles,
-    media,
-  }
-}
-
-export async function compareSeasons(seasons) {
-  const pairs = Array.isArray(seasons) ? seasons : []
-  if (pairs.length < 2) {
-    throw Object.assign(new Error('Season comparison requires at least two seasons'), { status: 400 })
-  }
-
-  // Deduplicate and validate each (season, year) pair.
-  const seen = new Set()
-  const valid = []
-  for (const pair of pairs) {
-    const { season, year } = resolveSeason(pair.season, pair.year)
-    const key = `${season}:${year}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    valid.push({ season, year })
-  }
-  if (valid.length < 2) {
-    throw Object.assign(new Error('Season comparison requires at least two distinct seasons'), { status: 400 })
-  }
-
-  const results = []
-  for (const { season, year } of valid) {
-    const data = await getSeason({ season, year, sort: 'popular', page: 1, perPage: 50 })
-    results.push(seasonSummary({ season, year, total: data.total, media: data.media ?? [] }))
-  }
-
-  // Cross-season stats.
-  const allMedia = results.flatMap((r) => r.media)
-  const sharedTitleIds = allMedia
-    .map((m) => m.id)
-    .filter((id, idx, arr) => arr.indexOf(id) !== arr.lastIndexOf(id))
-  return {
-    seasons: results,
-    compared: valid.length,
-    sharedTitleIds: [...new Set(sharedTitleIds)],
-    sharedCount: sharedTitleIds.length,
-  }
-}
-
-/**
- * Calendar-style seasonal release overview. Fetches one season's media and
- * groups titles with a known start date by calendar day, so a frontend can
- * render a month-by-month release calendar. Returns all media sorted by start
- * date plus a `byDate` map keyed by `YYYY-MM-DD` and a `calendar` array.
- */
-/**
- * Pure grouping of already-fetched media by start date, used by seasonCalendar.
- * Returns media sorted by start date plus a `byDate` map keyed by `YYYY-MM-DD`,
- * a sorted `dates` array, and a `calendar` array of day entries.
- */
-export function groupMediaByStartDate(media) {
-  const dated = (media ?? []).filter((m) => m.startDate)
-  const byDate = {}
-  const dates = []
-  for (const m of dated) {
-    const { year: y, month: mo, day: d } = m.startDate
-    const key = `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`
-    if (!byDate[key]) {
-      byDate[key] = []
-      dates.push(key)
-    }
-    byDate[key].push(m)
-  }
-  dates.sort()
-  const calendar = dates.map((key) => ({
-    date: key,
-    year: Number(key.slice(0, 4)),
-    month: Number(key.slice(5, 7)),
-    day: Number(key.slice(8, 10)),
-    media: byDate[key].sort((a, b) => (b.score ?? 0) - (a.score ?? 0) || (b.popularity ?? 0) - (a.popularity ?? 0)),
-  }))
-  return {
-    media: dated.sort((a, b) => {
-      const da = a.startDate
-      const db = b.startDate
-      if (da.year !== db.year) return da.year - db.year
-      if (da.month !== db.month) return da.month - db.month
-      return da.day - db.day
-    }),
-    byDate,
-    dates,
-    calendar,
-  }
-}
-
-export async function seasonCalendar({ season, year, sort = 'popular', page = 1, perPage = 100 }) {
-  const { season: resolvedSeason, year: resolvedYear } = resolveSeason(season, year)
-  const data = await getSeason({ season: resolvedSeason, year: resolvedYear, sort, page, perPage })
-  const grouped = groupMediaByStartDate(data.media)
-  return {
-    season: resolvedSeason,
-    year: resolvedYear,
-    total: data.total,
-    returned: grouped.media.length,
-    hasNextPage: data.hasNextPage,
-    ...grouped,
-  }
-}
-
 /** Shows still releasing, sorted by their next broadcast (soonest first). */
 /**
  * Executes a browse query built by `browse.mjs` and applies the filters AniList
@@ -605,7 +299,7 @@ export async function seasonCalendar({ season, year, sort = 'popular', page = 1,
 export async function browse(filters, browseModule) {
   const { query, variables } = browseModule.buildBrowseQuery(filters)
   const key = `browse:${JSON.stringify(variables)}`
-  return cachedImmutable(key, async () => {
+  return cached(key, async () => {
     const data = await gql(query, variables)
     const pageInfo = data.Page?.pageInfo ?? {}
     const raw = data.Page?.media ?? []
@@ -639,12 +333,6 @@ export async function browse(filters, browseModule) {
  * Discovery picks: a deterministic "spotlight" for the day, a random pick with
  * optional filter awareness, and a hidden-gems collection.
  */
-/** Deterministic index for the rotating daily spotlight (AV-040). */
-export function dailyPickIndex(length, now = Date.now()) {
-  if (!Number.isSafeInteger(length) || length <= 0) return -1
-  return Math.floor(now / 86_400_000) % length
-}
-
 export async function discover(kind, filters, browseModule) {
   if (kind === 'random') {
     // Random page within a bounded depth keeps the request cheap while still
@@ -660,7 +348,8 @@ export async function discover(kind, filters, browseModule) {
     const result = await browse({ ...filters, page: 1, perPage: 50, sort: 'popular' }, browseModule)
     if (result.media.length === 0) return { kind, media: null }
     // Stable per-day index: same pick all day, changes at midnight.
-    return { kind, media: result.media[dailyPickIndex(result.media.length)] }
+    const day = Math.floor(Date.now() / 86_400_000)
+    return { kind, media: result.media[day % result.media.length] }
   }
 
   if (kind === 'hidden-gems') {
@@ -684,17 +373,13 @@ export async function discover(kind, filters, browseModule) {
 
 /**
  * Studio search/listing for the studio explorer. Sorted by favourites so the
- * landing page opens on recognisable names. `type` filters AniList's
- * `isAnimationStudio` flag: 'animation' keeps animation studios only,
- * 'producer' keeps non-animation studios (producers/other orgs), 'all'
- * returns everything.
+ * landing page opens on recognisable names.
  */
-export async function studios({ page = 1, search = '', sort = '', type = 'all' } = {}) {
+export async function studios({ page = 1, search = '', sort = '' } = {}) {
   const allowed = new Set(['favourites', 'name'])
   const studioSort = allowed.has(sort) ? sort : 'favourites'
-  const studioType = ['animation', 'producer', 'all'].includes(type) ? type : 'all'
-  const key = `studios:${page}:${search}:${studioSort}:${studioType}`
-  return cachedImmutable(key, async () => {
+  const key = `studios:${page}:${search}:${studioSort}`
+  return cached(key, async () => {
     const data = await gql(
       `query Studios($page: Int, $perPage: Int, $search: String, $sort: [StudioSort]) {
         Page(page: $page, perPage: $perPage) {
@@ -731,11 +416,6 @@ export async function studios({ page = 1, search = '', sort = '', type = 'all' }
           : null,
       )
       .filter(Boolean)
-      .filter((studio) => {
-        if (studioType === 'all') return true
-        if (studioType === 'animation') return studio.isAnimationStudio
-        return !studio.isAnimationStudio
-      })
     return {
       studios: media,
       page,
@@ -754,7 +434,7 @@ export async function studioFilmography(id, { page = 1, sort = 'popular' } = {})
     oldest: 'START_DATE_ASC',
   }[sort] ?? 'POPULARITY_DESC'
   const key = `studio:${id}:${page}:${sortEnum}`
-  return cachedImmutable(key, async () => {
+  return cached(key, async () => {
     const data = await gql(
       `query Studio($id: Int, $page: Int, $perPage: Int, $sort: [MediaSort]) {
         Studio(id: $id) {
@@ -796,7 +476,7 @@ export async function studioFilmography(id, { page = 1, sort = 'popular' } = {})
 export async function catalogIndex({ page = 1, sort = 'title' } = {}) {
   const sortEnum = { title: 'TITLE_ROMAJI', popular: 'POPULARITY_DESC', rated: 'SCORE_DESC' }[sort] ?? 'TITLE_ROMAJI'
   const key = `index:${page}:${sortEnum}`
-  return cachedImmutable(key, async () => {
+  return cached(key, async () => {
     const data = await gql(
       `query Index($page: Int, $perPage: Int, $sort: [MediaSort]) {
         Page(page: $page, perPage: $perPage) {
@@ -820,7 +500,7 @@ export async function catalogIndex({ page = 1, sort = 'title' } = {}) {
 export async function seasonFranchises({ season = '', year } = {}) {
   const resolved = resolveSeason(season || undefined, year)
   const key = `franchises:${resolved.season}:${resolved.year}`
-  return cachedImmutable(key, async () => {
+  return cached(key, async () => {
     const data = await gql(
       `query Franchises($season: MediaSeason, $seasonYear: Int, $page: Int) {
         Page(page: $page, perPage: 50) {
@@ -855,7 +535,7 @@ export async function seasonFranchises({ season = '', year } = {}) {
 /** Newest catalog entries (highest IDs first). */
 export async function recentlyAdded(limit = 24) {
   const key = `recent:added:${limit}`
-  return cachedImmutable(key, async () => {
+  return cached(key, async () => {
     const data = await gql(
       `query Recent($perPage: Int, $sort: [MediaSort]) {
         Page(page: 1, perPage: $perPage) {
@@ -871,7 +551,7 @@ export async function recentlyAdded(limit = 24) {
 /** Recently updated metadata — useful to spot refreshed artwork/synopses. */
 export async function recentlyUpdated(limit = 24) {
   const key = `recent:updated:${limit}`
-  return cachedImmutable(key, async () => {
+  return cached(key, async () => {
     const data = await gql(
       `query Updated($perPage: Int, $sort: [MediaSort]) {
         Page(page: 1, perPage: $perPage) {
@@ -886,7 +566,7 @@ export async function recentlyUpdated(limit = 24) {
 
 export async function getAiring({ page = 1, perPage = 50 } = {}) {
   const key = `airing:${page}:${perPage}`
-  return cachedAiring(key, async () => {
+  return cached(key, async () => {
     const data = await gql(
       `query ($page: Int, $perPage: Int) {
         Page(page: $page, perPage: $perPage) {
@@ -908,7 +588,7 @@ export async function searchAnime(term, page = 1) {
   const q = String(term ?? '').trim()
   if (!q) return { media: [], hasNextPage: false }
   const key = `search:${q.toLowerCase()}:${page}`
-  return cachedImmutable(key, async () => {
+  return cached(key, async () => {
     const data = await gql(
       `query ($page: Int, $search: String) {
         Page(page: $page, perPage: 40) {
@@ -1054,26 +734,6 @@ export async function searchAdvanced(rawQuery, page, searchModule) {
     }
   }
 
-  // Attach a human-readable relevance explanation (AV-072): why this title
-  // matched the free-text query, e.g. "title contains your search", "romaji
-  // title match", "close spelling (1 character off)".
-  let reasonById = new Map()
-  if (text && kept.length) {
-    const ranked = searchModule.rankTitles(
-      kept.map((m) => ({
-        id: m.id,
-        label: m.title,
-        aliases: [m.romaji, m.english].filter((t) => typeof t === 'string'),
-      })),
-      text,
-      { limit: kept.length, minScore: 0 },
-    )
-    for (const entry of ranked) reasonById.set(entry.id, entry.reason)
-  }
-  for (const m of kept) {
-    if (reasonById.has(m.id)) m.matchReason = reasonById.get(m.id)
-  }
-
   const correction =
     text
       ? searchModule.suggestCorrection(
@@ -1097,64 +757,62 @@ export async function searchAdvanced(rawQuery, page, searchModule) {
   }
 }
 
-/**
- * AniList detail query used by both the public detail endpoint and the admin
- * metadata inspector. Keeping it in one place guarantees the inspector sees
- * exactly the same raw payload the detail page normalizes.
- */
-export const DETAIL_QUERY = `query ($id: Int) {
-  Media(id: $id, type: ANIME) {
-    ${MEDIA_FIELDS}
-    trailer { id site }
-    streamingEpisodes { title thumbnail url site }
-    stats { scoreDistribution { score amount } }
-    rankings { rank type context year season allTime }
-    characters(perPage: 12, sort: [ROLE, RELEVANCE, ID]) {
-      edges {
-        role
-        node { id name { full native } image { large } siteUrl }
-        voiceActors(language: JAPANESE, sort: [RELEVANCE, ID]) {
-          id name { full native } image { large } languageV2 siteUrl
-        }
-      }
-    }
-    staff(perPage: 10, sort: [RELEVANCE, ID]) {
-      edges {
-        role
-        node { id name { full native } image { large } siteUrl primaryOccupations }
-      }
-    }
-    relations {
-      edges {
-        relationType
-        node {
-          id
-          type
-          format
-          status
-          episodes
-          chapters
-          averageScore
-          season
-          seasonYear
-          startDate { year month day }
-          title { romaji english native }
-          coverImage { large extraLarge }
-          nextAiringEpisode { episode airingAt }
-        }
-      }
-    }
-  }
-}`
-
 export async function getDetail(id) {
   const numeric = Number(id)
   if (!Number.isInteger(numeric) || numeric <= 0) {
     throw Object.assign(new Error('Invalid anime id'), { status: 400 })
   }
   const key = `detail:${numeric}`
-  return cachedImmutable(key, async () => {
-    const data = await gql(DETAIL_QUERY, { id: numeric })
+  return cached(key, async () => {
+    const data = await gql(
+      `query ($id: Int) {
+        Media(id: $id, type: ANIME) {
+          ${MEDIA_FIELDS}
+          trailer { id site }
+          startDate { year month day }
+          endDate { year month day }
+          streamingEpisodes { title thumbnail url site }
+          stats { scoreDistribution { score amount } }
+          rankings { rank type context year season allTime }
+          characters(perPage: 12, sort: [ROLE, RELEVANCE, ID]) {
+            edges {
+              role
+              node { id name { full native } image { large } siteUrl }
+              voiceActors(language: JAPANESE, sort: [RELEVANCE, ID]) {
+                id name { full native } image { large } languageV2 siteUrl
+              }
+            }
+          }
+          staff(perPage: 10, sort: [RELEVANCE, ID]) {
+            edges {
+              role
+              node { id name { full native } image { large } siteUrl primaryOccupations }
+            }
+          }
+          relations {
+            edges {
+              relationType
+              node {
+                id
+                type
+                format
+                status
+                episodes
+                chapters
+                averageScore
+                season
+                seasonYear
+                startDate { year month day }
+                title { romaji english native }
+                coverImage { large extraLarge }
+                nextAiringEpisode { episode airingAt }
+              }
+            }
+          }
+        }
+      }`,
+      { id: numeric },
+    )
     const base = normalize(data.Media)
     const relationEdges = (data.Media.relations?.edges ?? []).map((edge) => ({
       relationType: edge?.relationType,
@@ -1219,15 +877,15 @@ export async function getDetail(id) {
           episodes: base.episodes,
           season: base.season,
           seasonYear: base.seasonYear,
-          startDate: base.startDate,
+          startDate: data.Media.startDate ?? null,
           coverImage: { large: base.cover },
         },
         ...(data.Media.relations?.edges ?? [])
           .filter((edge) => edge?.node?.type === 'ANIME')
           .map((edge) => edge.node),
       ],
-      startDate: base.startDate,
-      endDate: base.endDate,
+      startDate: data.Media.startDate ?? null,
+      endDate: data.Media.endDate ?? null,
       rankings: (data.Media.rankings ?? [])
         .filter((r) => r && Number.isFinite(r.rank))
         .slice(0, 8)
@@ -1283,34 +941,12 @@ export async function getDetail(id) {
   })
 }
 
-/**
- * Admin metadata inspection: fetch the raw AniList Media node and its normalized
- * catalog record for a single media id. Returns both so operators can compare
- * provider payload against the canonical store shape. Never mutates input.
- */
-export async function getMediaInspection(id) {
-  const numeric = Number(id)
-  if (!Number.isInteger(numeric) || numeric <= 0) {
-    throw Object.assign(new Error('Invalid anime id'), { status: 400 })
-  }
-  const data = await gql(DETAIL_QUERY, { id: numeric })
-  const raw = data.Media ?? null
-  const normalized = raw !== null ? normalize(raw) : null
-  return {
-    id: numeric,
-    raw,
-    normalized,
-    completenessScore: normalized ? computeCompletenessScore(normalized) : null,
-    refreshStatus: normalized ? recordRefreshStatus(normalized) : null,
-  }
-}
-
 /** Batch lookup (no synopsis/trailer) — used to decorate local library files. */
 export async function getMany(ids) {
   const list = [...new Set((ids ?? []).map(Number))].filter((n) => Number.isInteger(n) && n > 0).slice(0, 60)
   if (!list.length) return []
   const key = `many:${list.join(',')}`
-  return cachedImmutable(key, async () => {
+  return cached(key, async () => {
     const data = await gql(
       `query ($ids: [Int]) {
         Page(page: 1, perPage: 50) {
@@ -1323,167 +959,4 @@ export async function getMany(ids) {
     )
     return (data.Page.media ?? []).map(normalize).filter(Boolean)
   })
-}
-
-/** Character detail query — used for character detail pages (AV-085). */
-export const CHARACTER_QUERY = `query ($id: Int) {
-  Character(id: $id) {
-    id
-    name { full native }
-    image { large medium }
-    siteUrl
-    description
-    gender
-    dateOfBirth { year month day }
-    age
-    bloodType
-    isFavourite
-    media {
-      edges {
-        role
-        node {
-          id
-          title { romaji english native }
-          format
-          status
-          seasonYear
-          season
-          coverImage { large }
-        }
-      }
-    }
-    voiceActors(page: 1, perPage: 10, sort: [RELEVANCE, ID]) {
-      id
-      name { full native }
-      image { large }
-      language
-      siteUrl
-    }
-  }
-`
-
-/**
- * Fetches a single character by AniList ID, normalizing the payload into the
- * Client-side CharacterEntry shape. Returns null when the character does not
- * exist.
- */
-export async function getCharacter(id) {
-  const numeric = Number(id)
-  if (!Number.isInteger(numeric) || numeric <= 0) {
-    throw Object.assign(new Error('Invalid character id'), { status: 400 })
-  }
-  const data = await gql(CHARACTER_QUERY, { id: numeric })
-  const raw = data.Character ?? null
-  if (!raw) return null
-  return {
-    id: raw.id ?? null,
-    name: raw.name?.full ?? null,
-    nativeName: raw.name?.native ?? null,
-    image: raw.image?.large ?? null,
-    siteUrl: raw.siteUrl ?? null,
-    description: raw.description ?? null,
-    gender: raw.gender ?? null,
-    dateOfBirth: raw.dateOfBirth ?? null,
-    age: raw.age ?? null,
-    bloodType: raw.bloodType ?? null,
-    isFavourite: Boolean(raw.isFavourite),
-    media: Array.isArray(raw.media?.edges)
-      ? raw.media.edges.map((e) => ({
-          role: e.role ?? null,
-          id: e.node?.id ?? null,
-          title: e.node?.title ?? null,
-          format: e.node?.format ?? null,
-          status: e.node?.status ?? null,
-          seasonYear: e.node?.seasonYear ?? null,
-          season: e.node?.season ?? null,
-          cover: e.node?.coverImage?.large ?? null,
-        }))
-      : [],
-    voiceActors: Array.isArray(raw.voiceActors)
-      ? raw.voiceActors.map((v) => ({
-          id: v.id ?? null,
-          name: v.name?.full ?? null,
-          nativeName: v.name?.native ?? null,
-          image: v.image?.large ?? null,
-          language: v.language ?? null,
-          siteUrl: v.siteUrl ?? null,
-        }))
-      : [],
-  }
-}
-
-/** Staff detail query — used for staff detail pages (AV-086). */
-export const STAFF_QUERY = `query ($id: Int) {
-  Staff(id: $id) {
-    id
-    name { full native }
-    image { large medium }
-    siteUrl
-    description
-    gender
-    dateOfBirth { year month day }
-    age
-    bloodType
-    isFavourite
-    primaryOccupations
-    languageV2
-    staffMedia {
-      edges {
-        role
-        node {
-          id
-          title { romaji english native }
-          format
-          status
-          seasonYear
-          season
-          coverImage { large }
-        }
-      }
-    }
-  }
-`
-
-/**
- * Fetches a single staff member by AniList ID, normalizing the payload into
- * the client-side StaffEntry shape. Returns null when the staff member does
- * not exist.
- */
-export async function getStaff(id) {
-  const numeric = Number(id)
-  if (!Number.isInteger(numeric) || numeric <= 0) {
-    throw Object.assign(new Error('Invalid staff id'), { status: 400 })
-  }
-  const data = await gql(STAFF_QUERY, { id: numeric })
-  const raw = data.Staff ?? null
-  if (!raw) return null
-  return {
-    id: raw.id ?? null,
-    name: raw.name?.full ?? null,
-    nativeName: raw.name?.native ?? null,
-    image: raw.image?.large ?? null,
-    siteUrl: raw.siteUrl ?? null,
-    description: raw.description ?? null,
-    gender: raw.gender ?? null,
-    dateOfBirth: raw.dateOfBirth ?? null,
-    age: raw.age ?? null,
-    bloodType: raw.bloodType ?? null,
-    isFavourite: Boolean(raw.isFavourite),
-    primaryOccupations: Array.isArray(raw.primaryOccupations)
-      ? raw.primaryOccupations
-      : [],
-    language: raw.languageV2 ?? null,
-    media: Array.isArray(raw.staffMedia?.edges)
-      ? raw.staffMedia.edges.map((e) => ({
-          role: e.role ?? null,
-          id: e.node?.id ?? null,
-          title: e.node?.title ?? null,
-          format: e.node?.format ?? null,
-          status: e.node?.status ?? null,
-          seasonYear: e.node?.seasonYear ?? null,
-          season: e.node?.season ?? null,
-          cover: e.node?.coverImage?.large ?? null,
-        }))
-      : [],
-  }
 }

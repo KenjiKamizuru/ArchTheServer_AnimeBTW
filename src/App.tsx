@@ -8,8 +8,6 @@ import { ToastProvider } from './components/Toasts'
 import {
   AnimeDetailPage,
   BookmarksPage,
-  CharacterDetailPage,
-  StaffDetailPage,
   BrowsePage,
   DiscoverPage,
   DownloadedPage,
@@ -18,8 +16,6 @@ import {
   IndexPage,
   SchedulePage,
   SearchPage,
-  SeasonCalendarPage,
-  SeasonComparePage,
   SettingsPage,
   StudioPage,
   StudiosPage,
@@ -52,11 +48,7 @@ export default function App() {
               <Route index element={<LazyPage><HomePage /></LazyPage>} />
               <Route path="browse" element={<LazyPage><BrowsePage /></LazyPage>} />
               <Route path="anime/:id" element={<LazyPage><AnimeDetailPage /></LazyPage>} />
-              <Route path="character/:id" element={<LazyPage><CharacterDetailPage /></LazyPage>} />
-              <Route path="staff/:id" element={<LazyPage><StaffDetailPage /></LazyPage>} />
               <Route path="discover" element={<LazyPage><DiscoverPage /></LazyPage>} />
-              <Route path="compare" element={<LazyPage><SeasonComparePage /></LazyPage>} />
-              <Route path="calendar" element={<LazyPage><SeasonCalendarPage /></LazyPage>} />
               <Route path="schedule" element={<LazyPage><SchedulePage /></LazyPage>} />
               <Route path="studios" element={<LazyPage><StudiosPage /></LazyPage>} />
               <Route path="studios/:id" element={<LazyPage><StudioPage /></LazyPage>} />

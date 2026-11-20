@@ -23,7 +23,6 @@ export const HomePage = lazyWithPrefetch(() => import('../pages/Home'))
 export const BrowsePage = lazyWithPrefetch(() => import('../pages/Browse'))
 export const SchedulePage = lazyWithPrefetch(() => import('../pages/Schedule'))
 export const SearchPage = lazyWithPrefetch(() => import('../pages/Search'))
-export const SeasonCalendarPage = lazyWithPrefetch(() => import('../pages/SeasonCalendar'))
 export const DownloadsPage = lazyWithPrefetch(() => import('../pages/Downloads'))
 export const DownloadedPage = lazyWithPrefetch(() => import('../pages/Downloaded'))
 export const BookmarksPage = lazyWithPrefetch(() => import('../pages/Bookmarks'))
@@ -33,9 +32,6 @@ export const StudioPage = lazyWithPrefetch(() => import('../pages/Studios').then
 export const IndexPage = lazyWithPrefetch(() => import('../pages/IndexPage'))
 export const DiscoverPage = lazyWithPrefetch(() => import('../pages/Discover'))
 export const AnimeDetailPage = lazyWithPrefetch(() => import('../pages/AnimeDetail'))
-export const CharacterDetailPage = lazyWithPrefetch(() => import('../pages/CharacterDetail'))
-export const StaffDetailPage = lazyWithPrefetch(() => import('../pages/StaffDetail'))
-export const SeasonComparePage = lazyWithPrefetch(() => import('../pages/SeasonCompare'))
 
 const PREFETCHERS: Record<string, (() => Promise<unknown>)[]> = {
   '/': [HomePage.prefetch],
@@ -49,8 +45,6 @@ const PREFETCHERS: Record<string, (() => Promise<unknown>)[]> = {
   '/studios': [StudiosPage.prefetch, StudioPage.prefetch],
   '/index': [IndexPage.prefetch],
   '/discover': [DiscoverPage.prefetch],
-  '/calendar': [SeasonCalendarPage.prefetch],
-  '/compare': [SeasonComparePage.prefetch],
   '/anime': [AnimeDetailPage.prefetch],
 }
 

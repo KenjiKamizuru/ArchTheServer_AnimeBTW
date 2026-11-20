@@ -24,17 +24,6 @@ const FIELD_ALIASES = {
   name: 'title',
   studio: 'studio',
   studios: 'studio',
-  staff: 'staff',
-  voiceactor: 'voiceActor',
-  va: 'voiceActor',
-  voice: 'voiceActor',
-  character: 'character',
-  char: 'character',
-  relation: 'relation',
-  rel: 'relation',
-  franchise: 'relation',
-  eptitle: 'epTitle',
-  episodetitle: 'epTitle',
   genre: 'genre',
   genres: 'genre',
   tag: 'tag',
@@ -67,11 +56,6 @@ export function parseSearchQuery(raw) {
   const free = []
   const filters = {
     studio: [],
-    staff: [],
-    voiceActor: [],
-    character: [],
-    relation: [],
-    epTitle: [],
     genre: [],
     tag: [],
     year: null,
@@ -96,7 +80,7 @@ export function parseSearchQuery(raw) {
     }
     if (field === 'title') {
       free.push(value)
-    } else if (field === 'studio' || field === 'staff' || field === 'voiceActor' || field === 'character' || field === 'relation' || field === 'epTitle' || field === 'genre' || field === 'tag') {
+    } else if (field === 'studio' || field === 'genre' || field === 'tag') {
       filters[field].push(value.toLowerCase().replace(/\s+/g, ' ').slice(0, 60))
     } else if (field === 'status') {
       const normal = value.toLowerCase()
@@ -155,11 +139,6 @@ export function hasStructuredFilters(filters) {
   if (!filters) return false
   return (
     filters.studio.length > 0 ||
-    filters.staff.length > 0 ||
-    filters.voiceActor.length > 0 ||
-    filters.character.length > 0 ||
-    filters.relation.length > 0 ||
-    filters.epTitle.length > 0 ||
     filters.genre.length > 0 ||
     filters.tag.length > 0 ||
     filters.status.length > 0 ||
@@ -178,107 +157,6 @@ export function normalizeForSearch(value) {
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim()
-}
-
-/** Hepburn romaji map for hiragana and katakana. Kanji is left unchanged. */
-const ROMAJI_MAP = new Map([
-  // Hiragana
-  ['あ', 'a'], ['い', 'i'], ['う', 'u'], ['え', 'e'], ['お', 'o'],
-  ['か', 'ka'], ['き', 'ki'], ['く', 'ku'], ['け', 'ke'], ['こ', 'ko'],
-  ['さ', 'sa'], ['し', 'shi'], ['す', 'su'], ['せ', 'se'], ['そ', 'so'],
-  ['た', 'ta'], ['ち', 'chi'], ['つ', 'tsu'], ['て', 'te'], ['と', 'to'],
-  ['な', 'na'], ['に', 'ni'], ['ぬ', 'nu'], ['ね', 'ne'], ['の', 'no'],
-  ['は', 'ha'], ['ひ', 'hi'], ['ふ', 'fu'], ['へ', 'he'], ['ほ', 'ho'],
-  ['ま', 'ma'], ['み', 'mi'], ['む', 'mu'], ['め', 'me'], ['も', 'mo'],
-  ['や', 'ya'], ['ゆ', 'yu'], ['よ', 'yo'],
-  ['ら', 'ra'], ['り', 'ri'], ['る', 'ru'], ['れ', 're'], ['ろ', 'ro'],
-  ['わ', 'wa'], ['を', 'o'], ['ん', 'n'],
-  ['が', 'ga'], ['ぎ', 'gi'], ['ぐ', 'gu'], ['げ', 'ge'], ['ご', 'go'],
-  ['ざ', 'za'], ['じ', 'ji'], ['ず', 'zu'], ['ぜ', 'ze'], ['ぞ', 'zo'],
-  ['だ', 'da'], ['ぢ', 'ji'], ['づ', 'zu'], ['で', 'de'], ['ど', 'do'],
-  ['ば', 'ba'], ['び', 'bi'], ['ぶ', 'bu'], ['べ', 'be'], ['ぼ', 'bo'],
-  ['ぱ', 'pa'], ['ぴ', 'pi'], ['ぷ', 'pu'], ['ぺ', 'pe'], ['ぽ', 'po'],
-  // Katakana
-  ['ア', 'a'], ['イ', 'i'], ['ウ', 'u'], ['エ', 'e'], ['オ', 'o'],
-  ['カ', 'ka'], ['キ', 'ki'], ['ク', 'ku'], ['ケ', 'ke'], ['コ', 'ko'],
-  ['サ', 'sa'], ['シ', 'shi'], ['ス', 'su'], ['セ', 'se'], ['ソ', 'so'],
-  ['タ', 'ta'], ['チ', 'chi'], ['ツ', 'tsu'], ['テ', 'te'], ['ト', 'to'],
-  ['ナ', 'na'], ['ニ', 'ni'], ['ヌ', 'nu'], ['ネ', 'ne'], ['ノ', 'no'],
-  ['ハ', 'ha'], ['ヒ', 'hi'], ['フ', 'fu'], ['ヘ', 'he'], ['ホ', 'ho'],
-  ['マ', 'ma'], ['ミ', 'mi'], ['ム', 'mu'], ['メ', 'me'], ['モ', 'mo'],
-  ['ヤ', 'ya'], ['ユ', 'yu'], ['ヨ', 'yo'],
-  ['ラ', 'ra'], ['リ', 'ri'], ['ル', 'ru'], ['レ', 're'], ['ロ', 'ro'],
-  ['ワ', 'wa'], ['ヲ', 'o'], ['ン', 'n'],
-  ['ガ', 'ga'], ['ギ', 'gi'], ['グ', 'gu'], ['ゲ', 'ge'], ['ゴ', 'go'],
-  ['ザ', 'za'], ['ジ', 'ji'], ['ズ', 'zu'], ['ゼ', 'ze'], ['ゾ', 'zo'],
-  ['ダ', 'da'], ['ヂ', 'ji'], ['ヅ', 'zu'], ['デ', 'de'], ['ド', 'do'],
-  ['バ', 'ba'], ['ビ', 'bi'], ['ブ', 'bu'], ['ベ', 'be'], ['ボ', 'bo'],
-  ['パ', 'pa'], ['ピ', 'pi'], ['プ', 'pu'], ['ペ', 'pe'], ['ポ', 'po'],
-])
-
-/**
- * Converts Japanese hiragana and katakana to Hepburn romaji. Kanji and
- * non-Japanese characters are passed through unchanged. Small kana (ゃ, ゅ, ょ,
- * っ, ャ, ュ, ョ, ッ) combine with the preceding character to form digraphs.
- */
-export function toRomaji(text) {
-  const s = String(text ?? '')
-  const out = []
-  let i = 0
-  while (i < s.length) {
-    const ch = s[i]
-    const next = s[i + 1]
-    // Digraphs: small kana after i-column consonants.
-    if ((next === 'ゃ' || next === 'ャ') && 'きぎしじちにひびぴみり'.includes(ch)) {
-      const base = ROMAJI_MAP.get(ch)
-      if (base === 'shi') out.push('sha')
-      else if (base === 'chi') out.push('cha')
-      else if (base === 'ji') out.push('ja')
-      else out.push(base.replace(/i$/, '') + 'ya')
-      i += 2
-      continue
-    }
-    if ((next === 'ゅ' || next === 'ュ') && 'きぎしじちにひびぴみり'.includes(ch)) {
-      const base = ROMAJI_MAP.get(ch)
-      if (base === 'shi') out.push('shu')
-      else if (base === 'chi') out.push('chu')
-      else if (base === 'ji') out.push('ju')
-      else out.push(base.replace(/i$/, '') + 'yu')
-      i += 2
-      continue
-    }
-    if ((next === 'ょ' || next === 'ョ') && 'きぎしじちにひびぴみり'.includes(ch)) {
-      const base = ROMAJI_MAP.get(ch)
-      if (base === 'shi') out.push('sho')
-      else if (base === 'chi') out.push('cho')
-      else if (base === 'ji') out.push('jo')
-      else out.push(base.replace(/i$/, '') + 'yo')
-      i += 2
-      continue
-    }
-    // Sokuon (っ/ッ) geminates the next consonant.
-    if ((ch === 'っ' || ch === 'ッ') && next && ROMAJI_MAP.has(next)) {
-      const base = ROMAJI_MAP.get(next)
-      out.push(base.charAt(0) + base)
-      i += 2
-      continue
-    }
-    if (ROMAJI_MAP.has(ch)) {
-      out.push(ROMAJI_MAP.get(ch))
-    } else {
-      out.push(ch)
-    }
-    i += 1
-  }
-  return out.join('')
-}
-
-/**
- * Normalizes a string and converts Japanese kana to romaji, so a romaji query
- * can match Japanese titles and vice versa.
- */
-export function normalizeForSearchRomaji(value) {
-  return toRomaji(normalizeForSearch(value))
 }
 
 function bigrams(value) {
@@ -354,15 +232,13 @@ export function typoTolerance(query) {
  */
 export function rankTitles(titles, query, { limit = 12, minScore = 0.28 } = {}) {
   const needle = normalizeForSearch(query)
-  const needleRomaji = normalizeForSearchRomaji(query)
-  if (!needle && !needleRomaji) return []
+  if (!needle) return []
   const tolerance = typoTolerance(query)
   const out = []
   for (const title of titles) {
     if (!title || typeof title.label !== 'string') continue
     const haystack = normalizeForSearch(title.label)
-    const haystackRomaji = normalizeForSearchRomaji(title.label)
-    if (!haystack && !haystackRomaji) continue
+    if (!haystack) continue
     let score = 0
     let reason = ''
     if (haystack === needle) {
@@ -377,9 +253,6 @@ export function rankTitles(titles, query, { limit = 12, minScore = 0.28 } = {}) 
     } else if (haystack.includes(needle)) {
       score = 0.74
       reason = 'title contains your search'
-    } else if (needleRomaji && haystackRomaji.includes(needleRomaji)) {
-      score = 0.72
-      reason = 'romaji title match'
     } else {
       const dice = similarity(needle, haystack)
       const dist = editDistance(needle, haystack)
@@ -441,55 +314,16 @@ export function highlightSegments(text, query) {
   }))
 }
 
-/**
- * Groups results into categories the UI shows (AV-070).
- *
- * Supported `groupBy` values:
- *   - 'format'   : TV, MOVIE, OVA, ONA, SPECIAL, OTHER (default)
- *   - 'type'     : ANIME, MANGA, etc. based on media type
- *   - 'character': each media appears under every character it features
- *   - 'staff'    : each media appears under every staff member credited
- *   - 'studio'   : each media appears under every studio credited
- *
- * Media with no groupable key for the chosen dimension fall into 'OTHER'.
- */
-export function groupResults(media, { groupBy = 'format' } = {}) {
-  const items = Array.isArray(media) ? media : []
-  const groups = new Map()
-
-  for (const item of items) {
-    if (!item) continue
-    let keys = []
-
-    if (groupBy === 'type') {
-      keys = [item.type ?? 'OTHER']
-    } else if (groupBy === 'character') {
-      keys = (item.characters ?? []).map((c) => c.name ?? 'Unknown Character')
-      if (!keys.length) keys = ['OTHER']
-    } else if (groupBy === 'staff') {
-      keys = (item.staff ?? []).map((s) => s.name ?? 'Unknown Staff')
-      if (!keys.length) keys = ['OTHER']
-    } else if (groupBy === 'studio') {
-      keys = (item.studios ?? []).map((s) => s ?? 'Unknown Studio')
-      if (!keys.length) keys = ['OTHER']
-    } else {
-      keys = [
-        { TV: 1, MOVIE: 1, OVA: 1, ONA: 1, SPECIAL: 1 }[item.format ?? ''] &&
-          item.format !== 'TV_SHORT'
-          ? item.format
-          : 'OTHER',
-      ]
-    }
-
-    for (const key of keys) {
-      if (!groups.has(key)) groups.set(key, [])
-      groups.get(key).push(item)
-    }
+/** Groups results into the categories the UI shows (AV-070). */
+export function groupResults(media) {
+  const groups = { TV: [], MOVIE: [], OVA: [], ONA: [], SPECIAL: [], OTHER: [] }
+  for (const item of Array.isArray(media) ? media : []) {
+    const key = Object.hasOwn(groups, item?.format ?? '') && item.format !== 'TV_SHORT' ? item.format : 'OTHER'
+    groups[key].push(item)
   }
-
-  return [...groups.entries()]
+  return Object.entries(groups)
     .filter(([, items]) => items.length > 0)
-    .map(([key, items]) => ({ format: key, items }))
+    .map(([format, items]) => ({ format, items }))
 }
 
 /**
@@ -519,118 +353,4 @@ export function clampResultCap(value) {
   const n = Number(value)
   if (!Number.isFinite(n)) return RESULT_CAP.defaultPerPage
   return Math.min(RESULT_CAP.max, Math.max(RESULT_CAP.min, Math.trunc(n)))
-}
-
-/**
- * In-memory full-text index over local media catalog records (AV-075).
- *
- * Indexes title, romaji, english, native and aliases into per-term posting
- * lists so local-catalog search is fast, ranked and explainable without a
- * network round-trip. Pure and deterministic; rebuilt from the local store
- * whenever the catalog changes.
- */
-export class FullTextIndex {
-  constructor({ fieldWeights = { title: 3, romaji: 2, english: 2, native: 1, aliases: 1 } } = {}) {
-    this.fieldWeights = fieldWeights
-    this.docs = new Map()   // id -> { id, title, romaji, english, native, aliases }
-    this.postings = new Map() // term -> Map(docId -> { fields: Set<string> })
-  }
-
-  /** Tokenizes text into lowercase searchable terms. */
-  static tokenize(text) {
-    return String(text ?? '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
-  }
-
-  /** Adds or replaces a single document in the index. */
-  add(doc) {
-    const id = Number(doc?.id)
-    if (!Number.isInteger(id) || id <= 0) return
-    this.remove(id)
-
-    const entry = {
-      id,
-      title: doc.title ?? null,
-      romaji: doc.romaji ?? null,
-      english: doc.english ?? null,
-      native: doc.native ?? null,
-      aliases: Array.isArray(doc.aliases) ? doc.aliases : [],
-    }
-    this.docs.set(id, entry)
-
-    const fields = [
-      ['title', entry.title],
-      ['romaji', entry.romaji],
-      ['english', entry.english],
-      ['native', entry.native],
-      ['aliases', entry.aliases.join(' ')],
-    ]
-    for (const [name, value] of fields) {
-      for (const term of FullTextIndex.tokenize(value)) {
-        if (!this.postings.has(term)) this.postings.set(term, new Map())
-        const docPostings = this.postings.get(term)
-        if (!docPostings.has(id)) docPostings.set(id, { fields: new Set() })
-        docPostings.get(id).fields.add(name)
-      }
-    }
-  }
-
-  /** Removes a document from the index by id. */
-  remove(id) {
-    id = Number(id)
-    this.docs.delete(id)
-    for (const [term, docPostings] of this.postings) {
-      docPostings.delete(id)
-      if (docPostings.size === 0) this.postings.delete(term)
-    }
-  }
-
-  /** Rebuilds the index from an array of documents. */
-  build(docs) {
-    this.docs.clear()
-    this.postings.clear()
-    for (const doc of docs || []) this.add(doc)
-  }
-
-  /**
-   * Searches the index for `query`, returning results ranked by relevance.
-   * Each result carries the document fields plus `score` and `matchedTerms`.
-   */
-  search(query, { limit = 50 } = {}) {
-    const needle = normalizeForSearch(query)
-    const terms = needle ? FullTextIndex.tokenize(needle) : []
-    if (!terms.length) return []
-
-    const candidateIds = new Set()
-    for (const term of terms) {
-      const docPostings = this.postings.get(term)
-      if (docPostings) for (const id of docPostings.keys()) candidateIds.add(id)
-    }
-
-    const results = []
-    for (const id of candidateIds) {
-      const doc = this.docs.get(id)
-      if (!doc) continue
-      let score = 0
-      const matchedTerms = []
-      for (const term of terms) {
-        const posting = this.postings.get(term)?.get(id)
-        if (!posting) continue
-        matchedTerms.push(term)
-        let bestWeight = 0
-        for (const field of posting.fields) {
-          const weight = this.fieldWeights[field] ?? 0
-          if (weight > bestWeight) bestWeight = weight
-        }
-        score += bestWeight
-      }
-      if (matchedTerms.length) {
-        results.push({ ...doc, score, matchedTerms })
-      }
-    }
-
-    results.sort(
-      (a, b) => b.score - a.score || (a.title ?? '').localeCompare(b.title ?? ''),
-    )
-    return results.slice(0, Number.isFinite(limit) ? limit : 50)
-  }
 }

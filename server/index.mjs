@@ -9,10 +9,8 @@ import * as browse from './browse.mjs'
 import * as explore from './explore.mjs'
 import * as searchEngine from './search.mjs'
 import * as detailEngine from './detail.mjs'
-import { recordRefreshStatus } from './catalog.mjs'
 import * as kv from './kv.mjs'
 import * as listStore from './listStore.mjs'
-import * as identifiers from './identifiers.mjs'
 import { exportListJson, exportListCsv } from './listExport.mjs'
 import { pickListEntry } from './listRandom.mjs'
 import { sortListEntries } from './listSort.mjs'
@@ -54,7 +52,7 @@ const APP_CSP = [
   "form-action 'self'",
 ].join('; ')
 
-await Promise.all([store.init(), settings.init(), resolver.init(), imdb.init(), kv.init(), listStore.init(), identifiers.init()])
+await Promise.all([store.init(), settings.init(), resolver.init(), imdb.init(), kv.init(), listStore.init()])
 await library.init()
 await downloads.init()
 
@@ -126,7 +124,7 @@ app.use('/api', (req, res, next) => {
     res.status(403).json({ error: 'Cross-origin state-changing requests are not allowed' })
     return
   }
-  if (API_TOKEN && req.path !== '/health' && req.path !== '/ready') {
+  if (API_TOKEN && req.path !== '/health') {
     const authHeader = String(req.headers.authorization ?? '')
     const bearer = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : ''
     const headerToken = String(req.headers['x-api-token'] ?? '').trim()
@@ -301,34 +299,6 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, season: anilist.currentSeason() })
 })
 
-// Liveness (/api/health) is separate from readiness. All persistent stores are
-// initialized before the listener starts; this runtime check confirms that the
-// bookmark store remains initialized and the shared library directory exists.
-app.get('/api/ready', (req, res) => {
-  const libraryDir = settings.resolveLibraryDir()
-  const checks = {
-    bookmarkStore: store.isReady(),
-    library: Boolean(libraryDir) && existsSync(libraryDir),
-  }
-  const ready = Object.values(checks).every(Boolean)
-  res.status(ready ? 200 : 503).json({ ready, checks })
-})
-
-/** AV-002: provider identifier registry (read-only API for diagnostics). */
-app.get('/api/identifiers/lookup', wrap(async (req, res) => {
-  const mediaId = await identifiers.find(req.query.provider, req.query.id)
-  if (mediaId === null) {
-    res.status(404).json({ error: 'External identifier not found' })
-    return
-  }
-  res.json({ mediaId, ids: await identifiers.get(mediaId) })
-}))
-
-app.get('/api/identifiers/:mediaId', wrap(async (req, res) => {
-  const ids = await identifiers.get(req.params.mediaId)
-  res.json({ mediaId: Number(req.params.mediaId), ids: ids ?? {} })
-}))
-
 app.get(
   '/api/season',
   wrap(async (req, res) => {
@@ -337,33 +307,6 @@ app.get(
     const page = clamp(Number(req.query.page) || 1, 1, 25)
     const data = await anilist.getSeason({ season, year, sort, page })
     res.json({ season, year, sort, page, hasNextPage: data.hasNextPage, total: data.total, media: data.media })
-  }),
-)
-
-// AV-042: seasonal comparison view — compare two or more seasons side by side.
-app.get(
-  '/api/seasons/compare',
-  wrap(async (req, res) => {
-    const seasons = []
-    const rawSeasons = Array.isArray(req.query.season) ? req.query.season : [req.query.season]
-    const rawYears = Array.isArray(req.query.year) ? req.query.year : [req.query.year]
-    for (let i = 0; i < rawSeasons.length; i += 1) {
-      seasons.push({ season: rawSeasons[i], year: rawYears[i] })
-    }
-    const comparison = await anilist.compareSeasons(seasons)
-    res.json(comparison)
-  }),
-)
-
-// AV-043: calendar-style seasonal release overview — titles grouped by start date.
-app.get(
-  '/api/season/calendar',
-  wrap(async (req, res) => {
-    const { season, year } = anilist.resolveSeason(req.query.season, req.query.year)
-    const sort = anilist.resolveSort(req.query.sort)
-    const page = clamp(Number(req.query.page) || 1, 1, 25)
-    const data = await anilist.seasonCalendar({ season, year, sort, page })
-    res.json(data)
   }),
 )
 
@@ -413,11 +356,8 @@ app.get(
     const page = clamp(Number(req.query.page) || 1, 1, 10)
     const search = String(req.query.q ?? '').trim().slice(0, 60)
     const sort = String(req.query.sort ?? '')
-    const type = ['animation', 'producer', 'all'].includes(String(req.query.type ?? ''))
-      ? String(req.query.type)
-      : 'all'
-    const data = await anilist.studios({ page, search, sort, type })
-    res.json({ ...data, type })
+    const data = await anilist.studios({ page, search, sort })
+    res.json(data)
   }),
 )
 
@@ -562,80 +502,6 @@ app.get(
   }),
 )
 
-// Server-side full-text index over the local catalog (bookmarked + listed
-// media). Rebuilt on demand and whenever the bookmark store mutates (AV-075).
-let catalogIndex = new searchEngine.FullTextIndex()
-let catalogIndexDirty = true
-
-function ensureCatalogIndex() {
-  if (!catalogIndexDirty) return catalogIndex
-  const docs = []
-  const seen = new Set()
-  const collect = (media) => {
-    if (!media || !media.id || seen.has(media.id)) return
-    seen.add(media.id)
-    docs.push(media)
-  }
-  for (const entry of store.list()) collect(entry.media)
-  const summary = listStore.summary()
-  for (const list of [...summary.statuses, ...summary.lists]) {
-    for (const entry of listStore.readList(list.id).entries) collect(entry.media)
-  }
-  catalogIndex.build(docs)
-  catalogIndexDirty = false
-  return catalogIndex
-}
-
-function markCatalogIndexDirty() {
-  catalogIndexDirty = true
-}
-
-app.get(
-  '/api/search/bookmarks',
-  wrap(async (req, res) => {
-    const q = String(req.query.q ?? '').trim()
-
-    // Collect bookmarked media items (used for totals only).
-    const bookmarked = store.list().map((entry) => entry.media)
-
-    // Collect media from all custom lists and status lists.
-    const listed = []
-    const summary = listStore.summary()
-    for (const list of [...summary.statuses, ...summary.lists]) {
-      const entries = listStore.readList(list.id).entries
-      for (const entry of entries) {
-        listed.push(entry.media)
-      }
-    }
-
-    // Deduplicate by mediaId (a title can be both bookmarked and listed).
-    const seen = new Set()
-    const all = []
-    for (const media of [...bookmarked, ...listed]) {
-      if (media && media.id && !seen.has(media.id)) {
-        seen.add(media.id)
-        all.push(media)
-      }
-    }
-
-    // Ranked full-text search over the local catalog index (AV-075).
-    const hits = q ? ensureCatalogIndex().search(q) : []
-    const byId = new Map(all.map((m) => [m.id, m]))
-    const matches = hits.map((hit) => byId.get(hit.id)).filter(Boolean)
-
-    res.json({
-      query: q,
-      count: matches.length,
-      totalBookmarked: bookmarked.length,
-      totalListed: listed.length,
-      items: matches.slice(0, 200).map((item) => ({
-        ...item,
-        highlight: searchEngine.highlightSegments(item.title || '', q),
-      })),
-    })
-  }),
-)
-
 app.get(
   '/api/search/options',
   wrap(async (_req, res) => {
@@ -694,7 +560,6 @@ app.get(
       relations: detailEngine.groupRelations(
         (media.rawRelations ?? media.relations ?? []),
       ),
-      watchOrder: detailEngine.buildWatchOrder(media, media.rawRelations ?? media.relations ?? []),
       timeline: detailEngine.buildTimeline(media.timelineNodes ?? [], String(req.query.order ?? 'release')),
       scores: detailEngine.scoreDistribution(media.scoreBuckets),
       scoreMean: detailEngine.distributionMean(media.scoreBuckets),
@@ -704,17 +569,7 @@ app.get(
       overview: detailEngine.spoilerFreeOverview(media.description),
       hasSpoilers: detailEngine.hasSpoilers(media.description),
       sections: detailEngine.DETAIL_SECTIONS,
-      refreshStatus: recordRefreshStatus(media),
     })
-  }),
-)
-
-// AV-025: admin metadata inspector — compare raw provider payload against the
-// normalized catalog record for a single media id.
-app.get(
-  '/api/admin/metadata/:id',
-  wrap(async (req, res) => {
-    res.json(await anilist.getMediaInspection(req.params.id))
   }),
 )
 
@@ -740,66 +595,6 @@ app.put(
     if (payload) await kv.set(`notes:${id}`, payload)
     else await kv.remove(`notes:${id}`)
     res.json({ mediaId: id, note: payload?.note ?? '', updatedAt: payload?.updatedAt ?? null })
-  }),
-)
-
-// Watch-order ordering notes (AV-084). Stored as a JSON map of related media
-// id -> user note, namespaced by the current media id.
-app.get(
-  '/api/anime/:id/watchorder-notes',
-  wrap(async (req, res) => {
-    const id = Number(req.params.id)
-    if (!Number.isInteger(id) || id <= 0) throw Object.assign(new Error('Invalid anime id'), { status: 400 })
-    const notes = await kv.get(`watchorder:${id}`, {})
-    res.json({ mediaId: id, notes: typeof notes === 'object' && notes !== null ? notes : {} })
-  }),
-)
-
-app.put(
-  '/api/anime/:id/watchorder-notes',
-  wrap(async (req, res) => {
-    const id = Number(req.params.id)
-    if (!Number.isInteger(id) || id <= 0) throw Object.assign(new Error('Invalid anime id'), { status: 400 })
-    const notes = req.body?.notes
-    if (!notes || typeof notes !== 'object' || Array.isArray(notes)) {
-      throw Object.assign(new Error('Notes must be an object'), { status: 400 })
-    }
-    const clean = {}
-    for (const [key, value] of Object.entries(notes)) {
-      const mediaId = Number(key)
-      if (Number.isInteger(mediaId) && mediaId > 0 && typeof value === 'string') {
-        clean[mediaId] = value.slice(0, 500)
-      }
-    }
-    await kv.set(`watchorder:${id}`, clean)
-    res.json({ mediaId: id, notes: clean })
-  }),
-
-)
-
-// Character detail page data (AV-085).
-app.get(
-  '/api/character/:id',
-  wrap(async (req, res) => {
-    const character = await anilist.getCharacter(req.params.id)
-    if (!character) {
-      res.status(404).json({ error: 'Character not found' })
-      return
-    }
-    res.json(character)
-  }),
-)
-
-// Staff detail page data (AV-086).
-app.get(
-  '/api/staff/:id',
-  wrap(async (req, res) => {
-    const staff = await anilist.getStaff(req.params.id)
-    if (!staff) {
-      res.status(404).json({ error: 'Staff not found' })
-      return
-    }
-    res.json(staff)
   }),
 )
 
@@ -854,33 +649,29 @@ app.post('/api/lists/migrate', limitMutations, wrap(async (_req, res) => {
   res.json(await listStore.migrateBookmarks(store.list()))
 }))
 app.get('/api/lists/:id/random', wrap(async (req, res) => {
-  const list = listStore.readList(req.params.id)
+  const list = listStore.readList(req.params.id, { order: req.query.order })
   res.setHeader('Cache-Control', 'no-store')
   res.json({ pick: pickListEntry(list.entries) })
 }))
 app.get('/api/lists/:id/export', wrap(async (req, res) => {
   const format = String(req.query.format ?? 'json').toLowerCase()
   if (format !== 'json' && format !== 'csv') throw Object.assign(new Error('Unsupported export format'), { status: 400 })
-  const list = listStore.readList(req.params.id)
+  const list = listStore.readList(req.params.id, { order: req.query.order })
   res.setHeader('Cache-Control', 'no-store')
   res.setHeader('Content-Disposition', `attachment; filename="animevault-list.${format}"`)
   res.type(format === 'csv' ? 'text/csv' : 'application/json')
   res.send(format === 'csv' ? exportListCsv(list) : exportListJson(list))
 }))
 app.get('/api/lists/:id', wrap(async (req, res) => {
-  const list = listStore.readList(req.params.id, { order: String(req.query.order ?? 'added') })
+  const list = listStore.readList(req.params.id, { order: req.query.order })
   const sort = String(req.query.sort ?? 'added')
-  res.json({ ...list, entries: list.order === 'manual' ? list.entries : sortListEntries(list.entries, sort), sort, order: list.order })
+  res.json({ ...list, entries: sortListEntries(list.entries, sort), sort })
 }))
 app.delete('/api/lists/:id', limitMutations, wrap(async (req, res) => {
-  const result = await listStore.deleteList(req.params.id)
-  markCatalogIndexDirty()
-  res.json(result)
+  res.json(await listStore.deleteList(req.params.id))
 }))
 app.post('/api/lists/:id/entries', limitMutations, wrap(async (req, res) => {
-  const result = await listStore.add(req.params.id, req.body?.media)
-  markCatalogIndexDirty()
-  res.json({ entry: result })
+  res.json({ entry: await listStore.add(req.params.id, req.body?.media) })
 }))
 app.put('/api/lists/:id/entries/:mediaId/rating', limitMutations, wrap(async (req, res) => {
   res.json(await listStore.setRating(req.params.id, req.params.mediaId, req.body))
@@ -888,24 +679,19 @@ app.put('/api/lists/:id/entries/:mediaId/rating', limitMutations, wrap(async (re
 app.put('/api/lists/:id/entries/:mediaId/note', limitMutations, wrap(async (req, res) => {
   res.json(await listStore.setNote(req.params.id, req.params.mediaId, req.body?.note))
 }))
+app.delete('/api/lists/:id/entries/:mediaId', limitMutations, wrap(async (req, res) => {
+  res.json(await listStore.remove(req.params.id, req.params.mediaId))
+}))
 app.put('/api/lists/:id/order', limitMutations, wrap(async (req, res) => {
-  const result = await listStore.setOrder(req.params.id, req.body?.mediaIds)
-  markCatalogIndexDirty()
+  const result = await listStore.setOrder(req.params.id, req.body?.order)
   res.json(result)
 }))
 app.put('/api/lists/:id/cover', limitMutations, wrap(async (req, res) => {
   const result = await listStore.setCover(req.params.id, req.body?.cover)
-  markCatalogIndexDirty()
   res.json(result)
 }))
 app.put('/api/lists/:id/visibility', limitMutations, wrap(async (req, res) => {
   const result = await listStore.setVisibility(req.params.id, req.body?.visibility)
-  markCatalogIndexDirty()
-  res.json(result)
-}))
-app.delete('/api/lists/:id/entries/:mediaId', limitMutations, wrap(async (req, res) => {
-  const result = await listStore.remove(req.params.id, req.params.mediaId)
-  markCatalogIndexDirty()
   res.json(result)
 }))
 
@@ -992,14 +778,12 @@ app.post(
       return
     }
     const entry = store.add(media)
-    markCatalogIndexDirty()
     res.status(201).json({ item: entry, items: store.list() })
   }),
 )
 
 app.delete('/api/bookmarks/:id', (req, res) => {
   const removed = store.remove(req.params.id)
-  markCatalogIndexDirty()
   res.json({ removed, items: store.list() })
 })
 
@@ -1672,6 +1456,6 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     if (shuttingDownServer) return
     shuttingDownServer = true
-    void Promise.allSettled([downloads.shutdown(), store.flush(), listStore.flush(), identifiers.flush()]).finally(() => process.exit(0))
+    void Promise.allSettled([downloads.shutdown(), store.flush(), listStore.flush()]).finally(() => process.exit(0))
   })
 }

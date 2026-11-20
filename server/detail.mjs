@@ -4,8 +4,6 @@
 // Pure functions only. The shapes here are what the detail route returns, so
 // each one is verifiable without touching the network.
 
-import { normalizeFuzzyDate, normalizeNextEpisode } from './catalog.mjs'
-
 /** Relationship groups the detail page renders, in display order. */
 export const RELATION_GROUPS = [
   { key: 'SEQUEL', label: 'Sequel', order: 1 },
@@ -60,7 +58,7 @@ export function groupRelations(edges) {
       chapters: node.chapters ?? null,
       season: node.season ?? null,
       seasonYear: node.seasonYear ?? null,
-      startDate: normalizeFuzzyDate(node.startDate),
+      startDate: node.startDate ?? null,
       cover: node.coverImage?.large ?? node.coverImage?.extraLarge ?? null,
       averageScore: node.averageScore ?? null,
       relationType: key,
@@ -85,10 +83,10 @@ export function groupRelations(edges) {
 const seasonIndex = { WINTER: 0, SPRING: 1, SUMMER: 2, FALL: 3 }
 
 /** Sortable key for a media start date; undated entries sort last. */
-function chronologicalKey(item, startDate = normalizeFuzzyDate(item?.startDate)) {
-  const year = item?.seasonYear ?? startDate?.year ?? null
-  const month = startDate?.month ?? (item?.season ? seasonIndex[item.season] * 3 + 1 : null)
-  const day = startDate?.day ?? 1
+function chronologicalKey(item) {
+  const year = item?.seasonYear ?? item?.startDate?.year ?? null
+  const month = item?.startDate?.month ?? (item?.season ? seasonIndex[item.season] * 3 + 1 : null)
+  const day = item?.startDate?.day ?? 1
   if (!Number.isFinite(year)) return { sortable: false, value: Number.MAX_SAFE_INTEGER }
   return { sortable: true, value: year * 10_000 + (month ?? 1) * 100 + (day ?? 1) }
 }
@@ -103,9 +101,8 @@ export function buildTimeline(nodes, mode = 'release') {
   const items = (Array.isArray(nodes) ? nodes : [])
     .filter((node) => node && Number.isInteger(node.id))
     .map((node) => {
-      const startDate = normalizeFuzzyDate(node.startDate)
-      const { sortable, value } = chronologicalKey(node, startDate)
-      const releaseYear = node.seasonYear ?? startDate?.year ?? null
+      const { sortable, value } = chronologicalKey(node)
+      const releaseYear = node.seasonYear ?? node.startDate?.year ?? null
       return {
         id: node.id,
         title: node.title?.english || node.title?.romaji || node.title?.native || `#${node.id}`,
@@ -117,7 +114,7 @@ export function buildTimeline(nodes, mode = 'release') {
         sortable,
         key: value,
         releaseKey: Number.isFinite(releaseYear)
-          ? releaseYear * 10_000 + (startDate?.month ?? 6) * 100 + (startDate?.day ?? 15)
+          ? releaseYear * 10_000 + (node.startDate?.month ?? 6) * 100 + (node.startDate?.day ?? 15)
           : Number.MAX_SAFE_INTEGER,
       }
     })
@@ -201,7 +198,7 @@ export function buildEpisodeGuide(media, streamingEpisodes = []) {
   }
 
   const duration = Number.isFinite(media?.duration) && media.duration > 0 ? media.duration : null
-  const next = normalizeNextEpisode(media?.nextEpisode)
+  const next = media?.nextEpisode ?? null
   const episodes = []
   for (let number = 1; number <= total; number += 1) {
     const streamed = byNumber.get(number)
@@ -295,18 +292,15 @@ export function buildStatusTimeline(media) {
       display: formatDate(date),
     })
   }
-  const startDate = normalizeFuzzyDate(media?.startDate)
-  const endDate = normalizeFuzzyDate(media?.endDate)
-  const nextEpisode = normalizeNextEpisode(media?.nextEpisode)
-  push(startDate, 'Premiered', media?.season ? `${media.season} ${media.seasonYear ?? ''}`.trim() : null)
-  push(endDate, 'Finished airing', null)
+  push(media?.startDate, 'Premiered', media?.season ? `${media.season} ${media.seasonYear ?? ''}`.trim() : null)
+  push(media?.endDate, 'Finished airing', null)
   if (media?.status === 'NOT_YET_RELEASED') {
     events.push({ label: 'Announced', detail: null, sort: -1, display: 'TBA' })
   }
-  if (nextEpisode) {
-    const when = new Date(nextEpisode.airingAt * 1000)
+  if (media?.nextEpisode) {
+    const when = new Date(media.nextEpisode.airingAt * 1000)
     events.push({
-      label: `Episode ${nextEpisode.episode}`,
+      label: `Episode ${media.nextEpisode.episode}`,
       detail: 'next broadcast',
       // Sort by the real air date so it interleaves correctly with premieres;
       // the previous sentinel (9_999_999) was below any YYYYMMDD value and
@@ -319,13 +313,12 @@ export function buildStatusTimeline(media) {
 }
 
 export function formatDate(date) {
-  const normalized = normalizeFuzzyDate(date)
-  if (!normalized?.year) return 'TBA'
-  const month = normalized.month === null ? null : String(normalized.month).padStart(2, '0')
-  const day = normalized.day === null ? null : String(normalized.day).padStart(2, '0')
-  if (month && day) return `${normalized.year}-${month}-${day}`
-  if (month) return `${normalized.year}-${month}`
-  return String(normalized.year)
+  if (!date?.year) return 'TBA'
+  const month = Number.isFinite(date.month) ? String(date.month).padStart(2, '0') : null
+  const day = Number.isFinite(date.day) ? String(date.day).padStart(2, '0') : null
+  if (month && day) return `${date.year}-${month}-${day}`
+  if (month) return `${date.year}-${month}`
+  return String(date.year)
 }
 
 /** Section ids the detail page can reorder (AV-098). */
@@ -364,77 +357,6 @@ export function applySectionOrder(order) {
     if (!seen.has(section.id)) out.push(section)
   }
   return out
-}
-
-/**
- * Builds a recommended watch order from a media's relations (AV-084).
- *
- * Orders entries: PREQUELs first, then the current title, then SEQUELs,
- * then SIDE_STORYs and SPIN_OFFs, then anything else. Within each group,
- * entries are sorted by air date (seasonYear, season, id).
- *
- * Returns entries with a recommended position and an optional user note.
- */
-export function buildWatchOrder(media, relations) {
-  const seasonIndex = { WINTER: 0, SPRING: 1, SUMMER: 2, FALL: 3 }
-  const sortKey = (e) =>
-    (e.seasonYear ?? 9999) * 12 + (seasonIndex[e.season] ?? 12) + e.id / 100000
-
-  const current = {
-    id: media.id,
-    title: media.title,
-    relationType: 'CURRENT',
-    position: 0,
-    format: media.format ?? null,
-    seasonYear: media.seasonYear ?? null,
-    season: media.season ?? null,
-    cover: media.cover ?? null,
-    episodes: media.episodes ?? null,
-    note: null,
-  }
-
-  const groups = { PREQUEL: [], SEQUEL: [], SIDE_STORY: [], SPIN_OFF: [], OTHER: [] }
-  for (const group of Array.isArray(relations) ? relations : []) {
-    for (const item of group.items) {
-      const entry = {
-        id: item.id,
-        title: item.title,
-        relationType: item.relationType,
-        position: 0,
-        format: item.format ?? null,
-        seasonYear: item.seasonYear ?? null,
-        season: item.season ?? null,
-        cover: item.cover ?? null,
-        episodes: item.episodes ?? null,
-        note: null,
-      }
-      const key =
-        item.relationType === 'PREQUEL'
-          ? 'PREQUEL'
-          : item.relationType === 'SEQUEL'
-            ? 'SEQUEL'
-            : item.relationType === 'SIDE_STORY'
-              ? 'SIDE_STORY'
-              : item.relationType === 'SPIN_OFF'
-                ? 'SPIN_OFF'
-                : 'OTHER'
-      groups[key].push(entry)
-    }
-  }
-
-  const ordered = [
-    ...groups.PREQUEL.sort((a, b) => sortKey(a) - sortKey(b)),
-    current,
-    ...groups.SEQUEL.sort((a, b) => sortKey(a) - sortKey(b)),
-    ...groups.SIDE_STORY.sort((a, b) => sortKey(a) - sortKey(b)),
-    ...groups.SPIN_OFF.sort((a, b) => sortKey(a) - sortKey(b)),
-    ...groups.OTHER.sort((a, b) => sortKey(a) - sortKey(b)),
-  ]
-
-  return ordered.map((entry, index) => ({
-    ...entry,
-    position: index + 1,
-  }))
 }
 
 /** Printable information sheet (AV-100) as plain markdown-ish lines. */

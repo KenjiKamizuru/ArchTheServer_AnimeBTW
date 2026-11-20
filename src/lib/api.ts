@@ -85,7 +85,6 @@ export interface StudioListResponse {
   page: number
   hasNextPage: boolean
   total: number
-  type: 'all' | 'animation' | 'producer'
 }
 
 export interface StudioFilmographyResponse {
@@ -173,29 +172,6 @@ export interface AdvancedSearchResponse {
   alternatives: { label: string; query: string; kind: string }[]
 }
 
-export interface HighlightSegment {
-  text: string
-  match: boolean
-}
-
-/**
- * Splits `text` into plain/matched segments so the UI can highlight the part
- * that matched `query`. Client-side mirror of `searchEngine.highlightSegments`
- * (AV-071).
- */
-export function highlightSegments(text: string, query: string): HighlightSegment[] {
-  const source = String(text ?? '')
-  const needle = String(query ?? '').trim()
-  if (!needle) return [{ text: source, match: false }]
-  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const re = new RegExp(`(${escaped})`, 'ig')
-  const parts = source.split(re).filter((part) => part.length > 0)
-  return parts.map((part) => ({
-    text: part,
-    match: part.toLowerCase() === needle.toLowerCase(),
-  }))
-}
-
 export interface SearchLibraryItem {
   id: string
   fileName: string
@@ -227,46 +203,6 @@ export interface SeasonResponse {
   media: Media[]
 }
 
-export interface SeasonComparison {
-  season: string
-  year: number
-  label: string
-  count: number
-  returned: number
-  averageScore: number | null
-  topFormats: [string, number][]
-  topGenres: [string, number][]
-  topTitles: { id: number; title: string; score: number | null; format: string | null }[]
-  media: Media[]
-}
-
-export interface SeasonComparisonResponse {
-  seasons: SeasonComparison[]
-  compared: number
-  sharedTitleIds: number[]
-  sharedCount: number
-}
-
-export interface SeasonCalendarDay {
-  date: string
-  year: number
-  month: number
-  day: number
-  media: Media[]
-}
-
-export interface SeasonCalendarResponse {
-  season: string
-  year: number
-  total: number
-  returned: number
-  hasNextPage: boolean
-  media: Media[]
-  byDate: Record<string, Media[]>
-  dates: string[]
-  calendar: SeasonCalendarDay[]
-}
-
 interface CacheEntry {
   at: number
   data: unknown
@@ -284,10 +220,10 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T
 }
 
-async function get<T>(url: string, useCache = true, signal?: AbortSignal): Promise<T> {
+async function get<T>(url: string, useCache = true): Promise<T> {
   const hit = cache.get(url)
   if (useCache && hit && Date.now() - hit.at < TTL) return hit.data as T
-  const data = await request<T>(url, signal ? { signal } : undefined)
+  const data = await request<T>(url)
   cache.set(url, { at: Date.now(), data })
   return data
 }
@@ -311,26 +247,6 @@ export const api = {
     return get<SeasonResponse>(`/api/season${query ? `?${query}` : ''}`)
   },
 
-  compareSeasons(seasons: Array<{ season?: string; year?: number }>) {
-    const qs = new URLSearchParams()
-    for (const { season, year } of seasons) {
-      if (season) qs.append('season', season)
-      if (year) qs.append('year', String(year))
-    }
-    const query = qs.toString()
-    return get<SeasonComparisonResponse>(`/api/seasons/compare${query ? `?${query}` : ''}`)
-  },
-
-  seasonCalendar(params: { season?: string; year?: number; sort?: string; page?: number } = {}) {
-    const qs = new URLSearchParams()
-    if (params.season) qs.set('season', params.season)
-    if (params.year) qs.set('year', String(params.year))
-    if (params.sort) qs.set('sort', params.sort)
-    if (params.page && params.page > 1) qs.set('page', String(params.page))
-    const query = qs.toString()
-    return get<SeasonCalendarResponse>(`/api/season/calendar${query ? `?${query}` : ''}`)
-  },
-
   browse(filters: Record<string, string | number | boolean | undefined | null>) {
     const qs = new URLSearchParams()
     for (const [key, value] of Object.entries(filters)) {
@@ -351,17 +267,11 @@ export const api = {
     return get<DiscoverPick>(`/api/discover/${kind}${query ? `?${query}` : ''}`, false)
   },
 
-  studios(params: {
-    page?: number
-    q?: string
-    sort?: 'favourites' | 'name'
-    type?: 'all' | 'animation' | 'producer'
-  } = {}) {
+  studios(params: { page?: number; q?: string; sort?: 'favourites' | 'name' } = {}) {
     const qs = new URLSearchParams()
     if (params.page && params.page > 1) qs.set('page', String(params.page))
     if (params.q) qs.set('q', params.q)
     if (params.sort) qs.set('sort', params.sort)
-    if (params.type && params.type !== 'all') qs.set('type', params.type)
     const query = qs.toString()
     return get<StudioListResponse>(`/api/studios${query ? `?${query}` : ''}`)
   },
@@ -407,19 +317,19 @@ export const api = {
     return get<{ media: Media[]; hasNextPage: boolean }>(`/api/search?q=${encodeURIComponent(q)}&page=${page}`)
   },
 
-  suggest(q: string, signal?: AbortSignal) {
-    return get<SuggestResponse>(`/api/search/suggest?q=${encodeURIComponent(q)}`, false, signal)
+  suggest(q: string) {
+    return get<SuggestResponse>(`/api/search/suggest?q=${encodeURIComponent(q)}`, false)
   },
 
-  searchAdvanced(q: string, params: { page?: number; perPage?: number } = {}, signal?: AbortSignal) {
+  searchAdvanced(q: string, params: { page?: number; perPage?: number } = {}) {
     const qs = new URLSearchParams({ q })
     if (params.page && params.page > 1) qs.set('page', String(params.page))
     if (params.perPage) qs.set('perPage', String(params.perPage))
-    return get<AdvancedSearchResponse>(`/api/search/advanced?${qs.toString()}`, false, signal)
+    return get<AdvancedSearchResponse>(`/api/search/advanced?${qs.toString()}`, false)
   },
 
-  searchLibrary(q: string, signal?: AbortSignal) {
-    return get<SearchLibraryResponse>(`/api/search/library?q=${encodeURIComponent(q)}`, false, signal)
+  searchLibrary(q: string) {
+    return get<SearchLibraryResponse>(`/api/search/library?q=${encodeURIComponent(q)}`, false)
   },
 
   searchOptions() {
@@ -436,32 +346,12 @@ export const api = {
     return get<MediaDetail>(`/api/anime/${id}${query ? `?${query}` : ''}`, !query)
   },
 
-  character(id: number) {
-    return get<{ id: number; name: string; nativeName: string | null; image: string | null; siteUrl: string | null; description: string | null; gender: string | null; dateOfBirth: { year: number | null; month: number | null; day: number | null } | null; age: number | null; bloodType: string | null; isFavourite: boolean; media: { role: string; id: number; title: { romaji: string | null; english: string | null; native: string | null }; format: string | null; status: string | null; seasonYear: number | null; season: string | null; cover: string | null }[]; voiceActors: { id: number; name: string; nativeName: string | null; image: string | null; language: string | null; siteUrl: string | null }[] }>(`/api/character/${id}`, false)
-  },
-
-  staff(id: number) {
-    return get<{ id: number; name: string; nativeName: string | null; image: string | null; siteUrl: string | null; description: string | null; gender: string | null; dateOfBirth: { year: number | null; month: number | null; day: number | null } | null; age: number | null; bloodType: string | null; isFavourite: boolean; primaryOccupations: string[]; language: string | null; media: { role: string; id: number; title: { romaji: string | null; english: string | null; native: string | null }; format: string | null; status: string | null; seasonYear: number | null; season: string | null; cover: string | null }[] }>(`/api/staff/${id}`, false)
-  },
-
   animeNotes(id: number) {
     return get<AnimeNote>(`/api/anime/${id}/notes`, false)
   },
 
   saveAnimeNotes(id: number, note: string) {
     return send<AnimeNote>(`/api/anime/${id}/notes`, 'PUT', { note })
-  },
-
-  animeWatchOrderNotes(id: number) {
-    return get<{ mediaId: number; notes: Record<number, string> }>(`/api/anime/${id}/watchorder-notes`, false)
-  },
-
-  saveAnimeWatchOrderNotes(id: number, notes: Record<number, string>) {
-    return send<{ mediaId: number; notes: Record<number, string> }>(
-      `/api/anime/${id}/watchorder-notes`,
-      'PUT',
-      { notes },
-    )
   },
 
   reportAnimeIssue(

@@ -7,11 +7,9 @@ import {
   ChevronDown,
   Clapperboard,
   Download,
-  Edit,
   Eye,
   EyeOff,
   FileText,
-  RefreshCw,
   Flag,
   Info,
   Layers,
@@ -32,7 +30,6 @@ import type {
   MediaDetail,
   RelationGroup,
   TimelineEntry,
-  WatchOrderEntry,
 } from '../types'
 import { CardSkeletons } from '../components/MediaCard'
 import { useDetail } from '../components/MediaModal'
@@ -158,89 +155,6 @@ function TimelineList({ entries }: { entries: TimelineEntry[] }) {
   )
 }
 
-/** One row in the watch-order list with an editable note (AV-084). */
-function WatchOrderRow({
-  entry,
-  note,
-  onNoteChange,
-}: {
-  entry: WatchOrderEntry
-  note: string
-  onNoteChange: (value: string) => void
-}) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(note)
-
-  return (
-    <li key={entry.id} className="flex items-center gap-3 px-3 py-2.5 transition hover:bg-white/[0.02]">
-      <span className="w-8 shrink-0 text-center text-[11px] font-medium text-white/30 tabular-nums">
-        {entry.position}.
-      </span>
-      <Link
-        to={`/anime/${entry.id}`}
-        className="flex items-center gap-2.5 shrink-0"
-      >
-        {entry.cover ? (
-          <img
-            src={entry.cover}
-            alt=""
-            loading="lazy"
-            className="h-10 w-7 shrink-0 rounded object-cover ring-1 ring-white/10"
-          />
-        ) : (
-          <span className="grid h-10 w-7 shrink-0 place-items-center rounded bg-white/5 text-white/20">
-            <Clapperboard size={11} />
-          </span>
-        )}
-      </Link>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-1.5">
-          <span className="truncate text-xs font-medium text-white">{entry.title}</span>
-          {entry.relationType !== 'CURRENT' ? (
-            <span className="text-[10px] text-white/30">{entry.relationType.toLowerCase()}</span>
-          ) : (
-            <span className="text-[10px] text-accent font-medium">current</span>
-          )}
-        </div>
-        <p className="mt-0.5 text-[10px] text-white/30">
-          {[formatMediaType(entry.format), entry.seasonYear ?? null, entry.episodes ? `${entry.episodes} ep` : null]
-            .filter(Boolean)
-            .join(' · ')}
-        </p>
-      </div>
-      <div className="flex shrink-0 items-center gap-1">
-        {editing ? (
-          <input
-            value={draft}
-            onChange={(event) => setDraft(event.target.value.slice(0, 500))}
-            onBlur={() => {
-              onNoteChange(draft)
-              setEditing(false)
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                onNoteChange(draft)
-                setEditing(false)
-              }
-            }}
-            className="rounded-lg bg-ink-850 px-2 py-1 text-[10px] text-white ring-1 ring-accent/60 outline-none focus:ring-accent"
-          />
-        ) : (
-          <button
-            type="button"
-            onClick={() => setEditing(true)}
-            aria-label={`Edit note for ${entry.title}`}
-            className="rounded-md p-1 text-white/40 transition hover:text-accent"
-            title={note || 'Add a note about where this fits in the watch order'}
-          >
-            <Edit size={11} />
-          </button>
-        )}
-      </div>
-    </li>
-  )
-}
-
 export default function AnimeDetailPage() {
   const { id } = useParams()
   const mediaId = Number(id)
@@ -258,9 +172,6 @@ export default function AnimeDetailPage() {
   const [note, setNote] = useState<AnimeNote | null>(null)
   const [noteDraft, setNoteDraft] = useState('')
   const [noteSaving, setNoteSaving] = useState(false)
-  const [watchOrderNotes, setWatchOrderNotes] = useState<Record<number, string>>({})
-  const [watchOrderNotesLoading, setWatchOrderNotesLoading] = useState(false)
-  const [watchOrderDrafts, setWatchOrderDrafts] = useState<Record<number, string>>({})
   const [expandedSynopsis, setExpandedSynopsis] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
   const [reportField, setReportField] = useState('title')
@@ -307,42 +218,6 @@ export default function AnimeDetailPage() {
       alive = false
     }
   }, [mediaId])
-
-  useEffect(() => {
-    if (!Number.isInteger(mediaId) || mediaId <= 0) return
-    let alive = true
-    setWatchOrderNotesLoading(true)
-    api
-      .animeWatchOrderNotes(mediaId)
-      .then((res) => {
-        if (!alive) return
-        setWatchOrderNotes(res.notes ?? {})
-        setWatchOrderDrafts({ ...(res.notes ?? {}) })
-      })
-      .catch(() => {
-        /* watch order notes are optional */
-      })
-      .finally(() => {
-        if (alive) setWatchOrderNotesLoading(false)
-      })
-    return () => {
-      alive = false
-    }
-  }, [mediaId])
-
-  async function saveWatchOrderNotes() {
-    if (!Number.isInteger(mediaId) || mediaId <= 0) return
-    setWatchOrderNotesLoading(true)
-    try {
-      const res = await api.saveAnimeWatchOrderNotes(mediaId, watchOrderDrafts)
-      setWatchOrderNotes(res.notes ?? {})
-      toast('Watch-order notes saved')
-    } catch (err) {
-      toast(err instanceof Error ? err.message : 'Could not save watch-order notes', 'err')
-    } finally {
-      setWatchOrderNotesLoading(false)
-    }
-  }
 
   const saved = useMemo(
     () => Boolean(detail && bookmarks.some((b) => b.mediaId === detail.id)),
@@ -483,7 +358,6 @@ export default function AnimeDetailPage() {
   const relations = detail.relations ?? []
   const timeline = detail.timeline ?? []
   const scores = detail.scores ?? null
-  const refreshStatus = detail.refreshStatus
   const synopsisText = detail.synopsis?.text ?? ''
   const synopsisTooLong = synopsisText.length > 420
   const shownSynopsis =
@@ -754,46 +628,6 @@ export default function AnimeDetailPage() {
             )}
           </SectionCard>
 
-          {/* Watch order (AV-084) */}
-          {detail.watchOrder?.length ? (
-            <SectionCard
-              id="watchorder"
-              title="Recommended watch order"
-              icon={ListOrdered}
-              action={
-                watchOrderNotesLoading ? (
-                  <Loader2 size={11} className="animate-spin" />
-                ) : (
-                  <button
-                    type="button"
-                    onClick={saveWatchOrderNotes}
-                    disabled={!watchOrderNotesLoading && JSON.stringify(watchOrderDrafts) === JSON.stringify(watchOrderNotes)}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-white/6 px-2.5 py-1 text-[11px] text-white/70 ring-1 ring-white/10 transition hover:text-white disabled:opacity-40"
-                  >
-                    <Save size={11} /> Save notes
-                  </button>
-                )
-              }
-            >
-              <p className="mt-0 text-[10px] text-white/25">
-                Watch prequels first, then the current title, then sequels, side stories and spin-offs.
-              </p>
-              <ol className="mt-2 space-y-1">
-                {detail.watchOrder.map((entry) => (
-                  <li key={entry.id}>
-                    <WatchOrderRow
-                      entry={entry}
-                      note={watchOrderDrafts[entry.id] ?? ''}
-                      onNoteChange={(value) => {
-                        setWatchOrderDrafts((prev) => ({ ...prev, [entry.id]: value }))
-                      }}
-                    />
-                  </li>
-                ))}
-              </ol>
-            </SectionCard>
-          ) : null}
-
           {/* Franchise timeline (AV-083) */}
           {timeline.length > 1 ? (
             <SectionCard
@@ -839,9 +673,7 @@ export default function AnimeDetailPage() {
                       </span>
                     )}
                     <span className="min-w-0 flex-1">
-                      <Link to={`/character/${character.id}`} className="block truncate text-[11px] text-white/80 transition hover:text-accent">
-                        {character.name}
-                      </Link>
+                      <span className="block truncate text-[11px] text-white/80">{character.name}</span>
                       <span className="block truncate text-[10px] text-white/30">
                         {character.role.toLowerCase()}
                         {character.voiceActors[0] ? ` · ${character.voiceActors[0].name}` : ''}
@@ -867,9 +699,7 @@ export default function AnimeDetailPage() {
                       </span>
                     )}
                     <span className="min-w-0 flex-1">
-                      <Link to={`/staff/${member.id}`} className="block truncate text-[11px] text-white/80 transition hover:text-accent">
-                        {member.name}
-                      </Link>
+                      <span className="block truncate text-[11px] text-white/80">{member.name}</span>
                       <span className="block truncate text-[10px] text-white/30">{member.role ?? member.occupations.join(', ')}</span>
                     </span>
                   </li>
@@ -914,58 +744,6 @@ export default function AnimeDetailPage() {
                   </li>
                 ))}
               </ol>
-            </SectionCard>
-          ) : null}
-
-          {refreshStatus ? (
-            <SectionCard id="freshness" title="Metadata freshness" icon={RefreshCw}>
-              <div className="space-y-1">
-                <p className={`flex items-center gap-1 text-[11px] font-semibold ${
-                  refreshStatus.needsRefresh ? 'text-amber-300' : 'text-emerald-300'
-                }`}>
-                  {refreshStatus.needsRefresh
-                    ? `${refreshStatus.staleFields.length} field${refreshStatus.staleFields.length !== 1 ? 's' : ''} need refresh`
-                    : 'All metadata fields are current'}
-                </p>
-                {refreshStatus.needsRefresh && (
-                  <ul className="space-y-0.5">
-                    {refreshStatus.staleFields.map((field) => {
-                      const state = refreshStatus.freshness?.[field] ?? 'unknown'
-                      const meta = detail.fieldMetadata?.[field]
-                      const lastRefreshed = meta?.lastRefreshedAt
-                        ? new Date(meta.lastRefreshedAt).toLocaleString(undefined, {
-                            month: 'short',
-                            day: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })
-                        : null
-                      return (
-                        <li key={field} className="flex items-baseline gap-2 text-[10px]">
-                          <span className="w-24 shrink-0 truncate text-white/50">{field}</span>
-                          <span
-                            className={`w-16 shrink-0 text-[9px] uppercase tracking-wider font-semibold ${
-                              state === 'stale' ? 'text-amber-300'
-                              : state === 'never_refreshed' ? 'text-red-300'
-                              : 'text-white/40'
-                            }`}
-                          >
-                            {state.replace('_', ' ')}
-                          </span>
-                          {lastRefreshed && (
-                            <span className="min-w-0 flex-1 text-white/30">refreshed {lastRefreshed}</span>
-                          )}
-                        </li>
-                      )
-                    })}
-                  </ul>
-                )}
-                {!refreshStatus.needsRefresh && (
-                  <p className="text-[10px] text-white/40">
-                    No fields are stale or missing refresh metadata.
-                  </p>
-                )}
-              </div>
             </SectionCard>
           ) : null}
 
@@ -1026,7 +804,7 @@ export default function AnimeDetailPage() {
               value={noteDraft}
               onChange={(event) => setNoteDraft(event.target.value.slice(0, 4000))}
               rows={4}
-              placeholder="Notes for this title — stored on this AnimeVault server."
+              placeholder="Private notes for this title — only visible on this device."
               className="w-full resize-y rounded-lg bg-ink-850 p-2.5 text-[11px] leading-relaxed text-white placeholder:text-white/25 ring-1 ring-white/10 outline-none focus:ring-accent/60"
             />
             <div className="mt-2 flex items-center gap-2">

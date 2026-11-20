@@ -3,12 +3,6 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { atomicWriteFile, sanitizeCoverUrl, sanitizePublicHttpUrl } from './security.mjs'
-import {
-  normalizeFuzzyDate,
-  normalizeNextEpisode,
-  normalizeProviderScores,
-  migrateMetadataSchema,
-} from './catalog.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const DATA_DIR = path.join(ROOT, 'data')
@@ -30,11 +24,6 @@ function optStr(v, maxLen) {
 function optInt(v, lo, hi) {
   const n = Number(v)
   return Number.isInteger(n) && n >= lo && n <= hi ? n : null
-}
-
-function optNumber(v, lo, hi) {
-  const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : Number.NaN
-  return Number.isFinite(n) && n >= lo && n <= hi ? n : null
 }
 
 function sanitizeLinks(rawLinks) {
@@ -61,9 +50,14 @@ export function sanitizeBookmarkMedia(raw) {
   const rawColor = typeof raw.color === 'string' ? raw.color.trim() : ''
   const color = /^#[0-9a-fA-F]{3,8}$/.test(rawColor) ? rawColor : null
 
-  const nextEpisode = normalizeNextEpisode(raw.nextEpisode)
+  let nextEpisode = null
+  if (raw.nextEpisode && typeof raw.nextEpisode === 'object') {
+    const ep = optInt(raw.nextEpisode.episode, 1, 99_999)
+    const airingAt = optInt(raw.nextEpisode.airingAt, 0, 99_999_999_999)
+    if (ep != null && airingAt != null) nextEpisode = { episode: ep, airingAt }
+  }
 
-  const clean = {
+  return {
     id,
     title,
     romaji: optStr(raw.romaji, 240),
@@ -80,10 +74,7 @@ export function sanitizeBookmarkMedia(raw) {
     format: optStr(raw.format, 32),
     season: optStr(raw.season, 16),
     seasonYear: optInt(raw.seasonYear, 1900, 2200),
-    startDate: normalizeFuzzyDate(raw.startDate),
-    endDate: normalizeFuzzyDate(raw.endDate),
-    score: optNumber(raw.score, 0, 100),
-    providerScores: normalizeProviderScores(raw.providerScores),
+    score: optInt(raw.score, 0, 100),
     popularity: optInt(raw.popularity, 0, 2_000_000_000) ?? 0,
     genres: Array.isArray(raw.genres)
       ? raw.genres.slice(0, 20).map((g) => optStr(g, 48)).filter(Boolean)
@@ -98,7 +89,6 @@ export function sanitizeBookmarkMedia(raw) {
     anidbSearch: Boolean(raw.anidbSearch),
     siteUrl: sanitizePublicHttpUrl(raw.siteUrl, { httpsOnly: false, maxLen: 512 }),
   }
-  return migrateMetadataSchema(clean)
 }
 
 function flushWrite() {

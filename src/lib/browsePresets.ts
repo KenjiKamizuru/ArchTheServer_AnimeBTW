@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
-export const STORAGE_KEY = 'animevault.browse.presets.v1'
-export const MAX_PRESETS = 30
+const STORAGE_KEY = 'animevault.browse.presets.v1'
+const MAX_PRESETS = 30
 
 export interface BrowsePreset {
   id: string
@@ -11,7 +11,7 @@ export interface BrowsePreset {
   createdAt: number
 }
 
-export function readPresets(): BrowsePreset[] {
+function readPresets(): BrowsePreset[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return []
@@ -32,7 +32,7 @@ export function readPresets(): BrowsePreset[] {
   }
 }
 
-export function writePresets(presets: BrowsePreset[]) {
+function writePresets(presets: BrowsePreset[]) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(presets.slice(0, MAX_PRESETS)))
   } catch {

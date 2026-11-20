@@ -1,7 +1,6 @@
 import { Bookmark, BookmarkCheck, Check, FolderDown, HardDrive, Loader2, Play, Star } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { Media } from '../types'
-import { highlightSegments, type HighlightSegment } from '../lib/api'
 import { artworkForMedia, focusObjectClass, useArtwork } from '../lib/artwork'
 import { toggleBookmark, useBookmarks } from '../lib/bookmarks'
 import { enqueueBulkDownload, localFilesForMedia, useLibrary } from '../lib/downloads'
@@ -15,15 +14,12 @@ export function MediaCard({
   selectable = false,
   selected = false,
   onToggleSelect,
-  query,
 }: {
   media: Media
   selectable?: boolean
   selected?: boolean
   onToggleSelect?: (media: Media) => void
-  query?: string
 }) {
-  const titleHighlight = query ? highlightSegments(media.title, query) : null
   const open = useDetail()
   const toast = useToast()
   const bookmarks = useBookmarks()
@@ -195,33 +191,11 @@ export function MediaCard({
             className={`h-4 w-4 shrink-0 rounded object-cover ring-1 ring-white/15 ${focusObjectClass(mediaArt.icon.focus)}`}
           />
         ) : null}
-        {titleHighlight ? (
-          <span className="truncate flex flex-wrap">
-            {titleHighlight.map((segment: HighlightSegment, index) =>
-              segment.match ? (
-                <mark
-                  key={index}
-                  className="rounded-sm bg-accent/25 px-0.5 text-accent"
-                >
-                  {segment.text}
-                </mark>
-              ) : (
-                <span key={index}>{segment.text}</span>
-              ),
-            )}
-          </span>
-        ) : (
-          <span className="truncate">{media.title}</span>
-        )}
+        <span className="truncate">{media.title}</span>
       </button>
       <p className="truncate text-[11px] text-white/40">
         {formatMediaType(media.format)} · {formatSeason(media.season, media.seasonYear)}
       </p>
-      {media.matchReason && (
-        <p className="mt-0.5 truncate text-[10px] text-white/30">
-          {media.matchReason}
-        </p>
-      )}
     </div>
   )
 }
@@ -231,13 +205,11 @@ export function MediaGrid({
   selectable = false,
   selectedIds,
   onToggleSelect,
-  query,
 }: {
   items: Media[]
   selectable?: boolean
   selectedIds?: Set<number>
   onToggleSelect?: (media: Media) => void
-  query?: string
 }) {
   return (
     <div className="grid grid-cols-2 gap-x-3.5 gap-y-6 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
@@ -248,7 +220,6 @@ export function MediaGrid({
           selectable={selectable}
           selected={Boolean(selectedIds?.has(media.id))}
           onToggleSelect={onToggleSelect}
-          query={query}
         />
       ))}
     </div>

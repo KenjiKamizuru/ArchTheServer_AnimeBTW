@@ -1,229 +1,38 @@
 export type MediaSeason = 'WINTER' | 'SPRING' | 'SUMMER' | 'FALL'
 
-/** Provider-supplied date precision; null components are kept unknown, never filled. */
-export interface MediaDate {
-  year: number | null
-  month: number | null
-  day: number | null
-}
-
 export interface MediaLink {
   site: string
   url: string
 }
 
-export interface GenreEntity {
-  id: string
-  label: string
-}
-
-export interface MediaTag {
-  id: string
-  name: string
-  rank: number | null
-  isMediaSpoiler: boolean
-}
-
-export type OrganizationKind = 'studio' | 'producer' | 'licensor' | 'distributor'
-
-export interface OrganizationAlias {
-  name: string
-  source: string | null
-}
-
-export interface OrganizationEntity {
-  /** Stable source-scoped entity key, or a normalized-name key when IDs are absent. */
-  id: string
-  kind: OrganizationKind
-  name: string
-  source: string | null
-  /** Provider ID for this organization, distinct from the anime's external IDs. */
-  providerId: string | null
-  aliases: OrganizationAlias[]
-  siteUrl: string | null
-  isAnimationStudio: boolean | null
-}
-
-export interface MediaAgeRating {
-  /** ISO alpha-2-like region code, GLOBAL, or null when unspecified. */
-  region: string | null
-  /** Rating scheme such as BBFC, MPAA, or PEGI. */
-  system: string | null
-  /** Display value from that scheme; never inferred from minimumAge. */
-  rating: string
-  minimumAge: number | null
-  source: string | null
-}
-
-export interface ProviderScore {
-  /** Provider's original score value before normalization. */
-  value: number
-  /** Provider's declared maximum score scale. */
-  scale: number
-  /** Normalized percentage on a 0–100 scale. */
-  normalized: number
-  source: string | null
-}
-
-export type FieldValueState = 'known' | 'unknown' | 'unannounced' | 'not_applicable'
-
-export interface FieldObservation {
-  source: string
-  value: unknown
-  /** Explicit value state reported by the provider; inferred when absent. */
-  valueState: FieldValueState
-  lastRefreshedAt: string | null
-}
-
-/** A manual correction applied to a canonical field value. Provider
- * observations are preserved untouched so the original source data can be
- * restored or compared later. */
-export interface FieldManualCorrection {
-  /** The manually corrected canonical value. */
-  value: unknown
-  /** Who or what applied the correction (for example a user id or 'user'). */
-  correctedBy: string
-  /** ISO timestamp when the correction was applied. */
-  correctedAt: string
-  /** Optional free-text reason for the correction. */
-  reason?: string
-}
-
-/** Entity types used to select a metadata refresh policy. Matches the
- * normalized `format` values a catalog record can carry. */
-export type EntityType = 'TV' | 'Movie' | 'OVA' | 'ONA' | 'Special' | 'Other'
-
-/** Refresh categories group catalog fields with similar staleness tolerance. */
-export type RefreshCategory = 'identity' | 'airing' | 'score' | 'descriptive' | 'links'
-
-/** Result of a freshness check for a single field. */
-export type FieldFreshness = 'fresh' | 'stale' | 'never_refreshed' | 'unknown'
-
-/** Metadata refresh policy for one category of fields on one entity type. */
-export interface RefreshPolicyEntry {
-  /** Maximum age in milliseconds before the field is considered stale. */
-  maxAgeMs: number
-  /** Refresh category this field belongs to. */
-  category: RefreshCategory
-}
-
-/** Overall refresh assessment for a catalog record. */
-export interface RecordRefreshStatus {
-  /** Whether any field is stale or never refreshed. */
-  needsRefresh: boolean
-  /** Fields whose data is stale or was never refreshed. */
-  staleFields: string[]
-  /** Per-field freshness assessment. */
-  freshness: Record<string, FieldFreshness>
-}
-
-/** Per-provider quota: maximum requests allowed within a sliding time window. */
-export interface ProviderQuota {
-  maxRequests: number
-  windowMs: number
-}
-
-/** Exponential backoff configuration. */
-export interface BackoffConfig {
-  initialMs: number
-  maxMs: number
-  multiplier: number
-}
-
-/** Result of checking whether a provider request may proceed. */
-export interface ProviderQuotaCheck {
-  ok: boolean
-  reason: 'ok' | 'quota_exceeded' | 'cooling_down'
-  retryAfterMs: number
-}
-
-/** Current status of a provider. */
-export type ProviderRateStatus = 'ok' | 'quota_exceeded' | 'cooling_down' | 'unknown'
-
-/** Quota usage info for a provider. */
-export interface ProviderQuotaInfo {
-  used: number
-  maxRequests: number
-  windowMs: number
-  resetAt: number
-}
-
-export interface FieldMetadata {
-  /** State of the canonical field value: known, unknown, unannounced, or not_applicable. */
-  valueState: FieldValueState
-  /** Source of the currently selected canonical field value. */
-  source: string | null
-  lastRefreshedAt: string | null
-  observations: FieldObservation[]
-  conflict: boolean
-  /** Manual correction applied to the canonical value. Provider observations
-   * are preserved untouched so the original source data can be restored or
-   * compared later. */
-  manualCorrection?: FieldManualCorrection
-}
-
 export interface Media {
   id: number
-  /** Present on canonical metadata responses; older filtered/bookmark records may omit it. */
-  fieldMetadata?: Record<string, FieldMetadata>
   title: string
-  /** Populated on search results: human-readable relevance explanation (AV-072). */
-  matchReason?: string
   romaji: string | null
   english: string | null
   native: string | null
   cover: string | null
   banner: string | null
-  /** Artwork variants with source, dimensions, and attribution metadata. */
-  artwork?: ArtworkVariant[]
   color: string | null
   description: string
   episodes: number | null
   airedEpisodes: number
-  /** Typical episode runtime in positive whole minutes. */
   duration: number | null
   status: string
   format: string | null
   season: MediaSeason | null
   seasonYear: number | null
-  /** Partial provider-supplied FuzzyDates; absent on legacy records. */
-  startDate?: MediaDate | null
-  endDate?: MediaDate | null
-  /** ISO 3166-1 alpha-2 country code; absent on legacy records. */
-  countryOfOrigin?: string | null
-  /** Canonical BCP-47 language tag; absent when the provider does not supply it. */
-  originalLanguage?: string | null
-  /** Region-specific age classifications; absent on legacy media records. */
-  ageRatings?: MediaAgeRating[]
-  /** Normalized percentage on a 0–100 scale; null when unavailable. */
   score: number | null
-  /** Original value and scale for each known provider score; absent on legacy records. */
-  providerScores?: ProviderScore[]
   popularity: number
-  /** Original provider labels retained for display and existing filters. */
   genres: string[]
-  /** Stable internal taxonomy entities; absent on filtered legacy records. */
-  genreEntities?: GenreEntity[]
-  tags?: MediaTag[]
-  /** Next episode air time as a whole Unix timestamp in seconds. */
   nextEpisode: { episode: number; airingAt: number } | null
-  /** Linked production/rights entities; absent on legacy records. */
-  organizations?: OrganizationEntity[]
-  /** Original studio labels retained for display and existing filters. */
   studios: string[]
   links: MediaLink[]
   streams: MediaLink[]
   anidb: string | null
   anidbSearch: boolean
   siteUrl: string | null
-  /** Metadata schema version applied when the record was created or last migrated. */
-  metadataSchemaVersion?: number
-  /** Derived metadata completeness score (0-100); absent on legacy records. */
-  completenessScore?: MetadataCompletenessScore
 }
-
-/** Metadata completeness score for a catalog entry, 0 (empty) to 100 (complete). */
-export type MetadataCompletenessScore = number
 
 export interface StreamingEpisode {
   title: string
@@ -270,7 +79,7 @@ export interface RelatedItem {
   chapters?: number | null
   season: MediaSeason | null
   seasonYear: number | null
-  startDate: MediaDate | null
+  startDate: { year: number | null; month: number | null; day: number | null } | null
   cover: string | null
   averageScore: number | null
   relationType: string
@@ -326,29 +135,11 @@ export interface DetailSection {
   always?: boolean
 }
 
-/**
- * A single entry in a recommended watch order (AV-084). `note` is a
- * user-editable ordering note, persisted per media id in the server KV store.
- */
-export interface WatchOrderEntry {
-  id: number
-  title: string
-  relationType: 'PREQUEL' | 'SEQUEL' | 'SIDE_STORY' | 'SPIN_OFF' | 'OTHER' | 'CURRENT'
-  position: number
-  format: string | null
-  seasonYear: number | null
-  season: string | null
-  cover: string | null
-  episodes: number | null
-  note: string | null
-}
-
 export interface MediaDetail extends Media {
   streamingEpisodes: StreamingEpisode[]
   relatedSeasons?: RelatedSeason[]
-  watchOrder?: WatchOrderEntry[]
-  startDate?: MediaDate | null
-  endDate?: MediaDate | null
+  startDate?: { year: number | null; month: number | null; day: number | null } | null
+  endDate?: { year: number | null; month: number | null; day: number | null } | null
   rankings?: { rank: number; type: string; context: string; year: number | null; season: MediaSeason | null; allTime: boolean }[]
   /** Server-computed detail sections. */
   episodesGuide?: EpisodeEntry[]
@@ -364,8 +155,6 @@ export interface MediaDetail extends Media {
   sections?: DetailSection[]
   characters?: CharacterEntry[]
   staff?: StaffEntry[]
-  /** Server-computed freshness assessment for each metadata field. */
-  refreshStatus?: RecordRefreshStatus
 }
 
 export interface AnimeNote {
@@ -645,22 +434,6 @@ export interface UploadSessionInfo {
 export type ArtworkSlot = 'banner' | 'poster' | 'icon'
 export type ArtworkTargetType = 'app' | 'media' | 'series' | 'file'
 export type ArtworkFocus = 'top' | 'center' | 'bottom'
-
-/** A single artwork variant with its source, dimensions, and attribution. */
-export interface ArtworkVariant {
-  /** Where the artwork originated: 'anilist', 'imdb', 'local', etc. */
-  source: string
-  /** Public https URL of the artwork image. */
-  url: string
-  /** Semantic kind of the artwork. */
-  kind: 'poster' | 'banner' | 'icon' | 'still' | 'logo'
-  /** Intrinsic width in pixels, when known. */
-  width: number | null
-  /** Intrinsic height in pixels, when known. */
-  height: number | null
-  /** Provider attribution / credit text, when known. */
-  attribution: string | null
-}
 
 export interface ClaimedArtworkSlot {
   artId: string

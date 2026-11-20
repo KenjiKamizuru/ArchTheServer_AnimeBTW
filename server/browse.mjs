@@ -35,25 +35,7 @@ export const BROWSE_SOURCES = [
 ]
 
 /** Country-of-origin codes AniList accepts (subset that is actually populated). */
-export const BROWSE_COUNTRIES = ['JP', 'KR', 'CN', 'TW'];
-
-/** Original-language codes AniList accepts (subset that is actually populated). */
-export const BROWSE_ORIGINAL_LANGUAGES = ['JA', 'KO', 'ZH', 'EN'];
-
-/** Common content-rating labels used for browsing and parental filtering. */
-export const BROWSE_CONTENT_RATINGS = [
-  'G',
-  'PG',
-  'PG-13',
-  'R',
-  'NC-17',
-  'TV-Y',
-  'TV-Y7',
-  'TV-G',
-  'TV-PG',
-  'TV-14',
-  'TV-MA',
-]
+export const BROWSE_COUNTRIES = ['JP', 'KR', 'CN', 'TW']
 
 const MAX_LIST = 8
 const MAX_TAGS = 6
@@ -126,18 +108,10 @@ export function parseBrowseFilters(raw = {}) {
     statuses: toStringList(raw.statuses, BROWSE_STATUSES),
     sources: toStringList(raw.sources, BROWSE_SOURCES),
     countries: toStringList(raw.countries, BROWSE_COUNTRIES),
-    originalLanguages: toStringList(raw.originalLanguages, BROWSE_ORIGINAL_LANGUAGES),
-    contentRatings: toStringList(raw.contentRatings, BROWSE_CONTENT_RATINGS),
     genres: toStringList(raw.genres, null),
     genresExclude: toStringList(raw.genresExclude, null),
-    studio: toStringList(raw.studio, null),
-    staff: toStringList(raw.staff, null),
-    voiceActor: toStringList(raw.voiceActor, null),
-    character: toStringList(raw.character, null),
-    relation: toStringList(raw.relation, null),
-    epTitle: toStringList(raw.epTitle, null),
     tags: toStringList(raw.tags, null, MAX_TAGS),
-    tagMode: ['and', 'or', 'not'].includes(String(raw.tagMode ?? '')) ? String(raw.tagMode) : 'and',
+    tagMode: ['and', 'or'].includes(String(raw.tagMode ?? '')) ? String(raw.tagMode) : 'and',
     years,
     episodes: clampRange(raw.episodesMin, raw.episodesMax, 1, 9999),
     duration: clampRange(raw.durationMin, raw.durationMax, 1, 600),
@@ -173,16 +147,8 @@ export function filtersToParams(filters) {
   put('statuses', filters.statuses)
   put('sources', filters.sources)
   put('countries', filters.countries)
-  put('originalLanguages', filters.originalLanguages)
-  put('contentRatings', filters.contentRatings)
   put('genres', filters.genres)
   put('genresExclude', filters.genresExclude)
-  put('studio', filters.studio)
-  put('staff', filters.staff)
-  put('voiceActor', filters.voiceActor)
-  put('character', filters.character)
-  put('relation', filters.relation)
-  put('epTitle', filters.epTitle)
   put('tags', filters.tags)
   put('tagMode', filters.tagMode === 'and' ? null : filters.tagMode)
   put('yearMin', filters.years?.min)
@@ -249,10 +215,6 @@ export function buildBrowseQuery(filters) {
     variables.countries = filters.countries
     media.push('countryOfOrigin_in: $countries')
   }
-  if (filters.originalLanguages.length) {
-    variables.originalLanguages = filters.originalLanguages
-    media.push('originalLanguage_in: $originalLanguages')
-  }
   if (filters.genres.length) {
     variables.genres = filters.genres
     media.push('genre_in: $genres')
@@ -311,7 +273,6 @@ export function buildBrowseQuery(filters) {
   if (variables.statuses) add('statuses', '[MediaStatus]')
   if (variables.sources) add('sources', '[MediaSource]')
   if (variables.countries) add('countries', '[CountryCode]')
-  if (variables.originalLanguages) add('originalLanguages', '[String]')
   if (variables.genres) add('genres', '[String]')
   if (variables.tags) add('tags', '[String]')
   if (variables.episodesMin !== undefined) add('episodesMin', 'Int')
@@ -341,8 +302,6 @@ export function buildBrowseQuery(filters) {
       format
       season
       seasonYear
-      startDate { year month day }
-      endDate { year month day }
       averageScore
       popularity
       favourites
@@ -350,10 +309,9 @@ export function buildBrowseQuery(filters) {
       tags { name rank isMediaSpoiler }
       source
       countryOfOrigin
-      originalLanguage
       siteUrl
       nextAiringEpisode { episode airingAt }
-      studios(isMain: true) { nodes { id name isAnimationStudio siteUrl } }
+      studios(isMain: true) { nodes { name } }
       externalLinks { site url type }
     }
   }
@@ -371,70 +329,12 @@ export function matchMediaLocally(media, filters) {
   const reasons = []
   if (!media) return { ok: false, reasons }
 
-  if (filters.originalLanguages.length) {
-    const lang = media.originalLanguage
-    if (!lang || !filters.originalLanguages.includes(lang.toUpperCase())) {
-      return { ok: false, reasons }
-    }
-    reasons.push(`language ${filters.originalLanguages.join('/')}`)
-  }
-
-  if (filters.contentRatings.length) {
-    const wanted = new Set(filters.contentRatings.map((r) => r.toUpperCase()))
-    const has = (media.ageRatings ?? []).some((a) =>
-      a && typeof a.rating === 'string' && wanted.has(a.rating.toUpperCase()),
-    )
-    if (!has) return { ok: false, reasons }
-    reasons.push(`rating ${filters.contentRatings.join('/')}`)
-  }
-
   if (filters.genresExclude.length) {
     const genres = new Set(media.genres ?? [])
     for (const g of filters.genresExclude) {
       if (genres.has(g)) return { ok: false, reasons }
     }
     reasons.push(`no ${filters.genresExclude.join('/')}`)
-  }
-
-  // Studio filter: media must be produced by at least one of the listed studios.
-  if (filters.studio.length) {
-    const studios = new Set((media.studios ?? []).map((s) => String(s).toLowerCase()))
-    const hit = filters.studio.filter((s) => studios.has(s))
-    if (hit.length === 0) return { ok: false, reasons }
-    reasons.push(`studio ${hit.join('/')}`)
-  }
-
-  // Character filter: media must feature at least one of the listed characters.
-  if (filters.character.length) {
-    const wanted = new Set(filters.character.map((c) => c.toLowerCase()))
-    const hit = (media.characters ?? []).filter((c) =>
-      wanted.has((c.name ?? '').toLowerCase()) ||
-      wanted.has((c.native ?? '').toLowerCase()),
-    )
-    if (hit.length === 0) return { ok: false, reasons }
-    reasons.push(`character ${hit.map((c) => c.name).join('/')}`)
-  }
-
-  // Relation filter: media must have at least one relation of the requested type(s),
-  // e.g. relation:sequel or relation:prequel.
-  if (filters.relation.length) {
-    const wanted = new Set(filters.relation.map((r) => r.toUpperCase()))
-    const hit = (media.relations ?? []).filter((r) =>
-      wanted.has(String(r.relationType ?? '').toUpperCase()),
-    )
-    if (hit.length === 0) return { ok: false, reasons }
-    reasons.push(`relation ${hit.map((r) => r.relationType).join('/')}`)
-  }
-
-  // Episode title filter: media must have at least one streaming episode
-  // whose title contains the requested text.
-  if (filters.epTitle.length) {
-    const wanted = filters.epTitle.map((t) => t.toLowerCase())
-    const hit = (media.streamingEpisodes ?? []).filter((e) =>
-      wanted.some((w) => String(e?.title ?? '').toLowerCase().includes(w)),
-    )
-    if (hit.length === 0) return { ok: false, reasons }
-    reasons.push(`episode title ${hit.map((e) => e.title).join('/')}`)
   }
 
   // Spoiler tags must never drive discovery, so strip them before matching.
@@ -444,19 +344,13 @@ export function matchMediaLocally(media, filters) {
       (media.tags ?? []).filter((t) => !t.isMediaSpoiler).map((t) => t.name),
     )
     const hit = filters.tags.filter((t) => names.has(t))
-    if (filters.tagMode === 'not') {
-      // NOT mode: exclude any media that carries even one of the requested tags.
-      if (hit.length > 0) return { ok: false, reasons }
-      reasons.push(`no tags ${filters.tags.join(', ')}`)
-    } else {
-      if (hit.length === 0) return { ok: false, reasons }
-      // AniList's `tag_in` is any-of, so AND mode needs an explicit local check
-      // or a title matching only one requested tag would slip through.
-      if (filters.tagMode === 'and' && hit.length !== filters.tags.length) {
-        return { ok: false, reasons }
-      }
-      reasons.push(`tag ${hit.join(filters.tagMode === 'and' ? ' + ' : ' or ')}`)
+    if (hit.length === 0) return { ok: false, reasons }
+    // AniList's `tag_in` is any-of, so AND mode needs an explicit local check
+    // or a title matching only one requested tag would slip through.
+    if (filters.tagMode === 'and' && hit.length !== filters.tags.length) {
+      return { ok: false, reasons }
     }
+    reasons.push(`tag ${hit.join(filters.tagMode === 'and' ? ' + ' : ' or ')}`)
   }
 
   if (filters.minScore !== null && (media.averageScore ?? 0) < filters.minScore) {
@@ -499,16 +393,7 @@ export function describeFilters(filters) {
   if (filters.statuses.length) parts.push(filters.statuses.join('/'))
   if (filters.genres.length) parts.push(filters.genres.join(', '))
   if (filters.genresExclude.length) parts.push(`without ${filters.genresExclude.join(', ')}`)
-  if (filters.tags.length)
-    parts.push(
-      `tags ${
-        filters.tagMode === 'and'
-          ? 'all of'
-          : filters.tagMode === 'or'
-            ? 'any of'
-            : 'none of'
-      } ${filters.tags.join(', ')}`,
-    )
+  if (filters.tags.length) parts.push(`tags ${filters.tagMode === 'and' ? 'all of' : 'any of'} ${filters.tags.join(', ')}`)
   if (filters.years) parts.push(yearsLabel(filters.years))
   if (filters.season && filters.year) parts.push(`${filters.season} ${filters.year}`)
   else if (filters.year) parts.push(filters.includeOlderSeasons ? `any season ${filters.year}` : String(filters.year))
@@ -518,10 +403,6 @@ export function describeFilters(filters) {
   if (filters.maxPopularity !== null) parts.push(`popularity ≤ ${filters.maxPopularity}`)
   if (filters.sources.length) parts.push(filters.sources.join('/'))
   if (filters.countries.length) parts.push(filters.countries.join('/'))
-  if (filters.originalLanguages.length)
-    parts.push(`lang ${filters.originalLanguages.join('/')}`)
-  if (filters.contentRatings.length)
-    parts.push(`rating ${filters.contentRatings.join('/')}`)
   return parts.length ? parts.join(' · ') : 'everything'
 }
 
@@ -547,8 +428,6 @@ export function activeFilterCount(filters) {
   if (filters.statuses.length) n += 1
   if (filters.sources.length) n += 1
   if (filters.countries.length) n += 1
-  if (filters.originalLanguages.length) n += 1
-  if (filters.contentRatings.length) n += 1
   if (filters.genres.length) n += 1
   if (filters.genresExclude.length) n += 1
   if (filters.tags.length) n += 1
