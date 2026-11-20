@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { atomicWriteFile, normalizeHostPatternList, validateLibraryDir } from './security.mjs'
+import { BROWSE_CONTENT_RATINGS } from './browse.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const DATA_DIR = path.join(ROOT, 'data')
@@ -34,6 +35,7 @@ const DEFAULTS = {
   maxConcurrentDownloads: defaultConcurrency(),
   preferLocalPlayback: true,
   allowedExternalHosts: [],
+  defaultContentRatings: [],
   updatedAt: 0,
 }
 
@@ -75,6 +77,11 @@ export async function init() {
         allowedExternalHosts: Array.isArray(parsed.allowedExternalHosts)
           ? safeNormalizeHosts(parsed.allowedExternalHosts)
           : [],
+        defaultContentRatings: Array.isArray(parsed.defaultContentRatings)
+          ? parsed.defaultContentRatings.filter(
+              (r) => typeof r === 'string' && BROWSE_CONTENT_RATINGS.includes(r),
+            )
+          : DEFAULTS.defaultContentRatings,
         updatedAt: Number(parsed.updatedAt) || 0,
       }
     }
@@ -105,6 +112,7 @@ export function get() {
     maxConcurrentDownloads: state.maxConcurrentDownloads,
     preferLocalPlayback: state.preferLocalPlayback,
     allowedExternalHosts: [...state.allowedExternalHosts],
+    defaultContentRatings: [...state.defaultContentRatings],
     envExternalHostsConfigured: Boolean(String(process.env.ALLOWED_SOURCE_HOSTS ?? '').trim()),
     updatedAt: state.updatedAt,
   }

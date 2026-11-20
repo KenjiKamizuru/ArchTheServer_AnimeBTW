@@ -47,6 +47,7 @@ test('browse filter parsing clamps and deduplicates hostile input', () => {
     sources: 'MANGA',
     countries: 'JP,RU',
     originalLanguages: 'JA,XX,KO',
+    contentRatings: 'G,BOGUS,PG-13,R',
     genres: 'Action,Action',
     genresExclude: 'Hentai',
     tags: 'a,b',
@@ -66,6 +67,7 @@ test('browse filter parsing clamps and deduplicates hostile input', () => {
   assert.deepEqual(f.statuses, ['RELEASING'])
   assert.deepEqual(f.countries, ['JP'])
   assert.deepEqual(f.originalLanguages, ['JA', 'KO'])
+  assert.deepEqual(f.contentRatings, ['G', 'PG-13', 'R'])
   assert.deepEqual(f.genres, ['Action'])
   assert.deepEqual(f.genresExclude, ['Hentai'])
   assert.deepEqual(f.years, { min: 1990, max: 1999 })
@@ -170,6 +172,68 @@ test('local browse matching filters by original language', () => {
   assert.equal(browse.matchMediaLocally(mediaKo, withFilters({ originalLanguages: ['KO'] })).ok, true)
   assert.equal(browse.matchMediaLocally(mediaNoLang, withFilters({ originalLanguages: ['JA'] })).ok, false)
   assert.ok(browse.matchMediaLocally(mediaJa, withFilters({ originalLanguages: ['JA'] })).reasons.length > 0)
+})
+
+test('local browse matching filters by content rating', () => {
+  const mediaPG13 = {
+    genres: ['Fantasy'],
+    tags: [],
+    averageScore: 82,
+    popularity: 1200,
+    seasonYear: 2023,
+    episodes: 12,
+    duration: 24,
+    ageRatings: [{ region: 'US', system: 'MPAA', rating: 'PG-13' }],
+  }
+  const mediaR = {
+    ...mediaPG13,
+    ageRatings: [{ region: 'US', system: 'MPAA', rating: 'R' }],
+  }
+  const mediaMulti = {
+    ...mediaPG13,
+    ageRatings: [
+      { region: 'US', system: 'MPAA', rating: 'PG-13' },
+      { region: 'US', system: 'MPAA', rating: 'R' },
+    ],
+  }
+  const mediaNoRatings = {
+    ...mediaPG13,
+    ageRatings: [],
+  }
+  const base = browse.EMPTY_FILTERS
+  const withFilters = (patch) => ({ ...base, ...patch })
+  assert.equal(browse.matchMediaLocally(mediaPG13, withFilters({ contentRatings: ['PG-13'] })).ok, true)
+  assert.equal(browse.matchMediaLocally(mediaPG13, withFilters({ contentRatings: ['R'] })).ok, false)
+  assert.equal(browse.matchMediaLocally(mediaPG13, withFilters({ contentRatings: ['PG-13', 'R'] })).ok, true)
+  assert.equal(browse.matchMediaLocally(mediaR, withFilters({ contentRatings: ['PG-13'] })).ok, false)
+  assert.equal(browse.matchMediaLocally(mediaR, withFilters({ contentRatings: ['R'] })).ok, true)
+  assert.equal(browse.matchMediaLocally(mediaMulti, withFilters({ contentRatings: ['PG-13'] })).ok, true)
+  assert.equal(browse.matchMediaLocally(mediaMulti, withFilters({ contentRatings: ['R'] })).ok, true)
+  assert.equal(browse.matchMediaLocally(mediaNoRatings, withFilters({ contentRatings: ['PG-13'] })).ok, false)
+  assert.ok(browse.matchMediaLocally(mediaPG13, withFilters({ contentRatings: ['PG-13'] })).reasons.length > 0)
+})
+
+test('browse filters survive a share-URL round trip with content ratings', () => {
+  const original = browse.parseBrowseFilters({
+    sort: 'trending',
+    contentRatings: 'PG-13,R',
+    q: 'Frieren',
+  })
+  const params = browse.filtersToParams(original)
+  assert.equal(params.get('contentRatings'), 'PG-13,R')
+  const restored = browse.parseBrowseFilters(Object.fromEntries(params))
+  assert.deepEqual(restored.contentRatings, original.contentRatings)
+})
+
+test('describeFilters includes content ratings', () => {
+  const filters = browse.parseBrowseFilters({ contentRatings: ['PG-13', 'R'] })
+  assert.ok(browse.describeFilters(filters).includes('rating PG-13/R'))
+})
+
+test('activeFilterCount counts content rating filters', () => {
+  const base = browse.parseBrowseFilters({})
+  const withRatings = browse.parseBrowseFilters({ contentRatings: ['PG-13'] })
+  assert.equal(browse.activeFilterCount(withRatings), browse.activeFilterCount(base) + 1)
 })
 
 test('browse query pushes originalLanguage_in to AniList', () => {

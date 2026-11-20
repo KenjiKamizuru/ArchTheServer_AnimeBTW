@@ -38,7 +38,22 @@ export const BROWSE_SOURCES = [
 export const BROWSE_COUNTRIES = ['JP', 'KR', 'CN', 'TW'];
 
 /** Original-language codes AniList accepts (subset that is actually populated). */
-export const BROWSE_ORIGINAL_LANGUAGES = ['JA', 'KO', 'ZH', 'EN']
+export const BROWSE_ORIGINAL_LANGUAGES = ['JA', 'KO', 'ZH', 'EN'];
+
+/** Common content-rating labels used for browsing and parental filtering. */
+export const BROWSE_CONTENT_RATINGS = [
+  'G',
+  'PG',
+  'PG-13',
+  'R',
+  'NC-17',
+  'TV-Y',
+  'TV-Y7',
+  'TV-G',
+  'TV-PG',
+  'TV-14',
+  'TV-MA',
+]
 
 const MAX_LIST = 8
 const MAX_TAGS = 6
@@ -112,6 +127,7 @@ export function parseBrowseFilters(raw = {}) {
     sources: toStringList(raw.sources, BROWSE_SOURCES),
     countries: toStringList(raw.countries, BROWSE_COUNTRIES),
     originalLanguages: toStringList(raw.originalLanguages, BROWSE_ORIGINAL_LANGUAGES),
+    contentRatings: toStringList(raw.contentRatings, BROWSE_CONTENT_RATINGS),
     genres: toStringList(raw.genres, null),
     genresExclude: toStringList(raw.genresExclude, null),
     tags: toStringList(raw.tags, null, MAX_TAGS),
@@ -152,6 +168,7 @@ export function filtersToParams(filters) {
   put('sources', filters.sources)
   put('countries', filters.countries)
   put('originalLanguages', filters.originalLanguages)
+  put('contentRatings', filters.contentRatings)
   put('genres', filters.genres)
   put('genresExclude', filters.genresExclude)
   put('tags', filters.tags)
@@ -350,6 +367,15 @@ export function matchMediaLocally(media, filters) {
     reasons.push(`language ${filters.originalLanguages.join('/')}`)
   }
 
+  if (filters.contentRatings.length) {
+    const wanted = new Set(filters.contentRatings.map((r) => r.toUpperCase()))
+    const has = (media.ageRatings ?? []).some((a) =>
+      a && typeof a.rating === 'string' && wanted.has(a.rating.toUpperCase()),
+    )
+    if (!has) return { ok: false, reasons }
+    reasons.push(`rating ${filters.contentRatings.join('/')}`)
+  }
+
   if (filters.genresExclude.length) {
     const genres = new Set(media.genres ?? [])
     for (const g of filters.genresExclude) {
@@ -441,6 +467,8 @@ export function describeFilters(filters) {
   if (filters.countries.length) parts.push(filters.countries.join('/'))
   if (filters.originalLanguages.length)
     parts.push(`lang ${filters.originalLanguages.join('/')}`)
+  if (filters.contentRatings.length)
+    parts.push(`rating ${filters.contentRatings.join('/')}`)
   return parts.length ? parts.join(' · ') : 'everything'
 }
 
@@ -467,6 +495,7 @@ export function activeFilterCount(filters) {
   if (filters.sources.length) n += 1
   if (filters.countries.length) n += 1
   if (filters.originalLanguages.length) n += 1
+  if (filters.contentRatings.length) n += 1
   if (filters.genres.length) n += 1
   if (filters.genresExclude.length) n += 1
   if (filters.tags.length) n += 1
