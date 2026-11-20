@@ -441,16 +441,55 @@ export function highlightSegments(text, query) {
   }))
 }
 
-/** Groups results into the categories the UI shows (AV-070). */
-export function groupResults(media) {
-  const groups = { TV: [], MOVIE: [], OVA: [], ONA: [], SPECIAL: [], OTHER: [] }
-  for (const item of Array.isArray(media) ? media : []) {
-    const key = Object.hasOwn(groups, item?.format ?? '') && item.format !== 'TV_SHORT' ? item.format : 'OTHER'
-    groups[key].push(item)
+/**
+ * Groups results into categories the UI shows (AV-070).
+ *
+ * Supported `groupBy` values:
+ *   - 'format'   : TV, MOVIE, OVA, ONA, SPECIAL, OTHER (default)
+ *   - 'type'     : ANIME, MANGA, etc. based on media type
+ *   - 'character': each media appears under every character it features
+ *   - 'staff'    : each media appears under every staff member credited
+ *   - 'studio'   : each media appears under every studio credited
+ *
+ * Media with no groupable key for the chosen dimension fall into 'OTHER'.
+ */
+export function groupResults(media, { groupBy = 'format' } = {}) {
+  const items = Array.isArray(media) ? media : []
+  const groups = new Map()
+
+  for (const item of items) {
+    if (!item) continue
+    let keys = []
+
+    if (groupBy === 'type') {
+      keys = [item.type ?? 'OTHER']
+    } else if (groupBy === 'character') {
+      keys = (item.characters ?? []).map((c) => c.name ?? 'Unknown Character')
+      if (!keys.length) keys = ['OTHER']
+    } else if (groupBy === 'staff') {
+      keys = (item.staff ?? []).map((s) => s.name ?? 'Unknown Staff')
+      if (!keys.length) keys = ['OTHER']
+    } else if (groupBy === 'studio') {
+      keys = (item.studios ?? []).map((s) => s ?? 'Unknown Studio')
+      if (!keys.length) keys = ['OTHER']
+    } else {
+      keys = [
+        { TV: 1, MOVIE: 1, OVA: 1, ONA: 1, SPECIAL: 1 }[item.format ?? ''] &&
+          item.format !== 'TV_SHORT'
+          ? item.format
+          : 'OTHER',
+      ]
+    }
+
+    for (const key of keys) {
+      if (!groups.has(key)) groups.set(key, [])
+      groups.get(key).push(item)
+    }
   }
-  return Object.entries(groups)
+
+  return [...groups.entries()]
     .filter(([, items]) => items.length > 0)
-    .map(([format, items]) => ({ format, items }))
+    .map(([key, items]) => ({ format: key, items }))
 }
 
 /**

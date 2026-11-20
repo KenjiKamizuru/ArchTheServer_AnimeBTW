@@ -68,6 +68,16 @@ const MEDIA_FIELDS = `
     thumbnail
     number
   }
+  staff(page: 1, perPage: 10, sort: [RELEVANCE, ID]) {
+    edges {
+      role
+      node {
+        id
+        name { full native }
+        primaryOccupations
+      }
+    }
+  }
 `
 
 const SEASON_SORTS = {
@@ -352,6 +362,13 @@ export function normalize(media) {
       title: e?.title ?? null,
       thumbnail: e?.thumbnail ?? null,
       number: e?.number ?? null,
+    })),
+    staff: (media.staff?.edges ?? []).map((edge) => ({
+      role: edge?.role ?? null,
+      id: edge?.node?.id ?? null,
+      name: edge?.node?.name?.full ?? null,
+      native: edge?.node?.name?.native ?? null,
+      primaryOccupations: edge?.node?.primaryOccupations ?? [],
     })),
     organizations: studioNodes.map((studio) => ({
       kind: 'studio',

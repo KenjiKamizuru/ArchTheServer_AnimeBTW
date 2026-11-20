@@ -18,7 +18,7 @@ import { sanitizePublicHttpUrl } from './security.mjs'
  * value. The factory supplies stable defaults and copies collections.
  */
 export const CATALOG_METADATA_FIELDS = Object.freeze([
-  'title', 'romaji', 'english', 'native', 'aliases', 'characters', 'relations', 'streamingEpisodes', 'cover', 'banner', 'artwork', 'color', 'description',
+  'title', 'romaji', 'english', 'native', 'aliases', 'characters', 'relations', 'streamingEpisodes', 'staff', 'cover', 'banner', 'artwork', 'color', 'description',
   'episodes', 'airedEpisodes', 'duration', 'status', 'format', 'season', 'seasonYear', 'startDate', 'endDate',
   'score', 'providerScores', 'popularity', 'favourites', 'genres', 'genreEntities', 'tags', 'source', 'countryOfOrigin',
   'originalLanguage', 'ageRatings', 'nextEpisode', 'studios', 'organizations', 'links', 'streams', 'anidb', 'anidbSearch', 'siteUrl',
@@ -930,6 +930,7 @@ export function createAnimeRecord(input) {
     characters: Array.isArray(input.characters) ? input.characters : [],
     relations: Array.isArray(input.relations) ? input.relations : [],
     streamingEpisodes: Array.isArray(input.streamingEpisodes) ? input.streamingEpisodes : [],
+    staff: Array.isArray(input.staff) ? input.staff : [],
     cover: input.cover ?? null,
     banner: input.banner ?? null,
     color: input.color ?? null,
@@ -976,7 +977,7 @@ export function createAnimeRecord(input) {
 // bookkeeping fields rather than descriptive metadata.
 const COMPLETENESS_FIELD_WEIGHTS = Object.freeze({
   title: 3, cover: 3, description: 3,
-  romaji: 2, english: 2, native: 2, aliases: 1, characters: 0, relations: 0, streamingEpisodes: 0, status: 2, format: 2, score: 2,
+  romaji: 2, english: 2, native: 2, aliases: 1, characters: 0, relations: 0, streamingEpisodes: 0, staff: 0, status: 2, format: 2, score: 2,
   genres: 2, studios: 2, episodes: 2,
   banner: 1, artwork: 1, color: 1, duration: 1, season: 1, seasonYear: 1,
   startDate: 1, endDate: 1, popularity: 1, favourites: 1, countryOfOrigin: 1,

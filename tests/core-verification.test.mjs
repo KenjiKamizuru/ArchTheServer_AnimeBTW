@@ -1226,3 +1226,130 @@ test('bookmark/list search returns empty when no match', () => {
   })
   assert.equal(matches.length, 0)
 })
+
+/* ------------------------------ AV-070 ---------------------------------- */
+
+test('groupResults groups by format by default', () => {
+  const groups = search.groupResults([
+    { format: 'TV', title: 'Show A' },
+    { format: 'MOVIE', title: 'Film B' },
+    { format: 'TV', title: 'Show C' },
+    { format: 'OVA', title: 'Ova D' },
+  ])
+  assert.deepEqual(groups.map((g) => g.format), ['TV', 'MOVIE', 'OVA'])
+  assert.equal(groups[0].items.length, 2)
+  assert.equal(groups[1].items.length, 1)
+  assert.equal(groups[2].items.length, 1)
+})
+
+test('groupResults groups by type', () => {
+  const groups = search.groupResults(
+    [
+      { type: 'ANIME', title: 'Show A' },
+      { type: 'MANGA', title: 'Comic B' },
+      { type: 'ANIME', title: 'Show C' },
+    ],
+    { groupBy: 'type' },
+  )
+  assert.deepEqual(groups.map((g) => g.format), ['ANIME', 'MANGA'])
+  assert.equal(groups[0].items.length, 2)
+  assert.equal(groups[1].items.length, 1)
+})
+
+test('groupResults groups by character', () => {
+  const groups = search.groupResults(
+    [
+      {
+        title: 'Show A',
+        characters: [{ name: 'Tanjiro' }, { name: 'Nezuko' }],
+      },
+      { title: 'Show B', characters: [{ name: 'Tanjiro' }] },
+      { title: 'Show C', characters: [] },
+    ],
+    { groupBy: 'character' },
+  )
+  const tanjiroGroup = groups.find((g) => g.format === 'Tanjiro')
+  assert.ok(tanjiroGroup)
+  assert.equal(tanjiroGroup.items.length, 2)
+  const otherGroup = groups.find((g) => g.format === 'OTHER')
+  assert.ok(otherGroup)
+  assert.equal(otherGroup.items.length, 1)
+})
+
+test('groupResults groups by staff', () => {
+  const groups = search.groupResults(
+    [
+      { title: 'Show A', staff: [{ name: 'Director X' }] },
+      { title: 'Show B', staff: [{ name: 'Director X' }, { name: 'Writer Y' }] },
+      { title: 'Show C', staff: [] },
+    ],
+    { groupBy: 'staff' },
+  )
+  const directorGroup = groups.find((g) => g.format === 'Director X')
+  assert.ok(directorGroup)
+  assert.equal(directorGroup.items.length, 2)
+  const writerGroup = groups.find((g) => g.format === 'Writer Y')
+  assert.ok(writerGroup)
+  assert.equal(writerGroup.items.length, 1)
+  const otherGroup = groups.find((g) => g.format === 'OTHER')
+  assert.ok(otherGroup)
+  assert.equal(otherGroup.items.length, 1)
+})
+
+test('groupResults groups by studio', () => {
+  const groups = search.groupResults(
+    [
+      { title: 'Show A', studios: ['Studio Ghibli'] },
+      { title: 'Show B', studios: ['Studio Ghibli', 'Madhouse'] },
+      { title: 'Show C', studios: [] },
+    ],
+    { groupBy: 'studio' },
+  )
+  const ghibliGroup = groups.find((g) => g.format === 'Studio Ghibli')
+  assert.ok(ghibliGroup)
+  assert.equal(ghibliGroup.items.length, 2)
+  const madhouseGroup = groups.find((g) => g.format === 'Madhouse')
+  assert.ok(madhouseGroup)
+  assert.equal(madhouseGroup.items.length, 1)
+  const otherGroup = groups.find((g) => g.format === 'OTHER')
+  assert.ok(otherGroup)
+  assert.equal(otherGroup.items.length, 1)
+})
+
+test('groupResults returns empty array for empty input', () => {
+  const groups = search.groupResults([])
+  assert.deepEqual(groups, [])
+})
+
+test('normalize extracts staff from media payload', () => {
+  const normalized = anilist.normalize({
+    id: 1,
+    title: { romaji: 'Test Show', english: 'Test Show', native: 'テストショー' },
+    staff: {
+      edges: [
+        {
+          role: 'Director',
+          node: {
+            id: 42,
+            name: { full: 'Director X', native: 'ディレクターX' },
+            primaryOccupations: ['DIRECTOR'],
+          },
+        },
+        {
+          role: 'Writer',
+          node: {
+            id: 43,
+            name: { full: 'Writer Y', native: 'ライターY' },
+            primaryOccupations: ['WRITER'],
+          },
+        },
+      ],
+    },
+  })
+  assert.equal(normalized.staff.length, 2)
+  assert.equal(normalized.staff[0].name, 'Director X')
+  assert.equal(normalized.staff[0].native, 'ディレクターX')
+  assert.equal(normalized.staff[0].role, 'Director')
+  assert.deepEqual(normalized.staff[0].primaryOccupations, ['DIRECTOR'])
+  assert.equal(normalized.staff[1].name, 'Writer Y')
+})
