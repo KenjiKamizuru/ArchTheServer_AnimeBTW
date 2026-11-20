@@ -1023,3 +1023,71 @@ test('anilist normalize extracts characters from media payload', () => {
   assert.equal(normalized.characters[0].voiceActors[0].name, 'Natsuki Hanae')
   assert.equal(normalized.characters[0].voiceActors[0].language, 'JAPANESE')
 })
+
+/* ------------------------------ AV-060 ---------------------------------- */
+
+test('advanced search parses relation field', () => {
+  const parsed = search.parseSearchQuery(
+    'relation:sequel relation:prequel franchise:sequel',
+  )
+  assert.deepEqual(parsed.filters.relation, ['sequel', 'prequel', 'sequel'])
+  assert.equal(parsed.text, '')
+  assert.equal(search.hasStructuredFilters(parsed.filters), true)
+})
+
+test('local browse matching filters by relation type', () => {
+  const media = {
+    genres: ['Action'],
+    relations: [
+      { relationType: 'SEQUEL', node: { id: 2, title: { romaji: 'Season 2' } } },
+      { relationType: 'PREQUEL', node: { id: 1, title: { romaji: 'Season 1' } } },
+      { relationType: 'SPIN_OFF', node: { id: 3, title: { romaji: 'Spin-off' } } },
+    ],
+    averageScore: 82,
+    popularity: 1200,
+    seasonYear: 2023,
+  }
+  const base = browse.EMPTY_FILTERS
+  const withFilters = (patch) => ({ ...base, ...patch })
+  assert.equal(browse.matchMediaLocally(media, withFilters({ relation: ['sequel'] })).ok, true)
+  assert.equal(browse.matchMediaLocally(media, withFilters({ relation: ['PREQUEL'] })).ok, true)
+  assert.equal(browse.matchMediaLocally(media, withFilters({ relation: ['spin_off'] })).ok, true)
+  assert.equal(browse.matchMediaLocally(media, withFilters({ relation: ['parent'] })).ok, false)
+  assert.equal(browse.matchMediaLocally(media, withFilters({ relation: ['sequel', 'parent'] })).ok, true)
+  assert.equal(browse.matchMediaLocally(media, withFilters({ relation: ['sequel'] })).reasons.length > 0, true)
+})
+
+test('normalize extracts relations from media payload', () => {
+  const normalized = anilist.normalize({
+    id: 1,
+    title: { romaji: 'Attack on Titan', english: 'Attack on Titan', native: '進撃の巨人' },
+    relations: {
+      edges: [
+        {
+          relationType: 'SEQUEL',
+          node: {
+            id: 2,
+            title: { romaji: 'Attack on Titan: The Final Season', english: 'Attack on Titan: The Final Season' },
+            format: 'TV',
+            status: 'FINISHED',
+            seasonYear: 2020,
+          },
+        },
+        {
+          relationType: 'PREQUEL',
+          node: {
+            id: 3,
+            title: { romaji: 'Attack on Titan: Junior High' },
+            format: 'TV_SHORT',
+            status: 'FINISHED',
+            seasonYear: 2015,
+          },
+        },
+      ],
+    },
+  })
+  assert.equal(normalized.relations.length, 2)
+  assert.equal(normalized.relations[0].relationType, 'SEQUEL')
+  assert.equal(normalized.relations[0].node.title.romaji, 'Attack on Titan: The Final Season')
+  assert.equal(normalized.relations[1].relationType, 'PREQUEL')
+})

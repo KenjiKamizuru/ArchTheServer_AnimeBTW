@@ -134,6 +134,7 @@ export function parseBrowseFilters(raw = {}) {
     staff: toStringList(raw.staff, null),
     voiceActor: toStringList(raw.voiceActor, null),
     character: toStringList(raw.character, null),
+    relation: toStringList(raw.relation, null),
     tags: toStringList(raw.tags, null, MAX_TAGS),
     tagMode: ['and', 'or', 'not'].includes(String(raw.tagMode ?? '')) ? String(raw.tagMode) : 'and',
     years,
@@ -179,6 +180,7 @@ export function filtersToParams(filters) {
   put('staff', filters.staff)
   put('voiceActor', filters.voiceActor)
   put('character', filters.character)
+  put('relation', filters.relation)
   put('tags', filters.tags)
   put('tagMode', filters.tagMode === 'and' ? null : filters.tagMode)
   put('yearMin', filters.years?.min)
@@ -409,6 +411,17 @@ export function matchMediaLocally(media, filters) {
     )
     if (hit.length === 0) return { ok: false, reasons }
     reasons.push(`character ${hit.map((c) => c.name).join('/')}`)
+  }
+
+  // Relation filter: media must have at least one relation of the requested type(s),
+  // e.g. relation:sequel or relation:prequel.
+  if (filters.relation.length) {
+    const wanted = new Set(filters.relation.map((r) => r.toUpperCase()))
+    const hit = (media.relations ?? []).filter((r) =>
+      wanted.has(String(r.relationType ?? '').toUpperCase()),
+    )
+    if (hit.length === 0) return { ok: false, reasons }
+    reasons.push(`relation ${hit.map((r) => r.relationType).join('/')}`)
   }
 
   // Spoiler tags must never drive discovery, so strip them before matching.

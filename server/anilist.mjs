@@ -51,6 +51,18 @@ const MEDIA_FIELDS = `
       }
     }
   }
+  relations {
+    edges {
+      relationType
+      node {
+        id
+        title { romaji english native }
+        format
+        status
+        seasonYear
+      }
+    }
+  }
 `
 
 const SEASON_SORTS = {
@@ -321,6 +333,16 @@ export function normalize(media) {
       .map((studio) => studio?.name)
       .filter((name) => typeof name === 'string' && name.length > 0),
     characters,
+    relations: (media.relations?.edges ?? []).map((edge) => ({
+      relationType: edge?.relationType,
+      node: {
+        id: edge?.node?.id ?? null,
+        title: edge?.node?.title ?? null,
+        format: edge?.node?.format ?? null,
+        status: edge?.node?.status ?? null,
+        seasonYear: edge?.node?.seasonYear ?? null,
+      },
+    })),
     organizations: studioNodes.map((studio) => ({
       kind: 'studio',
       name: studio?.name,
