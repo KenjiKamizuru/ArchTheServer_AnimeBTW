@@ -135,6 +135,7 @@ export function parseBrowseFilters(raw = {}) {
     voiceActor: toStringList(raw.voiceActor, null),
     character: toStringList(raw.character, null),
     relation: toStringList(raw.relation, null),
+    epTitle: toStringList(raw.epTitle, null),
     tags: toStringList(raw.tags, null, MAX_TAGS),
     tagMode: ['and', 'or', 'not'].includes(String(raw.tagMode ?? '')) ? String(raw.tagMode) : 'and',
     years,
@@ -181,6 +182,7 @@ export function filtersToParams(filters) {
   put('voiceActor', filters.voiceActor)
   put('character', filters.character)
   put('relation', filters.relation)
+  put('epTitle', filters.epTitle)
   put('tags', filters.tags)
   put('tagMode', filters.tagMode === 'and' ? null : filters.tagMode)
   put('yearMin', filters.years?.min)
@@ -422,6 +424,17 @@ export function matchMediaLocally(media, filters) {
     )
     if (hit.length === 0) return { ok: false, reasons }
     reasons.push(`relation ${hit.map((r) => r.relationType).join('/')}`)
+  }
+
+  // Episode title filter: media must have at least one streaming episode
+  // whose title contains the requested text.
+  if (filters.epTitle.length) {
+    const wanted = filters.epTitle.map((t) => t.toLowerCase())
+    const hit = (media.streamingEpisodes ?? []).filter((e) =>
+      wanted.some((w) => String(e?.title ?? '').toLowerCase().includes(w)),
+    )
+    if (hit.length === 0) return { ok: false, reasons }
+    reasons.push(`episode title ${hit.map((e) => e.title).join('/')}`)
   }
 
   // Spoiler tags must never drive discovery, so strip them before matching.

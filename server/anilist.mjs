@@ -63,6 +63,11 @@ const MEDIA_FIELDS = `
       }
     }
   }
+  streamingEpisodes(page: 1, perPage: 24) {
+    title
+    thumbnail
+    number
+  }
 `
 
 const SEASON_SORTS = {
@@ -342,6 +347,11 @@ export function normalize(media) {
         status: edge?.node?.status ?? null,
         seasonYear: edge?.node?.seasonYear ?? null,
       },
+    })),
+    streamingEpisodes: (media.streamingEpisodes ?? []).map((e) => ({
+      title: e?.title ?? null,
+      thumbnail: e?.thumbnail ?? null,
+      number: e?.number ?? null,
     })),
     organizations: studioNodes.map((studio) => ({
       kind: 'studio',

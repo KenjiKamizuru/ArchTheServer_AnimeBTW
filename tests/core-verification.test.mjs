@@ -1091,3 +1091,50 @@ test('normalize extracts relations from media payload', () => {
   assert.equal(normalized.relations[0].node.title.romaji, 'Attack on Titan: The Final Season')
   assert.equal(normalized.relations[1].relationType, 'PREQUEL')
 })
+
+/* ------------------------------ AV-062 ---------------------------------- */
+
+test('advanced search parses episode title field', () => {
+  const parsed = search.parseSearchQuery(
+    'epTitle:"to the front" episodeTitle:battle',
+  )
+  assert.deepEqual(parsed.filters.epTitle, ['to the front', 'battle'])
+  assert.equal(parsed.text, '')
+  assert.equal(search.hasStructuredFilters(parsed.filters), true)
+})
+
+test('local browse matching filters by episode title', () => {
+  const media = {
+    genres: ['Action'],
+    streamingEpisodes: [
+      { title: 'To the Front', number: 1, thumbnail: 'https://example.com/1.jpg' },
+      { title: 'The Battle Begins', number: 2, thumbnail: 'https://example.com/2.jpg' },
+    ],
+    averageScore: 82,
+    popularity: 1200,
+    seasonYear: 2023,
+  }
+  const base = browse.EMPTY_FILTERS
+  const withFilters = (patch) => ({ ...base, ...patch })
+  assert.equal(browse.matchMediaLocally(media, withFilters({ epTitle: ['to the front'] })).ok, true)
+  assert.equal(browse.matchMediaLocally(media, withFilters({ epTitle: ['battle begins'] })).ok, true)
+  assert.equal(browse.matchMediaLocally(media, withFilters({ epTitle: ['nonexistent'] })).ok, false)
+  assert.equal(browse.matchMediaLocally(media, withFilters({ epTitle: ['front', 'battle'] })).ok, true)
+  assert.equal(browse.matchMediaLocally(media, withFilters({ epTitle: ['front'] })).reasons.length > 0, true)
+})
+
+test('normalize extracts streamingEpisodes from media payload', () => {
+  const normalized = anilist.normalize({
+    id: 1,
+    title: { romaji: 'Test Show', english: 'Test Show', native: 'テストショー' },
+    streamingEpisodes: [
+      { title: 'Episode One', thumbnail: 'https://example.com/1.jpg', number: 1 },
+      { title: 'Episode Two', thumbnail: 'https://example.com/2.jpg', number: 2 },
+    ],
+  })
+  assert.equal(normalized.streamingEpisodes.length, 2)
+  assert.equal(normalized.streamingEpisodes[0].title, 'Episode One')
+  assert.equal(normalized.streamingEpisodes[0].number, 1)
+  assert.equal(normalized.streamingEpisodes[1].title, 'Episode Two')
+  assert.equal(normalized.streamingEpisodes[1].number, 2)
+})
