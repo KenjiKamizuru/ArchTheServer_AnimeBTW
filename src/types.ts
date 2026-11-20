@@ -135,6 +135,8 @@ export interface Media {
   anidb: string | null
   anidbSearch: boolean
   siteUrl: string | null
+  /** Metadata schema version applied when the record was created or last migrated. */
+  metadataSchemaVersion?: number
 }
 
 export interface StreamingEpisode {

@@ -457,6 +457,10 @@ const MAX_FIELD_OBSERVATIONS = 8
 const MAX_OBSERVATION_DEPTH = 5
 const MAX_OBSERVATION_VALUE_BYTES = 16 * 1024
 const FIELD_VALUE_STATES = new Set(['known', 'unknown', 'unannounced', 'not_applicable'])
+// Bumped whenever the canonical fieldMetadata / valueState shape changes. Stored
+// records (bookmarks, imports) produced by an older schema are upgraded with
+// migrateMetadataSchema instead of being silently reinterpreted.
+export const METADATA_SCHEMA_VERSION = 1
 
 function cloneObservationValue(value, depth = 0) {
   if (value === null || typeof value === 'boolean') return value
@@ -606,6 +610,54 @@ function createFieldMetadata(input, record) {
   }))
 }
 
+/** Backfill a missing valueState on a stored observation, inferred from its value. */
+function backfillObservationValueState(observation, field, record) {
+  if (!observation || typeof observation !== 'object' || Array.isArray(observation)) return observation
+  if (Object.hasOwn(observation, 'valueState') && observation.valueState != null) return observation
+  return {
+    ...observation,
+    valueState: normalizeFieldValueState(undefined, field, observation.value, record),
+  }
+}
+
+/**
+ * Upgrade a catalog record produced by an older metadata schema to the current
+ * METADATA_SCHEMA_VERSION. Records at or above the current version are copied
+ * unchanged. Older records gain a complete `fieldMetadata` entry for every
+ * catalog field, missing `valueState`s are inferred from the canonical values,
+ * and observation states are backfilled. The input is never mutated.
+ */
+export function migrateMetadataSchema(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return record
+  const current = Number(record.metadataSchemaVersion)
+  if (Number.isFinite(current) && current >= METADATA_SCHEMA_VERSION) {
+    return { ...record }
+  }
+  const migrated = { ...record, metadataSchemaVersion: METADATA_SCHEMA_VERSION }
+  const fieldMetadata = {}
+  for (const field of CATALOG_METADATA_FIELDS) {
+    const existing = record.fieldMetadata && typeof record.fieldMetadata === 'object' && !Array.isArray(record.fieldMetadata)
+      && record.fieldMetadata[field] && typeof record.fieldMetadata[field] === 'object' && !Array.isArray(record.fieldMetadata[field])
+      ? record.fieldMetadata[field]
+      : null
+    const observations = Array.isArray(existing?.observations) ? existing.observations : []
+    const valueState = existing && Object.hasOwn(existing, 'valueState') && existing.valueState != null
+      ? existing.valueState
+      : normalizeFieldValueState(undefined, field, record[field], record)
+    const processedObservations = observations.map((obs) => backfillObservationValueState(obs, field, record))
+    fieldMetadata[field] = {
+      valueState,
+      source: existing && Object.hasOwn(existing, 'source') ? existing.source : null,
+      lastRefreshedAt: existing && Object.hasOwn(existing, 'lastRefreshedAt') ? existing.lastRefreshedAt : null,
+      observations: processedObservations,
+      conflict: existing && Object.hasOwn(existing, 'conflict') ? existing.conflict
+        : observationsConflict(field, record, null, processedObservations, valueState),
+    }
+  }
+  migrated.fieldMetadata = fieldMetadata
+  return migrated
+}
+
 export function createAnimeRecord(input) {
   if (!input || typeof input !== 'object' || !Number.isSafeInteger(input.id) || input.id <= 0) {
     throw new TypeError('Anime record requires a positive safe integer id')
@@ -662,6 +714,7 @@ export function createAnimeRecord(input) {
     anidb: input.anidb ?? null,
     anidbSearch: input.anidbSearch ?? false,
     siteUrl: input.siteUrl ?? null,
+    metadataSchemaVersion: METADATA_SCHEMA_VERSION,
   }
   record.fieldMetadata = createFieldMetadata(input, record)
   return record

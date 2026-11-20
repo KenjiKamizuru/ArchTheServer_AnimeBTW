@@ -1,29 +1,37 @@
 # Continuation note — 2026-11-19
 
 **Status:** branch `arena/c8881487-archtheserver-animebtw`; work remains
-uncommitted. AV-008 through AV-014 are complete. Latest `npm run verify` passes
-359 tests across 14 files, typecheck and production build clean. TODO.md records
-82/800 checked, with 11 partial items still open. Live provider responses,
+uncommitted. AV-008 through AV-015 are complete. Latest `npm run verify` passes
+364 tests across 14 files, typecheck and production build clean. TODO.md records
+83/800 checked, with 11 partial items still open. Live provider responses,
 ffmpeg, browser E2E, and real upload/download I/O remain unavailable.
 
-**Completed this turn: AV-014 — represent unknown, unannounced, and not-applicable values separately.**
+**Completed this turn: AV-015 — metadata schema versioning and migration support.**
 
 `server/catalog.mjs`:
-- Added `FIELD_VALUE_STATES = ['known', 'unknown', 'unannounced', 'not_applicable']`.
-- `normalizeFieldValueState(raw, field, value, record)`: infers `'unknown'` for null/blank/`'UNKNOWN'`/title-fallback canonical values, `'known'` otherwise; explicit provider states pass through except `'known'`, which cannot manufacture a known state for a missing value. Unknown strings fall back to inference.
-- `normalizeObservations(raw, fallbackTime, field, record)`: each observation now carries `valueState` (inferred or explicit); stable tie ordering includes value state.
-- `observationsConflict(field, record, selectedSource, observations, canonicalState)`: unknown states are excluded; comparable values are keyed by (state, value), so `unannounced`/`not_applicable` are distinct comparable states and only disagree with differing known values.
-- `createFieldMetadata(input, record)`: every `CATALOG_METADATA_FIELDS` entry now emits `valueState` plus `source`, `lastRefreshedAt`, `observations`, `conflict`; per-field `valueState`/`source`/`lastRefreshedAt` from `input.fieldMetadata[field]` are honored.
+- Added `export const METADATA_SCHEMA_VERSION = 1`.
+- `createAnimeRecord` stamps `metadataSchemaVersion: METADATA_SCHEMA_VERSION` on every record.
+- New exported `migrateMetadataSchema(record)`: records at/above the current version are copied unchanged; missing/null/garbage versions are migrated. Migration adds a complete `fieldMetadata` entry for every `CATALOG_METADATA_FIELDS` field, infers missing `valueState`s from canonical values (via `normalizeFieldValueState`), backfills missing observation `valueState`s (via `backfillObservationValueState`), recomputes `conflict` when absent, bumps `metadataSchemaVersion`, and never mutates the input.
 
-`src/types.ts`: added `FieldValueState` type; `FieldObservation.valueState` and `FieldMetadata.valueState` are now required fields.
+`server/store.mjs`:
+- `sanitizeBookmarkMedia` now returns `migrateMetadataSchema(clean)`, so stored and imported bookmarks are upgraded to the current schema on load (covers store init, listStore init, and listImport).
 
-`tests/catalog.test.mjs`: updated existing exact-shape assertions for the new `valueState` field (observations included) and added 6 focused tests: default unknown for missing/placeholder values, known for real values and empty collections, explicit unannounced/not_applicable authority (incl. title fallback and 'known' cannot override missing), garbage state strings fall back to inference, per-observation state inference/persistence, unknown observations excluded from conflict, and not_applicable vs known conflict semantics.
+`src/types.ts`: `Media` gains `metadataSchemaVersion?: number`.
 
-**Honest gaps (not AV-014 scope, recorded for the next turn):**
-- `server/store.mjs` bookmark sanitization builds an explicit media object and does not retain `fieldMetadata`, so value states do not survive bookmark round trips yet.
-- No UI consumer reads `fieldMetadata.valueState`; nothing displays unknown/unannounced/not_applicable to users yet.
-- AniList `NOT_YET_RELEASED` is not mapped to `valueState: 'unannounced'`; providers opt in via `fieldMetadata: { <field>: { valueState: 'unannounced' } }`. NOT_YET_RELEASED already yields an "Announced" timeline event shown as "TBA" in `server/detail.mjs` — do not conflate the two.
+`tests/catalog.test.mjs`: added tests for version stamping on new records, idempotent copy of current records, schemaless upgrades, field/observation state backfilling, bad-version handling, and non-mutation. Also updated the canonical-fields assertion to exclude `metadataSchemaVersion`.
 
-**Next task:** AV-015 — Add metadata schema versioning and migration support (`server/catalog.mjs` is the natural place; consider a `metadataSchemaVersion` on records plus a migration path for stored bookmarks/imports).
+**Honest gaps (not AV-015 scope, recorded for the next turn):**
+- `migrateMetadataSchema` preserves an existing `conflict` flag when present rather than re-deriving it (full re-derivation would need the original selected source).
+- No UI surface consumes `metadataSchemaVersion` yet.
 
-Earlier uncommitted work includes AV-002/003/004/007/008/009/010/011/012/013 and existing changes in `README.md`, `package.json`, `server/identifiers.mjs`, `server/index.mjs`, `server/browse.mjs`, `server/detail.mjs`, `src/lib/api.ts`, `src/pages/AnimeDetail.tsx`, `src/pages/Browse.tsx`, `src/pages/Search.tsx`, and related tests. `package-lock.json` is unchanged.
+**Next task:** AV-016 — Detect and merge duplicate anime records safely (candidate keys: normalized title, AniList/MAL/AniDB/IMDb identifiers in `server/identifiers.mjs`, plus a similarity threshold; merge strategy must keep bookmarks/lists intact).
+
+Earlier uncommitted work includes AV-002 through AV-015 and existing changes in
+`README.md`, `package.json`, `server/identifiers.mjs`, `server/index.mjs`,
+`server/browse.mjs`, `server/detail.mjs`, `src/lib/api.ts`,
+`src/pages/AnimeDetail.tsx`, `src/pages/Browse.tsx`, `src/pages/Search.tsx`,
+and related tests. AV-013/AV-014 changed `server/catalog.mjs`,
+`server/anilist.mjs`, `server/browse.mjs`, `server/detail.mjs`, `server/store.mjs`,
+`src/types.ts`, `tests/catalog.test.mjs`, `tests/anilist.test.mjs`,
+`tests/core-verification.test.mjs`, `tests/list-import.test.mjs`, `TODO.md`, and
+this handoff. `package-lock.json` is unchanged.

@@ -3,7 +3,12 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { atomicWriteFile, sanitizeCoverUrl, sanitizePublicHttpUrl } from './security.mjs'
-import { normalizeFuzzyDate, normalizeNextEpisode, normalizeProviderScores } from './catalog.mjs'
+import {
+  normalizeFuzzyDate,
+  normalizeNextEpisode,
+  normalizeProviderScores,
+  migrateMetadataSchema,
+} from './catalog.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const DATA_DIR = path.join(ROOT, 'data')
@@ -58,7 +63,7 @@ export function sanitizeBookmarkMedia(raw) {
 
   const nextEpisode = normalizeNextEpisode(raw.nextEpisode)
 
-  return {
+  const clean = {
     id,
     title,
     romaji: optStr(raw.romaji, 240),
@@ -93,6 +98,7 @@ export function sanitizeBookmarkMedia(raw) {
     anidbSearch: Boolean(raw.anidbSearch),
     siteUrl: sanitizePublicHttpUrl(raw.siteUrl, { httpsOnly: false, maxLen: 512 }),
   }
+  return migrateMetadataSchema(clean)
 }
 
 function flushWrite() {

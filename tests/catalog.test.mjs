@@ -1,6 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createAnimeRecord, CATALOG_METADATA_FIELDS } from '../server/catalog.mjs'
+import {
+  createAnimeRecord,
+  CATALOG_METADATA_FIELDS,
+  METADATA_SCHEMA_VERSION,
+  migrateMetadataSchema,
+} from '../server/catalog.mjs'
 const basic = () => createAnimeRecord({ id: 1 })
 test('id retained', () => assert.equal(basic().id, 1))
 test('fallback title', () => assert.equal(basic().title, 'Anime #1'))
@@ -337,7 +342,9 @@ test('AniList adapter emits canonical linked studios through the season API', as
 })
 test('every catalog metadata field has normalized source and refresh metadata', () => {
   const bare = basic()
-  const canonicalFields = Object.keys(bare).filter((field) => field !== 'id' && field !== 'fieldMetadata')
+  const canonicalFields = Object.keys(bare).filter(
+    (field) => field !== 'id' && field !== 'fieldMetadata' && field !== 'metadataSchemaVersion'
+  )
   assert.deepEqual(canonicalFields.sort(), [...CATALOG_METADATA_FIELDS].sort())
   assert.deepEqual(Object.keys(bare.fieldMetadata).sort(), [...CATALOG_METADATA_FIELDS].sort())
   for (const field of CATALOG_METADATA_FIELDS) {
@@ -638,6 +645,69 @@ test('not_applicable and unannounced are distinct comparable states', () => {
     },
   })
   assert.equal(onlyUnknown.fieldMetadata.duration.conflict, false)
+})
+
+test('new records carry the current metadata schema version', () => {
+  const record = createAnimeRecord({ id: 90 })
+  assert.equal(record.metadataSchemaVersion, METADATA_SCHEMA_VERSION)
+  assert.equal(METADATA_SCHEMA_VERSION, 1)
+})
+
+test('migrateMetadataSchema copies current-version records unchanged', () => {
+  const record = createAnimeRecord({ id: 91, title: 'Keep' })
+  const migrated = migrateMetadataSchema(record)
+  assert.notStrictEqual(migrated, record)
+  assert.deepEqual(migrated, record)
+  assert.equal(migrated.metadataSchemaVersion, METADATA_SCHEMA_VERSION)
+})
+
+test('migrateMetadataSchema adds fieldMetadata and infers valueState for schemaless records', () => {
+  const legacy = { id: 92, title: 'Legacy', description: null, episodes: 5, status: 'UNKNOWN' }
+  const migrated = migrateMetadataSchema(legacy)
+  assert.equal(migrated.metadataSchemaVersion, METADATA_SCHEMA_VERSION)
+  assert.deepEqual(Object.keys(migrated.fieldMetadata).sort(), [...CATALOG_METADATA_FIELDS].sort())
+  assert.equal(migrated.fieldMetadata.title.valueState, 'known')
+  assert.equal(migrated.fieldMetadata.description.valueState, 'unknown')
+  assert.equal(migrated.fieldMetadata.episodes.valueState, 'known')
+  assert.deepEqual(migrated.fieldMetadata.title.observations, [])
+  assert.equal(migrated.fieldMetadata.title.conflict, false)
+  // Input is not mutated.
+  assert.equal(legacy.metadataSchemaVersion, undefined)
+  assert.equal(legacy.fieldMetadata, undefined)
+})
+
+test('migrateMetadataSchema backfills missing valueState on fields and observations', () => {
+  const record = {
+    id: 93,
+    metadataSchemaVersion: 0,
+    title: 'Backfilled',
+    description: 'UNKNOWN',
+    fieldMetadata: {
+      title: { source: 'anilist', lastRefreshedAt: null, observations: [{ source: 'mal', value: null }], conflict: false },
+      description: { valueState: 'unknown', observations: [] },
+    },
+  }
+  const migrated = migrateMetadataSchema(record)
+  assert.equal(migrated.metadataSchemaVersion, METADATA_SCHEMA_VERSION)
+  assert.equal(migrated.fieldMetadata.title.valueState, 'known')
+  assert.deepEqual(migrated.fieldMetadata.title.observations, [
+    { valueState: 'unknown', source: 'mal', value: null },
+  ])
+  assert.equal(migrated.fieldMetadata.description.valueState, 'unknown')
+  // Explicit existing state is preserved.
+  assert.equal(migrated.fieldMetadata.title.source, 'anilist')
+  // Input is not mutated.
+  assert.equal(record.metadataSchemaVersion, 0)
+  assert.equal(record.fieldMetadata.title.observations[0].valueState, undefined)
+})
+
+test('migrateMetadataSchema treats missing, null, and garbage versions as migratable', () => {
+  const base = { id: 94, title: 'X' }
+  for (const version of [undefined, null, 0, 'not-a-version', -1]) {
+    const migrated = migrateMetadataSchema({ ...base, metadataSchemaVersion: version })
+    assert.equal(migrated.metadataSchemaVersion, METADATA_SCHEMA_VERSION)
+    assert.ok(Object.keys(migrated.fieldMetadata).length > 0)
+  }
 })
 
 test('genres preserve provider labels and expose stable unique taxonomy entities', () => {
