@@ -552,12 +552,12 @@ export default function Search() {
                     <h2 id={`group-h-${group.format}`} className="mb-2 text-[11px] font-semibold tracking-widest text-white/35 uppercase">
                       {GROUP_LABEL[group.format] ?? group.format} · {group.items.length}
                     </h2>
-                    <MediaGrid items={group.items} />
+                    <MediaGrid items={group.items} query={query} />
                   </section>
                 ))}
               </div>
             ) : (
-              <MediaGrid items={items} />
+              <MediaGrid items={items} query={query} />
             )}
 
             {results?.hasNextPage ? (

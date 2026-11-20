@@ -173,6 +173,29 @@ export interface AdvancedSearchResponse {
   alternatives: { label: string; query: string; kind: string }[]
 }
 
+export interface HighlightSegment {
+  text: string
+  match: boolean
+}
+
+/**
+ * Splits `text` into plain/matched segments so the UI can highlight the part
+ * that matched `query`. Client-side mirror of `searchEngine.highlightSegments`
+ * (AV-071).
+ */
+export function highlightSegments(text: string, query: string): HighlightSegment[] {
+  const source = String(text ?? '')
+  const needle = String(query ?? '').trim()
+  if (!needle) return [{ text: source, match: false }]
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const re = new RegExp(`(${escaped})`, 'ig')
+  const parts = source.split(re).filter((part) => part.length > 0)
+  return parts.map((part) => ({
+    text: part,
+    match: part.toLowerCase() === needle.toLowerCase(),
+  }))
+}
+
 export interface SearchLibraryItem {
   id: string
   fileName: string
